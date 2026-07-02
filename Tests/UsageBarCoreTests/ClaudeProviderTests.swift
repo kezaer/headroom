@@ -2,135 +2,99 @@ import Testing
 import Foundation
 @testable import UsageBarCore
 
-/// U4 test scenarios: Claude decode, lenient unknown fields, User-Agent format,
-/// failure taxonomy (401→reauth, 403→scope, 429/network/decode→transient), and the
-/// redirect-safety policy.
+/// A real (ANSI-stripped) capture of `claude`'s `/usage` panel, including the messy
+/// intermediate render states the parser must survive. The settled values are:
+/// session 100% used, week (all models) 38% used, week (Fable) 62% used.
+private let usagePanelFixture = """
+Settings Status Config Usage Stats
+Session
+Usage: 0 input, 0 output, 0 cache read, 0 cache write
+Current session
+██████████████████████████████████████████████████ 100% used
+Resets 10:10am (America/Los_Angeles)
+Current week (all models)
+██████████████████▌ 37% used
+Resets Jul 2 at 10am (America/Los_Angeles)
+Scanning local sessions…
+Settings Status Config Usage Stats
+Current session
+██████████████████████████████████████████████████ 100% used
+Resets 10:10am (America/Los_Angeles)
+Current week (all models)
+███████████████████ 38% used
+Resets Jul 2 at 10am (America/Los_Angeles)
+Current week (Fable)
+███████████████████████████████ 62% used
+Resets Jul 2 at 10am (America/Los_Angeles)
+What's contributing to your limits usage?
+"""
+
+struct ClaudeUsageParserTests {
+    @Test func parsesSettledWindows() {
+        let windows = ClaudeUsageParser.parse(usagePanelFixture)
+        // Three windows, in canonical order: session, weekly (all models), other.
+        #expect(windows.count == 3)
+        #expect(windows[0].kind == .fiveHour)
+        #expect(windows[0].percentUsed == 100)
+        #expect(windows[0].resetLabel == "Resets 10:10am")
+
+        #expect(windows[1].kind == .weekly)
+        #expect(windows[1].percentUsed == 38)          // settled value, not the 37 mid-scan
+        #expect(windows[1].resetLabel == "Resets Jul 2 at 10am")
+
+        #expect(windows[2].kind == .other("Weekly (Fable)"))
+        #expect(windows[2].percentUsed == 62)
+    }
+
+    @Test func lastRenderWins() {
+        // The weekly window appears as 37% then 38%; the settled 38% must win.
+        let windows = ClaudeUsageParser.parse(usagePanelFixture)
+        #expect(windows.first { $0.kind == .weekly }?.percentUsed == 38)
+    }
+
+    @Test func toleratesUnknownAndEmpty() {
+        #expect(ClaudeUsageParser.parse("").isEmpty)
+        #expect(ClaudeUsageParser.parse("garbage with no windows\nRandom line").isEmpty)
+    }
+
+    @Test func ignoresParagraphMentioningWeeklyLimit() {
+        // A long sentence mentioning "weekly usage limit" must not be parsed as a window.
+        let text = "Until July 7, you can use up to 50% of your plan's weekly usage limit on Fable 5."
+        #expect(ClaudeUsageParser.parse(text).isEmpty)
+    }
+}
+
 struct ClaudeProviderTests {
-    private func storeWithValidToken() -> CredentialStore {
-        CredentialStore(keychain: MockKeychain(claudeCode: .valid()),
-                        ownStore: MockKeychain(), codexReader: MockCodexReader())
+    private func provider(_ result: ClaudePanelResult) -> ClaudeProvider {
+        ClaudeProvider(source: MockClaudeSource(result: result),
+                       now: { Date(timeIntervalSince1970: 1_000_000) })
     }
 
-    private func provider(_ fetcher: MockFetcher) -> ClaudeProvider {
-        ClaudeProvider(credentials: storeWithValidToken(), http: fetcher,
-                       version: { "2.0.0" }, now: { Date(timeIntervalSince1970: 1_000_000) })
-    }
-
-    @Test func decodesLiveResponse() async {
-        let json = """
-        { "five_hour": {"utilization": 42.5, "resets_at": "2026-07-02T12:00:00Z"},
-          "seven_day": {"utilization": 70, "resets_at": "2026-07-05T00:00:00Z"},
-          "subscriptionType": "max" }
-        """
-        let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
+    @Test func panelBecomesLiveSnapshot() async {
+        let snap = await provider(.panel(usagePanelFixture)).fetchSnapshot()
         #expect(snap.freshness == .live)
-        #expect(snap.planLabel == "max")
-        #expect(snap.windows.count == 2)
-        #expect(snap.windows.first { $0.kind == .fiveHour }?.percentRemaining == 57.5)
-        #expect(snap.windows.first { $0.kind == .weekly }?.percentRemaining == 30)
+        #expect(snap.windows.count == 3)
+        // percentUsed 100 -> 0 remaining; 38 -> 62 remaining.
+        #expect(snap.windows.first { $0.kind == .fiveHour }?.percentRemaining == 0)
+        #expect(snap.windows.first { $0.kind == .weekly }?.percentRemaining == 62)
+        #expect(snap.windows.first { $0.kind == .weekly }?.resetLabel == "Resets Jul 2 at 10am")
     }
 
-    @Test func toleratesUnknownWindowAndPlan() async {
-        // Unknown extra window key + unknown subscriptionType still decodes known
-        // windows (KTD6) — no total failure.
-        let json = """
-        { "five_hour": {"utilization": 10, "resets_at": "2026-07-02T12:00:00Z"},
-          "seven_day": {"utilization": 20, "resets_at": "2026-07-05T00:00:00Z"},
-          "seven_day_opus": {"utilization": 5, "resets_at": "2026-07-05T00:00:00Z"},
-          "subscriptionType": "some_future_tier" }
-        """
-        let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
-        #expect(snap.freshness == .live)
-        #expect(snap.windows.count == 2)
-        #expect(snap.planLabel == "some_future_tier")
-    }
-
-    @Test func sendsWellFormedUserAgent() async {
-        let fetcher = MockFetcher(status: 200, body: """
-        { "five_hour": {"utilization": 1, "resets_at": "2026-07-02T12:00:00Z"} }
-        """)
-        _ = await provider(fetcher).fetchSnapshot()
-        let ua = fetcher.lastHeaders["User-Agent"] ?? ""
-        #expect(ua.wholeMatch(of: /claude-code\/\d+\.\d+\.\d+/) != nil)
-        #expect(fetcher.lastHeaders["anthropic-beta"] == "oauth-2025-04-20")
-    }
-
-    @Test func unauthorizedDegradesToReauth() async {
-        // 401 → one refresh-and-retry; the default refresher can't safely refresh
-        // (U9-pending), so it degrades to a permanent needs-reauth, not a retry loop.
-        let snap = await provider(MockFetcher([
-            .success(HTTPResult(status: 401, body: Data()))
-        ])).fetchSnapshot()
+    @Test func missingCLIDegradesToNotLoggedIn() async {
+        let snap = await provider(.cliNotFound).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason == .needsReauth("Session expired — run `claude` to re-login"))
         #expect(reason.isPermanent)
     }
 
-    @Test func refreshAndRetrySucceeds() async {
-        // 401 → one refresh (succeeds) → retry returns 200 → live snapshot. Exercises
-        // the refresh-and-retry-then-success branch (the default refresher can't
-        // succeed, so this uses a succeeding one).
-        let store = CredentialStore(
-            keychain: MockKeychain(claudeCode: .valid()),
-            ownStore: MockKeychain(),
-            codexReader: MockCodexReader(),
-            refresher: MockRefresher(result: .success(.valid()))
-        )
-        let body = """
-        { "five_hour": {"utilization": 20, "resets_at": "2026-07-02T12:00:00Z"} }
-        """
-        let fetcher = MockFetcher([
-            .success(HTTPResult(status: 401, body: Data())),
-            .success(HTTPResult(status: 200, body: Data(body.utf8))),
-        ])
-        let provider = ClaudeProvider(credentials: store, http: fetcher,
-                                      version: { "2.0.0" }, now: { Date(timeIntervalSince1970: 1_000_000) })
-        let snap = await provider.fetchSnapshot()
-        #expect(snap.freshness == .live)
-        #expect(snap.windows.first?.percentRemaining == 80)
-    }
-
-    @Test func forbiddenIsScopeDenied() async {
-        let snap = await provider(MockFetcher([
-            .success(HTTPResult(status: 403, body: Data()))
-        ])).fetchSnapshot()
+    @Test func captureFailureIsTransient() async {
+        let snap = await provider(.failed).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        if case .scopeDenied = reason {} else { Issue.record("expected scopeDenied, got \(reason)") }
+        #expect(!reason.isPermanent)   // will retry next cycle
     }
 
-    @Test func rateLimitedIsTransient() async {
-        let snap = await provider(MockFetcher([
-            .success(HTTPResult(status: 429, body: Data()))
-        ])).fetchSnapshot()
+    @Test func loggedOutPanelAsksToLogIn() async {
+        let snap = await provider(.panel("Please run /login to log in to Claude")).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(!reason.isPermanent)
-    }
-
-    @Test func malformedBodyIsDecodeStale() async {
-        let snap = await provider(MockFetcher(status: 200, body: "not json at all")).fetchSnapshot()
-        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        if case .decode = reason {} else { Issue.record("expected decode, got \(reason)") }
-    }
-
-    @Test func networkErrorIsTransientStale() async {
-        let snap = await provider(MockFetcher([.failure(.transient("Network unavailable"))])).fetchSnapshot()
-        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(!reason.isPermanent)
-    }
-
-    @Test func redirectsAreBlocked() {
-        // R12: the session delegate refuses redirects, so the Authorization header can
-        // never be forwarded to another host.
-        let blocker = RedirectBlocker()
-        let session = URLSession(configuration: .ephemeral)
-        let task = session.dataTask(with: URL(string: "https://api.anthropic.com")!)
-        let response = HTTPURLResponse(url: URL(string: "https://api.anthropic.com")!,
-                                       statusCode: 302, httpVersion: nil, headerFields: nil)!
-        var handed: URLRequest? = URLRequest(url: URL(string: "https://evil.example.com")!)
-        blocker.urlSession(session, task: task, willPerformHTTPRedirection: response,
-                           newRequest: URLRequest(url: URL(string: "https://evil.example.com")!)) { req in
-            handed = req
-        }
-        #expect(handed == nil) // redirect refused
+        #expect(reason.isPermanent)    // needsReauth
     }
 }

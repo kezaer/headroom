@@ -6,8 +6,7 @@ import Foundation
 /// rate limits → `.other`, missing token, 401→reauth, network error.
 struct CodexProviderTests {
     private func provider(_ fetcher: MockFetcher, credential: CodexCredential? = CodexCredential(accessToken: "at", refreshToken: "rt", accountID: "acc", lastRefresh: nil)) -> CodexProvider {
-        let store = CredentialStore(keychain: MockKeychain(), ownStore: MockKeychain(),
-                                    codexReader: MockCodexReader(credential: credential))
+        let store = CredentialStore(codexReader: MockCodexReader(credential: credential))
         return CodexProvider(credentials: store, http: fetcher,
                              now: { Date(timeIntervalSince1970: 1_000_000) })
     }
@@ -64,5 +63,21 @@ struct CodexProviderTests {
         let snap = await provider(MockFetcher([.failure(.transient("Network unavailable"))])).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
         #expect(!reason.isPermanent)
+    }
+
+    @Test func redirectsAreBlocked() {
+        // R12: the session delegate (used by the Codex HTTP client) refuses redirects,
+        // so the Authorization header can never be forwarded to another host.
+        let blocker = RedirectBlocker()
+        let session = URLSession(configuration: .ephemeral)
+        let task = session.dataTask(with: URL(string: "https://chatgpt.com")!)
+        let response = HTTPURLResponse(url: URL(string: "https://chatgpt.com")!,
+                                       statusCode: 302, httpVersion: nil, headerFields: nil)!
+        var handed: URLRequest? = URLRequest(url: URL(string: "https://evil.example.com")!)
+        blocker.urlSession(session, task: task, willPerformHTTPRedirection: response,
+                           newRequest: URLRequest(url: URL(string: "https://evil.example.com")!)) { req in
+            handed = req
+        }
+        #expect(handed == nil)
     }
 }

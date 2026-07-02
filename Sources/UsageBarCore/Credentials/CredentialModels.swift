@@ -1,19 +1,5 @@
 import Foundation
 
-/// Claude Code OAuth credential as stored in the `Claude Code-credentials` login
-/// Keychain item. Blob schema is from the Claude-Usage-Tracker precedent and must be
-/// confirmed by the U9 spike (Q1/Q4).
-public struct ClaudeCredential: Sendable, Equatable {
-    public let accessToken: String
-    public let refreshToken: String
-    public let expiresAt: Date
-    public init(accessToken: String, refreshToken: String, expiresAt: Date) {
-        self.accessToken = accessToken
-        self.refreshToken = refreshToken
-        self.expiresAt = expiresAt
-    }
-}
-
 /// Codex credential from `~/.codex/auth.json` → `tokens`.
 public struct CodexCredential: Sendable, Equatable {
     public let accessToken: String

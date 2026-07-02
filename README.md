@@ -1,72 +1,69 @@
 # UsageBar
 
-A macOS menu bar app that shows how much of your AI-subscription usage remains for the
-5-hour and weekly windows, when each resets, and your (manually entered) monthly renewal
+A macOS menu bar app that shows how much of your AI-subscription usage remains — the
+5-hour and weekly windows, when each resets, and a manually-entered monthly renewal
 date — for **Anthropic Claude** and **ChatGPT/Codex**, side by side. Built to add more
 providers later behind one abstraction.
 
-Plan: [`docs/plans/2026-07-02-001-feat-ai-usage-menu-bar-app-plan.md`](docs/plans/2026-07-02-001-feat-ai-usage-menu-bar-app-plan.md).
+## How it gets the data (and why this way)
+
+- **Claude** — reads the real 5-hour and weekly windows by driving the official
+  `claude` CLI's `/usage` panel in a pseudo-terminal and parsing what it prints. This is
+  the **compliant** path: the official client makes the request (a free status fetch, no
+  model call), and UsageBar only reads its output. It deliberately does **not** reuse or
+  mint Claude subscription OAuth tokens — Anthropic's Feb 2026 policy prohibits that and
+  enforces it server-side, and those tokens get blocked. The CLI panel itself notes the
+  figures are "approximate, based on local sessions on this machine," but it carries the
+  official reset windows.
+- **Codex/ChatGPT** — reads `~/.codex/auth.json` and calls the `wham/usage` endpoint
+  (the same data Codex's `/status` shows).
 
 ## Build & test
 
 ```bash
-swift build      # builds UsageBarCore (logic) + UsageBar (SwiftUI menu bar app)
-swift test       # runs the UsageBarCore test suite
+swift build          # builds UsageBarCore (logic) + UsageBar (app)
+swift test           # 36 tests
+./Scripts/build-app.sh   # produces UsageBar.app (menu bar / LSUIElement), then: open UsageBar.app
 ```
 
-Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe). The package also opens directly in
-Xcode 26 (`File ▸ Open` the folder), and `xcodebuild -scheme UsageBar` builds it.
+Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe), and the `claude` CLI installed and
+logged in. Diagnostic: `swift run UsageBar --probe-claude` prints the live parsed windows
+so you can confirm the Claude path works on your machine.
 
 ## Structure
 
-- `Sources/UsageBarCore` — all testable logic: domain model, credential access
-  (`CredentialStore` actor), the two providers, the polling engine/view model, and
-  preferences. Fully covered by `swift test` with mocked Keychain/network.
+- `Sources/UsageBarCore` — testable logic: domain model, the Claude `/usage` PTY probe
+  (`ClaudeUsageCLIProbe`) + parser (`ClaudeUsageParser`), the Codex provider, the polling
+  engine/`@Observable` store, and preferences.
 - `Sources/UsageBarApp` — the SwiftUI `MenuBarExtra` shell and the Tahoe / Liquid Glass
   popover, cards, settings, and menu bar label.
 
-## Project-shape note (deviation from plan KTD9)
+## Robustness (the PTY scrape is inherently fragile, so it's contained)
 
-The plan specified an Xcode `.xcodeproj`. This repo is a **Swift package** instead, so the
-core logic builds and verifies headlessly (`swift build` / `swift test`) in CI and
-automated runs. The trade-off: SwiftPM does not produce the final distributable menu bar
-app bundle. To finalize on your machine:
+- Hard wall-clock deadlines on capture + a guaranteed process-group kill on every exit
+  path — a hung `claude` can never stall the app.
+- "Quiet-period" capture that survives the panel's several re-renders; the settled
+  (last) value for each window wins.
+- Login-shell PATH resolution, so a Finder-launched app (bare environment) still finds a
+  node/nvm/homebrew `claude` — verified against a stripped environment.
+- Graceful degrade: CLI missing → "install Claude Code"; not logged in → "run `claude`";
+  transient read failure → keeps last-known data and retries next cycle.
+- Reset times are shown **verbatim** from the panel ("Resets Jul 9 at 10am"), so the app
+  can't drift from what Claude Code itself displays.
+- The probe runs off the main actor, on the poll timer (default 5 min) — never per-render.
 
-1. Open the package in Xcode 26 and add a macOS **App** target (or wrap `UsageBarApp`),
-   importing `UsageBarCore`.
-2. In the app target's `Info.plist`, set `LSUIElement = YES` (no Dock icon).
-3. Set signing to your **free Apple Development** team (personal team is enough) — this is
-   load-bearing (KTD8): a stable signing identity keeps the Keychain "Always Allow" grant
-   for `Claude Code-credentials` persistent across rebuilds. Ad-hoc signing re-prompts
-   every build.
-4. Leave **App Sandbox off** (needed to read `~/.codex/auth.json` and the cross-app
-   Keychain item — KTD8). Notarization is not needed for a locally built/run personal app.
+## Finalizing as a distributable app (optional)
 
-## ⚠️ Before Claude usage works: run the U9 auth spike
-
-The Claude usage endpoint and its OAuth refresh are **undocumented and unverified**. Until
-the spike in the plan (unit U9) is run against your real credentials, the app safely
-degrades Claude to a "run `claude` to re-login" state instead of guessing. The spike must
-confirm, before the Claude live path is trusted:
-
-- Whether your `Claude Code-credentials` token carries the `user:profile` scope required to
-  call `GET /api/oauth/usage` at all (Q4).
-- Whether the `User-Agent: claude-code/<version>` header actually clears the 429 (Q).
-- The exact refresh token URL / `client_id` / `grant_type`, **and whether refreshing
-  rotates the token** — if it does, self-refresh would log Claude Code out, so it stays
-  disabled and the app degrades to re-login (Q1/Q5, the P0 risk).
-
-**Self-refresh is intentionally disabled** (`ReauthOnlyRefresher`) until the spike proves
-the refresh token is non-rotating. Codex reads `~/.codex/auth.json` directly and works
-without a spike.
-
-The response field mappings in `ClaudeProvider`/`CodexProvider` are best-effort from
-research and must be checked against a live capture; decoding is lenient so unexpected
-fields degrade gracefully rather than crash.
+`./Scripts/build-app.sh` produces an ad-hoc-signed `UsageBar.app` that runs locally. For a
+persistent build you rebuild often, open the package in Xcode 26, add a macOS App target,
+and sign with your free **Apple Development** identity — a stable signature keeps macOS
+permission grants from re-prompting after each rebuild. Leave App Sandbox **off** (needed
+to spawn `claude` and read `~/.codex/auth.json`). Notarization isn't needed for a locally
+built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
 
 ## Status
 
-Core logic is implemented and unit-tested (39 tests). The menu bar app, popover, and
-settings compile. Remaining manual steps (your machine, GUI, or credentials): the U9
-spike, the Xcode app-bundle + signing finalization above, and visual / VoiceOver smoke on
-macOS 26.
+Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
+real account and from a bare launch environment), Codex via its endpoint, manual renewal
+dates, launch-at-login, and the Tahoe popover. 36 tests pass. Remaining polish is the
+Xcode signing above, an app icon, and visual/VoiceOver smoke on the running app.

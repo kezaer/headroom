@@ -2,21 +2,8 @@ import Foundation
 
 // Decoders are lenient (KTD6): unknown keys are ignored by `Decodable`, unknown
 // enum-ish values pass through as strings, and one unrecognized field never blanks
-// the whole snapshot. Exact field names for both undocumented endpoints must be
-// verified against a live capture (U9 for Claude; a Codex `wham/usage` capture).
-
-// MARK: - Claude (api.anthropic.com/api/oauth/usage)
-
-struct ClaudeUsageDTO: Decodable {
-    let five_hour: ClaudeWindowDTO?
-    let seven_day: ClaudeWindowDTO?
-    let subscriptionType: String?
-}
-
-struct ClaudeWindowDTO: Decodable {
-    let utilization: Double?
-    let resets_at: String?
-}
+// the whole snapshot. Exact field names must be verified against a live Codex
+// `wham/usage` capture.
 
 // MARK: - Codex (chatgpt.com/backend-api/wham/usage)
 

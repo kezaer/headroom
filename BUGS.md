@@ -1,39 +1,39 @@
 # Deferred / Follow-up
 
-Non-blocking items surfaced during code review, deferred deliberately. None block the
-current build (42 tests pass).
+Non-blocking items. The app works end-to-end (36 tests pass; live Claude + Codex data
+verified). The earlier OAuth/Keychain-token approach and its U9 spike are **obsolete** —
+Anthropic prohibits and blocks third-party subscription-OAuth use, so Claude now reads the
+official `claude` CLI's `/usage` panel instead.
 
-## Reliability
+## Claude CLI probe
 
-- **No backoff on repeated endpoint failures.** `PollingEngine` re-polls every 3–5 min
-  even when an undocumented endpoint fails persistently (reliability P2). The interval is
-  already moderate, but exponential backoff on consecutive transient/429 failures would
-  avoid hammering a down endpoint. Design choice — deferred.
+- **Parser is pinned to the current `/usage` layout.** `ClaudeUsageParser` keys on stable
+  shapes ("Current session", "Current week (…)", "N% used", "Resets …") rather than line
+  positions, but a future Claude Code redesign of the panel could still break it. It fails
+  safe (empty result → transient stale), and the `--probe-claude` diagnostic makes drift
+  easy to spot. Add a version check / update the fixture if the panel changes.
+- **Each poll spawns a full `claude` session (~20–30s, some CPU).** Fine at the default
+  5-minute cadence for a personal tool; if the interval is set very low in Settings this
+  becomes noticeable. Consider a minimum floor or caching if that matters.
+- **No live integration test for the PTY probe.** Provider tests use a fixture panel +
+  mock source (fast, deterministic). The real `ClaudeUsageCLIProbe` is verified manually
+  via `--probe-claude`; a machine-dependent integration test would need the CLI logged in.
 
-## Testing (integration-level, need real resources)
+## Codex
 
-- **`RedirectBlockingHTTPClient` has no live integration test.** Provider tests inject the
-  `UsageFetching` mock; the delegate policy is unit-tested directly, but nothing asserts a
-  real 3xx is surfaced as-is against a local redirecting server (security testing gap).
-- **`SystemKeychain.writeOwnClaude` attributes untested.** No test asserts the written item
-  sets `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` and omits `kSecAttrSynchronizable`,
-  so a future regression removing the device-local/non-sync guarantee would pass CI. Needs
-  a real-Keychain integration test (excluded from the unit suite by design).
+- **DTO field names need a live check.** `CodexProvider` tolerates several percent field
+  names (`used_percent`/`usage_percent`/`utilization`) for the undocumented `wham/usage`
+  endpoint; confirm the real field against a live capture and tighten.
 
-## U9-gated (re-verify before enabling Claude self-refresh)
+## Reliability (carried from earlier review)
 
-- Confirm Anthropic's refresh token is **non-rotating** before enabling self-refresh, else
-  it desyncs Claude Code (the P0 risk). `ReauthOnlyRefresher` keeps it disabled until then.
-- `ClaudeVersion.detected()` runs `claude` via PATH (`/usr/bin/env`). For a personal
-  non-sandboxed app this is low risk, but prefer an absolute/validated path if hardening.
-- Redaction covers `sk-ant-`/`sess-`/JWT/≥40-char shapes only; if a future change ever
-  interpolates a caught error into a `FailureReason`, short OpenAI tokens could slip
-  through. Today no live path interpolates errors (all failure messages are literals).
+- **No backoff on repeated failures.** Both providers retry every cycle at the fixed
+  interval. Exponential backoff on consecutive transient failures would be gentler on a
+  down endpoint. Design choice — deferred.
 
-## Minor (advisory)
+## Polish
 
-- `MenuBarLabel` uses a fixed `Font.system(size:)` (menu bar height is OS-constrained, so
-  Dynamic Type has limited effect there).
-- Codex DTO tolerates several percent field names (`used_percent`/`usage_percent`/
-  `utilization`) — intentional leniency for the undocumented endpoint; confirm the real
-  field against a live `wham/usage` capture and tighten.
+- App icon (`CFBundleIconFile`) — user to provide.
+- `MenuBarLabel` uses a fixed font size (menu bar height is OS-constrained).
+- Xcode signing with a stable Apple Development identity for persistent permission grants
+  (see README) — the ad-hoc `build-app.sh` bundle re-prompts after each rebuild.

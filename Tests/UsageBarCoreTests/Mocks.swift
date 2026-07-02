@@ -1,28 +1,6 @@
 import Foundation
 @testable import UsageBarCore
 
-/// In-memory Keychain double. Counts bootstrap reads so tests can prove token
-/// precedence, and can simulate an absent item (`errSecItemNotFound`).
-final class MockKeychain: ClaudeCodeKeychainReading, OwnCredentialStoring, @unchecked Sendable {
-    var claudeCode: ClaudeCredential?
-    var ownItem: ClaudeCredential?
-    private(set) var claudeCodeReadCount = 0
-
-    init(claudeCode: ClaudeCredential? = nil, ownItem: ClaudeCredential? = nil) {
-        self.claudeCode = claudeCode
-        self.ownItem = ownItem
-    }
-
-    func readClaudeCodeCredential() throws -> ClaudeCredential {
-        claudeCodeReadCount += 1
-        guard let claudeCode else { throw CredentialError.notLoggedIn }
-        return claudeCode
-    }
-
-    func readOwnClaude() throws -> ClaudeCredential? { ownItem }
-    func writeOwnClaude(_ credential: ClaudeCredential) throws { ownItem = credential }
-}
-
 /// Codex reader double.
 struct MockCodexReader: CodexAuthReading {
     var credential: CodexCredential?
@@ -32,28 +10,8 @@ struct MockCodexReader: CodexAuthReading {
     }
 }
 
-/// Claude refresher double. Counts calls (single-flight proof) and can suspend to
-/// widen the concurrency window.
-final class MockRefresher: ClaudeTokenRefreshing, @unchecked Sendable {
-    var result: Result<ClaudeCredential, FailureReason>
-    var delay: Duration = .zero
-    private let lock = NSLock()
-    private var _count = 0
-    var callCount: Int { lock.withLock { _count } }
-
-    init(result: Result<ClaudeCredential, FailureReason> = .failure(.needsReauth("re-login"))) {
-        self.result = result
-    }
-
-    func refresh(using refreshToken: String) async -> Result<ClaudeCredential, FailureReason> {
-        lock.withLock { _count += 1 }
-        if delay > .zero { try? await Task.sleep(for: delay) }
-        return result
-    }
-}
-
-/// HTTP double. Returns a queued response and captures the last request's headers so
-/// tests can assert the User-Agent format and header presence.
+/// HTTP double for the Codex provider. Returns a queued response and captures the last
+/// request's headers.
 final class MockFetcher: UsageFetching, @unchecked Sendable {
     var responses: [Result<HTTPResult, FailureReason>]
     private let lock = NSLock()
@@ -77,6 +35,13 @@ final class MockFetcher: UsageFetching, @unchecked Sendable {
     }
 }
 
+/// Claude usage-source double — returns a fixed panel/result so the provider is tested
+/// without spawning the real CLI.
+struct MockClaudeSource: ClaudeUsageSource {
+    let result: ClaudePanelResult
+    func capturePanel() async -> ClaudePanelResult { result }
+}
+
 /// Provider double for engine tests.
 struct StubProvider: UsageProvider {
     let id: ProviderID
@@ -85,8 +50,7 @@ struct StubProvider: UsageProvider {
     func fetchSnapshot() async -> UsageSnapshot { snapshot }
 }
 
-/// Provider double whose returned snapshot can change between refreshes — used to
-/// test the store's continuity/merge behavior.
+/// Provider double whose returned snapshot can change between refreshes.
 final class MutableStubProvider: UsageProvider, @unchecked Sendable {
     let id: ProviderID
     let displayName: String
@@ -101,14 +65,7 @@ final class MutableStubProvider: UsageProvider, @unchecked Sendable {
     func fetchSnapshot() async -> UsageSnapshot { lock.withLock { _snapshot } }
 }
 
-extension UsageSnapshot {
-    static func live(_ id: ProviderID, windows: [UsageWindow], plan: String? = nil, at: Date = Date()) -> UsageSnapshot {
-        UsageSnapshot(providerID: id, windows: windows, planLabel: plan, capturedAt: at, freshness: .live)
-    }
-}
-
-/// Provider double that counts how many times it was fetched — used to prove the
-/// store's refresh-dedup / start-idempotency behavior.
+/// Provider double that counts how many times it was fetched.
 final class CountingProvider: UsageProvider, @unchecked Sendable {
     let id: ProviderID
     let displayName: String
@@ -122,13 +79,8 @@ final class CountingProvider: UsageProvider, @unchecked Sendable {
     }
 }
 
-extension ClaudeCredential {
-    static func valid(now: Date = Date()) -> ClaudeCredential {
-        ClaudeCredential(accessToken: "access-tok", refreshToken: "refresh-tok",
-                         expiresAt: now.addingTimeInterval(3600))
-    }
-    static func expired(now: Date = Date()) -> ClaudeCredential {
-        ClaudeCredential(accessToken: "old-tok", refreshToken: "refresh-tok",
-                         expiresAt: now.addingTimeInterval(-10))
+extension UsageSnapshot {
+    static func live(_ id: ProviderID, windows: [UsageWindow], plan: String? = nil, at: Date = Date()) -> UsageSnapshot {
+        UsageSnapshot(providerID: id, windows: windows, planLabel: plan, capturedAt: at, freshness: .live)
     }
 }

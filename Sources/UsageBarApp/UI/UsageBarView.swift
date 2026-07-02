@@ -15,6 +15,12 @@ struct UsageBarView: View {
     private var pct: Int { Int(window.percentRemaining.rounded()) }
     private var fraction: Double { window.percentRemaining / 100 }
 
+    /// Prefer the provider's verbatim reset text (Claude) over a computed countdown
+    /// (Codex), so the app can't drift from what the source shows.
+    private var resetText: String {
+        window.resetLabel ?? "resets in \(Countdown.string(to: window.resetsAt, now: now))"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -37,7 +43,7 @@ struct UsageBarView: View {
             .frame(height: 6)
             HStack {
                 Spacer()
-                Text("resets in \(Countdown.string(to: window.resetsAt, now: now))")
+                Text(resetText)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -45,7 +51,7 @@ struct UsageBarView: View {
         .opacity(dimmed ? 0.5 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label) usage")
-        .accessibilityValue("\(pct) percent remaining, resets in \(Countdown.string(to: window.resetsAt, now: now))")
+        .accessibilityValue("\(pct) percent remaining, \(resetText)")
     }
 
     private var label: String {
