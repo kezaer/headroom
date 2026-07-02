@@ -35,8 +35,11 @@ public final class UsageStore {
         self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
     }
 
-    /// Begin polling: an immediate refresh, then the interval loop.
+    /// Begin polling: an immediate refresh, then the interval loop. Idempotent — a
+    /// second call (e.g. the popover re-appearing) does not restart the loop or
+    /// reset the cadence.
     public func start() async {
+        guard engine == nil else { return }
         await refreshAll()
         let engine = PollingEngine(
             intervalMinutes: { [preferences] in preferences.pollIntervalMinutes },
@@ -70,13 +73,17 @@ public final class UsageStore {
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
     /// shown dimmed rather than blanking the card; it never touches another provider.
     private func merge(id: ProviderID, fresh: UsageSnapshot) {
+        let next: UsageSnapshot
         if case .stale(let reason) = fresh.freshness,
            fresh.windows.isEmpty,
            let prior = snapshots[id], !prior.windows.isEmpty {
-            snapshots[id] = prior.markedStale(reason)
+            next = prior.markedStale(reason)
         } else {
-            snapshots[id] = fresh
+            next = fresh
         }
+        // Skip the assignment when nothing changed so an unchanging state (e.g. a
+        // provider that stays logged-out) doesn't invalidate observers every cycle.
+        if snapshots[id] != next { snapshots[id] = next }
     }
 
     public func snapshot(for id: ProviderID) -> UsageSnapshot {

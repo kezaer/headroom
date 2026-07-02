@@ -9,19 +9,10 @@ public enum Redaction {
     /// Matches long opaque runs and the known `sk-ant-…` / `sess-…` shapes.
     public static func redact(_ text: String) -> String {
         var result = text
-        for pattern in [
-            #"sk-ant-[A-Za-z0-9_-]+"#,
-            #"sess-[A-Za-z0-9_-]+"#,
-            #"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}"#, // JWTs
-            #"[A-Za-z0-9_-]{40,}"#, // long opaque tokens
-        ] {
-            if let re = try? NSRegularExpression(pattern: pattern) {
-                let range = NSRange(result.startIndex..., in: result)
-                result = re.stringByReplacingMatches(
-                    in: result, range: range, withTemplate: "‹redacted›"
-                )
-            }
-        }
+        result = result.replacing(/sk-ant-[A-Za-z0-9_-]+/, with: "‹redacted›")
+        result = result.replacing(/sess-[A-Za-z0-9_-]+/, with: "‹redacted›")
+        result = result.replacing(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/, with: "‹redacted›") // JWTs
+        result = result.replacing(/[A-Za-z0-9_-]{40,}/, with: "‹redacted›") // long opaque tokens
         return result
     }
 }

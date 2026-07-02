@@ -1,5 +1,3 @@
-import Foundation
-
 /// Stable identifier for a usage provider. A struct rather than a closed enum so a
 /// third provider can be added (R13) without changing this type.
 public struct ProviderID: Hashable, Sendable, Codable, CustomStringConvertible {

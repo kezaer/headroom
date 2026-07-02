@@ -12,7 +12,6 @@ struct UsageBarApp: App {
         MenuBarExtra {
             PopoverView(store: store)
                 .task { await store.start() }
-                .onAppear { store.refreshNow() }
         } label: {
             MenuBarLabel(summary: store.menuBarSummary)
         }

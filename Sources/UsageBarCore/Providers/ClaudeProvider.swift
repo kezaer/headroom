@@ -109,10 +109,8 @@ public struct ClaudeProvider: UsageProvider {
                 return .unauthorized
             case 403:
                 return .permanent(.scopeDenied("Re-authenticate in Claude Code (missing scope)"))
-            case 429:
-                return .transient(.transient("Rate limited — will retry"))
             default:
-                return .transient(.transient("Service error (\(result.status))"))
+                return .transient(UsageWindowBuilder.genericFailure(for: result.status))
             }
         }
     }
@@ -121,13 +119,10 @@ public struct ClaudeProvider: UsageProvider {
         guard let dto = try? JSONDecoder().decode(ClaudeUsageDTO.self, from: body) else {
             return .transient(.decode("Couldn't read Claude usage response"))
         }
-        var windows: [UsageWindow] = []
-        if let w = dto.five_hour, let util = w.utilization, let reset = DateParsing.iso8601(w.resets_at) {
-            windows.append(UsageWindow(kind: .fiveHour, utilization: util, resetsAt: reset))
-        }
-        if let w = dto.seven_day, let util = w.utilization, let reset = DateParsing.iso8601(w.resets_at) {
-            windows.append(UsageWindow(kind: .weekly, utilization: util, resetsAt: reset))
-        }
+        let windows = [
+            UsageWindowBuilder.make(.fiveHour, dto.five_hour?.utilization, dto.five_hour?.resets_at, nil, now: now),
+            UsageWindowBuilder.make(.weekly, dto.seven_day?.utilization, dto.seven_day?.resets_at, nil, now: now),
+        ].compactMap { $0 }
         guard !windows.isEmpty else {
             return .transient(.decode("No usage windows in Claude response"))
         }
@@ -141,6 +136,6 @@ public struct ClaudeProvider: UsageProvider {
     }
 
     private func stale(_ reason: FailureReason) -> UsageSnapshot {
-        UsageSnapshot(providerID: id, windows: [], planLabel: nil, capturedAt: nil, freshness: .stale(reason))
+        .stale(for: id, reason: reason)
     }
 }

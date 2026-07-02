@@ -1,5 +1,3 @@
-import Foundation
-
 /// The single seam the polling engine depends on (R13). Concrete providers
 /// (Claude, Codex, and any third later) implement this; the engine and shell
 /// never reference a concrete provider.

@@ -20,8 +20,7 @@ public protocol OwnCredentialStoring: Sendable {
 /// styles seen in the wild (`accessToken`/`access_token`).
 public enum ClaudeCredentialBlob {
     public static func parse(_ data: Data) throws -> ClaudeCredential {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { throw CredentialError.malformed }
+        let root = try CredentialError.jsonObject(data)
         // The blob may nest under "claudeAiOauth" or sit at the root.
         let obj = (root["claudeAiOauth"] as? [String: Any]) ?? root
         guard
@@ -34,19 +33,18 @@ public enum ClaudeCredentialBlob {
 
     /// `expiresAt` is commonly epoch-millis; also accept epoch-seconds and ISO strings.
     private static func expiry(from value: Any?) -> Date {
-        if let ms = value as? Double {
-            // Heuristic: values > ~10^12 are milliseconds.
-            return ms > 1_000_000_000_000 ? Date(timeIntervalSince1970: ms / 1000)
-                                          : Date(timeIntervalSince1970: ms)
-        }
+        if let ms = value as? Double { return date(fromEpoch: ms) }
         if let s = value as? String {
-            if let d = Double(s) {
-                return d > 1_000_000_000_000 ? Date(timeIntervalSince1970: d / 1000)
-                                             : Date(timeIntervalSince1970: d)
-            }
-            if let d = ISO8601DateFormatter().date(from: s) { return d }
+            if let d = Double(s) { return date(fromEpoch: d) }
+            if let d = DateParsing.iso8601(s) { return d }
         }
         return .distantPast // unknown → treat as expired, forces refresh/re-auth
+    }
+
+    /// Epoch value that may be seconds or milliseconds. Values above ~10^12 are ms.
+    private static func date(fromEpoch value: Double) -> Date {
+        value > 1_000_000_000_000 ? Date(timeIntervalSince1970: value / 1000)
+                                  : Date(timeIntervalSince1970: value)
     }
 }
 

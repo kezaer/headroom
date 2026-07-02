@@ -54,3 +54,35 @@ struct CodexNamedWindowDTO: Decodable {
     var displayLabel: String { name ?? label ?? "other" }
     var utilizationValue: Double? { used_percent ?? usage_percent ?? utilization }
 }
+
+// MARK: - Shared window construction
+
+/// Builds a `UsageWindow` from decoded parts, tolerating either an ISO reset time or
+/// a relative `resets_in_seconds`. Shared by both providers so window assembly and the
+/// generic HTTP-status failure mapping live in one place.
+enum UsageWindowBuilder {
+    static func make(
+        _ kind: WindowKind,
+        _ utilization: Double?,
+        _ resetsAt: String?,
+        _ resetsInSeconds: Double?,
+        now: () -> Date
+    ) -> UsageWindow? {
+        guard let utilization else { return nil }
+        let reset: Date
+        if let d = DateParsing.iso8601(resetsAt) {
+            reset = d
+        } else if let seconds = resetsInSeconds {
+            reset = now().addingTimeInterval(seconds)
+        } else {
+            return nil
+        }
+        return UsageWindow(kind: kind, utilization: utilization, resetsAt: reset)
+    }
+
+    /// Failure reason for HTTP statuses both providers handle identically.
+    static func genericFailure(for status: Int) -> FailureReason {
+        status == 429 ? .transient("Rate limited — will retry")
+                      : .transient("Service error (\(status))")
+    }
+}

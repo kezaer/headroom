@@ -37,10 +37,8 @@ public struct CodexProvider: UsageProvider {
                     return decode(result.body)
                 case 401:
                     return stale(.needsReauth("Session expired — run `codex` to refresh"))
-                case 429:
-                    return stale(.transient("Rate limited — will retry"))
                 default:
-                    return stale(.transient("Service error (\(result.status))"))
+                    return stale(UsageWindowBuilder.genericFailure(for: result.status))
                 }
             }
         }
@@ -51,14 +49,16 @@ public struct CodexProvider: UsageProvider {
             return stale(.decode("Couldn't read Codex usage response"))
         }
         var windows: [UsageWindow] = []
-        if let w = dto.rate_limit?.primary_window, let win = window(.fiveHour, w.utilizationValue, w.resets_at, w.resets_in_seconds) {
+        if let w = dto.rate_limit?.primary_window,
+           let win = UsageWindowBuilder.make(.fiveHour, w.utilizationValue, w.resets_at, w.resets_in_seconds, now: now) {
             windows.append(win)
         }
-        if let w = dto.rate_limit?.secondary_window, let win = window(.weekly, w.utilizationValue, w.resets_at, w.resets_in_seconds) {
+        if let w = dto.rate_limit?.secondary_window,
+           let win = UsageWindowBuilder.make(.weekly, w.utilizationValue, w.resets_at, w.resets_in_seconds, now: now) {
             windows.append(win)
         }
         for extra in dto.additional_rate_limits ?? [] {
-            if let win = window(.other(extra.displayLabel), extra.utilizationValue, extra.resets_at, extra.resets_in_seconds) {
+            if let win = UsageWindowBuilder.make(.other(extra.displayLabel), extra.utilizationValue, extra.resets_at, extra.resets_in_seconds, now: now) {
                 windows.append(win)
             }
         }
@@ -74,20 +74,7 @@ public struct CodexProvider: UsageProvider {
         )
     }
 
-    private func window(_ kind: WindowKind, _ util: Double?, _ resetsAt: String?, _ resetsInSeconds: Double?) -> UsageWindow? {
-        guard let util else { return nil }
-        let reset: Date
-        if let d = DateParsing.iso8601(resetsAt) {
-            reset = d
-        } else if let seconds = resetsInSeconds {
-            reset = now().addingTimeInterval(seconds)
-        } else {
-            return nil
-        }
-        return UsageWindow(kind: kind, utilization: util, resetsAt: reset)
-    }
-
     private func stale(_ reason: FailureReason) -> UsageSnapshot {
-        UsageSnapshot(providerID: id, windows: [], planLabel: nil, capturedAt: nil, freshness: .stale(reason))
+        .stale(for: id, reason: reason)
     }
 }

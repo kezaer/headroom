@@ -50,13 +50,17 @@ struct ProviderCardView: View {
         case .live:
             bars(dimmed: false)
         case .stale(let reason):
-            if reason.isPermanent {
-                actionable(reason.message)
-                if !snapshot.windows.isEmpty { bars(dimmed: true) }
-            } else {
-                bars(dimmed: true)
-                Text(reason.message).font(.caption2).foregroundStyle(.secondary)
-            }
+            staleContent(reason)
+        }
+    }
+
+    @ViewBuilder private func staleContent(_ reason: FailureReason) -> some View {
+        if reason.isPermanent {
+            actionable(reason.message)
+            if !snapshot.windows.isEmpty { bars(dimmed: true) }
+        } else {
+            bars(dimmed: true)
+            Text(reason.message).font(.caption2).foregroundStyle(.secondary)
         }
     }
 

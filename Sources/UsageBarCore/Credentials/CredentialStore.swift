@@ -59,7 +59,7 @@ public actor CredentialStore {
     public func claudeAccessToken() async -> Result<String, FailureReason> {
         // Load into cache once: prefer our own item (precedence), else bootstrap.
         if cachedClaude == nil {
-            if let own = (try? ownStore.readOwnClaude()) ?? nil {
+            if let own = try? ownStore.readOwnClaude() {
                 cachedClaude = own
             } else {
                 do {
@@ -104,17 +104,15 @@ public actor CredentialStore {
         inFlightRefresh = task
         let result = await task.value
         inFlightRefresh = nil
-        if case .success = result {
-            // On a real successful refresh, persist to our own item and update cache.
-            if case .success(let token) = result {
-                let fresh = ClaudeCredential(
-                    accessToken: token,
-                    refreshToken: cred.refreshToken,
-                    expiresAt: now().addingTimeInterval(3600)
-                )
-                cachedClaude = fresh
-                try? ownStore.writeOwnClaude(fresh)
-            }
+        if case .success(let token) = result {
+            // On a successful refresh, persist to our own item and update the cache.
+            let fresh = ClaudeCredential(
+                accessToken: token,
+                refreshToken: cred.refreshToken,
+                expiresAt: now().addingTimeInterval(3600)
+            )
+            cachedClaude = fresh
+            try? ownStore.writeOwnClaude(fresh)
         }
         return result
     }

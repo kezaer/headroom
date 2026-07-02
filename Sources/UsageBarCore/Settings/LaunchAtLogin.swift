@@ -1,4 +1,3 @@
-import Foundation
 import ServiceManagement
 
 /// Launch-at-login control (U8, R15). Behind a protocol so Settings can be tested

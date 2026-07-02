@@ -35,3 +35,12 @@ public enum CredentialError: Error, Equatable {
     case malformed            // present but unparseable
     case keychainStatus(Int32)
 }
+
+extension CredentialError {
+    /// Decodes a credential JSON blob into a top-level object, or throws `.malformed`.
+    static func jsonObject(_ data: Data) throws -> [String: Any] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { throw CredentialError.malformed }
+        return obj
+    }
+}

@@ -11,14 +11,12 @@ public protocol CodexAuthReading: Sendable {
 /// account_id }, last_refresh }`.
 public enum CodexAuthBlob {
     public static func parse(_ data: Data) throws -> CodexCredential {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { throw CredentialError.malformed }
+        let root = try CredentialError.jsonObject(data)
         guard
             let tokens = root["tokens"] as? [String: Any],
             let access = tokens["access_token"] as? String
         else { throw CredentialError.malformed }
-        let lastRefresh = (root["last_refresh"] as? String)
-            .flatMap { ISO8601DateFormatter().date(from: $0) }
+        let lastRefresh = DateParsing.iso8601(root["last_refresh"] as? String)
         return CodexCredential(
             accessToken: access,
             refreshToken: tokens["refresh_token"] as? String,

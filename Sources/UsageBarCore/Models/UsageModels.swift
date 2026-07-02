@@ -117,6 +117,18 @@ public struct UsageSnapshot: Sendable, Equatable {
         )
     }
 
+    /// A failed fetch with no fresh data. The store merges prior windows back in for
+    /// continuity (KTD7), so this carries none of its own.
+    public static func stale(for providerID: ProviderID, reason: FailureReason) -> UsageSnapshot {
+        UsageSnapshot(
+            providerID: providerID,
+            windows: [],
+            planLabel: nil,
+            capturedAt: nil,
+            freshness: .stale(reason)
+        )
+    }
+
     /// Re-mark an existing snapshot as stale, preserving its last-known windows so
     /// the UI keeps showing prior data dimmed rather than blanking (KTD7). If there
     /// is no prior data yet, the result stays `.pending`-shaped but carries the reason.
