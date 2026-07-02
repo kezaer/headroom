@@ -57,6 +57,16 @@ struct UsageStoreTests {
         if case .stale = after.freshness {} else { Issue.record("should be stale") }
     }
 
+    @Test func startIsIdempotent() async {
+        // A second start() (e.g. the popover re-appearing) must not re-fetch or restart
+        // the loop — the guard keeps exactly one initial refresh.
+        let provider = CountingProvider(id: .claude)
+        let store = UsageStore(providers: [provider])
+        await store.start()
+        await store.start()
+        #expect(provider.fetchCount == 1)
+    }
+
     @Test func menuBarSummaryPicksLowestLiveWithIdentity() async {
         let store = UsageStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [

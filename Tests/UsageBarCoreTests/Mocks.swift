@@ -107,6 +107,21 @@ extension UsageSnapshot {
     }
 }
 
+/// Provider double that counts how many times it was fetched — used to prove the
+/// store's refresh-dedup / start-idempotency behavior.
+final class CountingProvider: UsageProvider, @unchecked Sendable {
+    let id: ProviderID
+    let displayName: String
+    private let lock = NSLock()
+    private var _count = 0
+    var fetchCount: Int { lock.withLock { _count } }
+    init(id: ProviderID, displayName: String = "P") { self.id = id; self.displayName = displayName }
+    func fetchSnapshot() async -> UsageSnapshot {
+        lock.withLock { _count += 1 }
+        return .live(id, windows: [UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: Date(timeIntervalSince1970: 3_000_000))])
+    }
+}
+
 extension ClaudeCredential {
     static func valid(now: Date = Date()) -> ClaudeCredential {
         ClaudeCredential(accessToken: "access-tok", refreshToken: "refresh-tok",

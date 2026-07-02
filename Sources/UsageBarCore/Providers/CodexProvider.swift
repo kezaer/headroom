@@ -50,15 +50,15 @@ public struct CodexProvider: UsageProvider {
         }
         var windows: [UsageWindow] = []
         if let w = dto.rate_limit?.primary_window,
-           let win = UsageWindowBuilder.make(.fiveHour, w.utilizationValue, w.resets_at, w.resets_in_seconds, now: now) {
+           let win = UsageWindowBuilder.make(.fiveHour, utilization: w.utilizationValue, resetsAt: w.resets_at, resetsInSeconds: w.resets_in_seconds, now: now) {
             windows.append(win)
         }
         if let w = dto.rate_limit?.secondary_window,
-           let win = UsageWindowBuilder.make(.weekly, w.utilizationValue, w.resets_at, w.resets_in_seconds, now: now) {
+           let win = UsageWindowBuilder.make(.weekly, utilization: w.utilizationValue, resetsAt: w.resets_at, resetsInSeconds: w.resets_in_seconds, now: now) {
             windows.append(win)
         }
         for extra in dto.additional_rate_limits ?? [] {
-            if let win = UsageWindowBuilder.make(.other(extra.displayLabel), extra.utilizationValue, extra.resets_at, extra.resets_in_seconds, now: now) {
+            if let win = UsageWindowBuilder.make(.other(extra.displayLabel), utilization: extra.utilizationValue, resetsAt: extra.resets_at, resetsInSeconds: extra.resets_in_seconds, now: now) {
                 windows.append(win)
             }
         }

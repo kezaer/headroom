@@ -66,6 +66,30 @@ struct ClaudeProviderTests {
         #expect(reason.isPermanent)
     }
 
+    @Test func refreshAndRetrySucceeds() async {
+        // 401 → one refresh (succeeds) → retry returns 200 → live snapshot. Exercises
+        // the refresh-and-retry-then-success branch (the default refresher can't
+        // succeed, so this uses a succeeding one).
+        let store = CredentialStore(
+            keychain: MockKeychain(claudeCode: .valid()),
+            ownStore: MockKeychain(),
+            codexReader: MockCodexReader(),
+            refresher: MockRefresher(result: .success(.valid()))
+        )
+        let body = """
+        { "five_hour": {"utilization": 20, "resets_at": "2026-07-02T12:00:00Z"} }
+        """
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 401, body: Data())),
+            .success(HTTPResult(status: 200, body: Data(body.utf8))),
+        ])
+        let provider = ClaudeProvider(credentials: store, http: fetcher,
+                                      version: { "2.0.0" }, now: { Date(timeIntervalSince1970: 1_000_000) })
+        let snap = await provider.fetchSnapshot()
+        #expect(snap.freshness == .live)
+        #expect(snap.windows.first?.percentRemaining == 80)
+    }
+
     @Test func forbiddenIsScopeDenied() async {
         let snap = await provider(MockFetcher([
             .success(HTTPResult(status: 403, body: Data()))
@@ -95,16 +119,16 @@ struct ClaudeProviderTests {
     }
 
     @Test func redirectsAreBlocked() {
-        // R12: the client refuses redirects, so the Authorization header can never be
-        // forwarded to another host.
-        let client = RedirectBlockingHTTPClient()
+        // R12: the session delegate refuses redirects, so the Authorization header can
+        // never be forwarded to another host.
+        let blocker = RedirectBlocker()
         let session = URLSession(configuration: .ephemeral)
         let task = session.dataTask(with: URL(string: "https://api.anthropic.com")!)
         let response = HTTPURLResponse(url: URL(string: "https://api.anthropic.com")!,
                                        statusCode: 302, httpVersion: nil, headerFields: nil)!
         var handed: URLRequest? = URLRequest(url: URL(string: "https://evil.example.com")!)
-        client.urlSession(session, task: task, willPerformHTTPRedirection: response,
-                          newRequest: URLRequest(url: URL(string: "https://evil.example.com")!)) { req in
+        blocker.urlSession(session, task: task, willPerformHTTPRedirection: response,
+                           newRequest: URLRequest(url: URL(string: "https://evil.example.com")!)) { req in
             handed = req
         }
         #expect(handed == nil) // redirect refused

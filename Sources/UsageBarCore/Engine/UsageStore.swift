@@ -26,6 +26,7 @@ public final class UsageStore {
     private let providers: [any UsageProvider]
     private let preferences: Preferences
     private var engine: PollingEngine?
+    private var isRefreshing = false
 
     public init(providers: [any UsageProvider], preferences: Preferences = Preferences()) {
         self.providers = providers
@@ -57,8 +58,13 @@ public final class UsageStore {
     /// Restart the loop so a changed poll interval takes effect now (R14).
     public func reschedulePolling() { engine?.reschedule() }
 
-    /// Fetch every provider concurrently and merge results with continuity.
+    /// Fetch every provider concurrently and merge results with continuity. Guarded
+    /// so overlapping triggers (a timer tick during a popover-open `refreshNow()`)
+    /// coalesce into one in-flight cycle instead of racing duplicate fetches.
     public func refreshAll() async {
+        if isRefreshing { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
         let results = await withTaskGroup(of: (ProviderID, UsageSnapshot).self) { group in
             for provider in providers {
                 group.addTask { (provider.id, await provider.fetchSnapshot()) }

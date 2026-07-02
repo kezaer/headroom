@@ -51,4 +51,13 @@ struct UsageMathTests {
         #expect(FailureReason.needsReauth("x").isPermanent)
         #expect(!FailureReason.transient("x").isPermanent)
     }
+
+    @Test func updatedLabelFormatsRelativeTimes() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(Countdown.updatedLabel(capturedAt: nil, now: now) == nil)
+        #expect(Countdown.updatedLabel(capturedAt: now, now: now) == "just now")
+        #expect(Countdown.updatedLabel(capturedAt: now.addingTimeInterval(-60), now: now) == "1 min ago")
+        #expect(Countdown.updatedLabel(capturedAt: now.addingTimeInterval(-300), now: now) == "5 min ago")
+        #expect(Countdown.updatedLabel(capturedAt: now.addingTimeInterval(-3600), now: now) == "1 hr ago")
+    }
 }

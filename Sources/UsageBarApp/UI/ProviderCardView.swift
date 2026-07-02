@@ -29,6 +29,7 @@ struct ProviderCardView: View {
         HStack(spacing: 8) {
             Image(systemName: ProviderStyle.symbol(for: providerID))
                 .foregroundStyle(accent)
+                .accessibilityHidden(true) // decorative; provider name is read instead
             Text(displayName).font(.headline)
             if let plan = snapshot.planLabel {
                 Text(plan.capitalized)

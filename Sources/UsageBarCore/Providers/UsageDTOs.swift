@@ -63,9 +63,9 @@ struct CodexNamedWindowDTO: Decodable {
 enum UsageWindowBuilder {
     static func make(
         _ kind: WindowKind,
-        _ utilization: Double?,
-        _ resetsAt: String?,
-        _ resetsInSeconds: Double?,
+        utilization: Double?,
+        resetsAt: String?,
+        resetsInSeconds: Double?,
         now: () -> Date
     ) -> UsageWindow? {
         guard let utilization else { return nil }

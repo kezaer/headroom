@@ -19,13 +19,19 @@ public protocol UsageFetching: Sendable {
 
 /// Production client. Its session **refuses all redirects** so a redirected
 /// response can never forward the `Authorization: Bearer` token to another host
-/// (R12) — the usage endpoints are not expected to redirect.
-public final class RedirectBlockingHTTPClient: NSObject, UsageFetching, URLSessionTaskDelegate, @unchecked Sendable {
-    private lazy var session: URLSession = URLSession(
-        configuration: .ephemeral, delegate: self, delegateQueue: nil
-    )
+/// (R12) — the usage endpoints are not expected to redirect. The session's delegate
+/// is a standalone `RedirectBlocker` (not `self`), so the client isn't caught in the
+/// session→delegate retain cycle, and requests carry an explicit timeout so a hung
+/// endpoint can't stall a poll cycle indefinitely.
+public final class RedirectBlockingHTTPClient: UsageFetching, @unchecked Sendable {
+    private let session: URLSession
 
-    public override init() { super.init() }
+    public init(timeout: TimeInterval = 20) {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout * 2
+        session = URLSession(configuration: config, delegate: RedirectBlocker(), delegateQueue: nil)
+    }
 
     public func get(url: URL, headers: [String: String]) async -> Result<HTTPResult, FailureReason> {
         var request = URLRequest(url: url)
@@ -42,10 +48,13 @@ public final class RedirectBlockingHTTPClient: NSObject, UsageFetching, URLSessi
             return .failure(.transient("Network unavailable"))
         }
     }
+}
 
-    /// Block every redirect: passing `nil` stops the redirect and returns the 3xx
-    /// response as-is, so the Authorization header is never re-sent to a new host.
-    public func urlSession(
+/// Session delegate that blocks every redirect: passing `nil` stops the redirect and
+/// returns the 3xx response as-is, so the Authorization header is never re-sent to a
+/// new host (R12). A standalone object, not the client, to avoid a retain cycle.
+final class RedirectBlocker: NSObject, URLSessionTaskDelegate {
+    func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
         willPerformHTTPRedirection response: HTTPURLResponse,

@@ -9,7 +9,6 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
 
     private enum Key {
         static let interval = "pollIntervalMinutes"
-        static let launchAtLogin = "launchAtLogin"
         static func renewal(_ id: ProviderID) -> String { "renewalDate.\(id.raw)" }
     }
 

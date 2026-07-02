@@ -70,15 +70,19 @@ public struct ClaudeProvider: UsageProvider {
             case .transient(let reason):
                 return stale(reason)
             case .unauthorized:
-                // One refresh-and-retry (KTD7); a second 401 is permanent.
+                // One refresh-and-retry (KTD7). A second 401 is permanent, but a
+                // transient failure on the retry (429/network) stays transient — it
+                // must not be misreported as a permanent re-login.
                 switch await credentials.forceRefreshClaude() {
                 case .failure(let reason):
                     return stale(reason)
                 case .success(let refreshed):
-                    if case .success(let snapshot) = await call(token: refreshed) {
-                        return snapshot
+                    switch await call(token: refreshed) {
+                    case .success(let snapshot): return snapshot
+                    case .permanent(let reason): return stale(reason)
+                    case .transient(let reason): return stale(reason)
+                    case .unauthorized: return stale(.needsReauth("Session expired — run `claude` to re-login"))
                     }
-                    return stale(.needsReauth("Session expired — run `claude` to re-login"))
                 }
             }
         }
@@ -120,8 +124,8 @@ public struct ClaudeProvider: UsageProvider {
             return .transient(.decode("Couldn't read Claude usage response"))
         }
         let windows = [
-            UsageWindowBuilder.make(.fiveHour, dto.five_hour?.utilization, dto.five_hour?.resets_at, nil, now: now),
-            UsageWindowBuilder.make(.weekly, dto.seven_day?.utilization, dto.seven_day?.resets_at, nil, now: now),
+            UsageWindowBuilder.make(.fiveHour, utilization: dto.five_hour?.utilization, resetsAt: dto.five_hour?.resets_at, resetsInSeconds: nil, now: now),
+            UsageWindowBuilder.make(.weekly, utilization: dto.seven_day?.utilization, resetsAt: dto.seven_day?.resets_at, resetsInSeconds: nil, now: now),
         ].compactMap { $0 }
         guard !windows.isEmpty else {
             return .transient(.decode("No usage windows in Claude response"))

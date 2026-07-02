@@ -24,8 +24,11 @@ struct UsageBarApp: App {
 enum AppComposition {
     static func providers() -> [any UsageProvider] {
         let credentials = CredentialStore()
+        // Detect the installed Claude Code version once at launch so the real
+        // `claude-code/<version>` User-Agent is sent (KTD1), not the pinned fallback.
+        let claudeVersion = ClaudeVersion.detected()
         return [
-            ClaudeProvider(credentials: credentials),
+            ClaudeProvider(credentials: credentials, version: { claudeVersion }),
             CodexProvider(credentials: credentials),
         ]
     }

@@ -34,7 +34,7 @@ public actor CredentialStore {
 
     private var cachedClaude: ClaudeCredential?
     private var claudeBootstrapReads = 0            // test-observable: proves precedence
-    private var inFlightRefresh: Task<Result<String, FailureReason>, Never>?
+    private var inFlightRefresh: Task<Result<ClaudeCredential, FailureReason>, Never>?
 
     /// Access-token freshness margin — refresh a little before actual expiry.
     private static let expiryMargin: TimeInterval = 60
@@ -93,28 +93,25 @@ public actor CredentialStore {
     private func refreshClaude(_ cred: ClaudeCredential) async -> Result<String, FailureReason> {
         // Single-flight: set inFlight before the first suspension so concurrent
         // callers entering during the await share this one refresh.
-        if let task = inFlightRefresh { return await task.value }
-        let refresher = self.refresher
-        let task = Task<Result<String, FailureReason>, Never> {
-            switch await refresher.refresh(using: cred.refreshToken) {
-            case .success(let fresh): return .success(fresh.accessToken)
-            case .failure(let reason): return .failure(reason)
+        let result: Result<ClaudeCredential, FailureReason>
+        if let task = inFlightRefresh {
+            result = await task.value
+        } else {
+            let refresher = self.refresher
+            let task = Task<Result<ClaudeCredential, FailureReason>, Never> {
+                await refresher.refresh(using: cred.refreshToken)
+            }
+            inFlightRefresh = task
+            result = await task.value
+            inFlightRefresh = nil
+            // The creator persists the full refreshed credential — the server's real
+            // expiry and (possibly rotated) refresh token, not a fabricated expiry.
+            if case .success(let fresh) = result {
+                cachedClaude = fresh
+                try? ownStore.writeOwnClaude(fresh)
             }
         }
-        inFlightRefresh = task
-        let result = await task.value
-        inFlightRefresh = nil
-        if case .success(let token) = result {
-            // On a successful refresh, persist to our own item and update the cache.
-            let fresh = ClaudeCredential(
-                accessToken: token,
-                refreshToken: cred.refreshToken,
-                expiresAt: now().addingTimeInterval(3600)
-            )
-            cachedClaude = fresh
-            try? ownStore.writeOwnClaude(fresh)
-        }
-        return result
+        return result.map(\.accessToken)
     }
 
     public func codexAccessToken() async -> Result<String, FailureReason> {

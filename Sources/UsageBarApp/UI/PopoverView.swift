@@ -7,7 +7,7 @@ import UsageBarCore
 /// Dock presence, KTD9). A `TimelineView` drives a per-minute `now` so countdowns and
 /// "updated N min ago" tick without a data poll.
 struct PopoverView: View {
-    @Bindable var store: UsageStore
+    var store: UsageStore
     var preferences = Preferences()
     @State private var showingSettings = false
 
