@@ -1,0 +1,11 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+.swiftpm/
+DerivedData/
+/scratchpad
+
+.claude/
