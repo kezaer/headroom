@@ -43,6 +43,35 @@ public struct UsageWindow: Sendable, Equatable {
     public var percentRemaining: Double {
         min(100, max(0, 100 - utilization))
     }
+
+    /// Static health band for this window (UI-01). A pure threshold on
+    /// `percentRemaining` — never animated — so the bar and menu-bar glyph can encode
+    /// urgency at a glance without violating the standing "no pulsing indicators" rule.
+    public var severity: UsageSeverity { UsageSeverity(percentRemaining: percentRemaining) }
+}
+
+/// How close a window is to running out. Drives the semantic color ramp
+/// (healthy → low → critical) on the usage bar and the menu-bar glyph. Thresholds are
+/// fixed here — the single source of truth — so views never reinvent them.
+public enum UsageSeverity: Sendable, Equatable, Comparable {
+    case healthy
+    case low
+    case critical
+
+    /// Bands by percent *remaining*: ≤15% critical, ≤50% low, otherwise healthy.
+    /// Green means "you genuinely have plenty" — reserved for more than half left — so a
+    /// third of the way down reads as amber, not a false all-clear.
+    public init(percentRemaining: Double) {
+        switch percentRemaining {
+        case ..<0:      self = .critical   // defensive; percentRemaining is clamped ≥0
+        case ...15:     self = .critical
+        case ...50:     self = .low
+        default:        self = .healthy
+        }
+    }
+
+    /// Anything a user should notice — used for the "Low" chip and menu-bar tint.
+    public var needsAttention: Bool { self != .healthy }
 }
 
 /// Typed failure reason (KTD7). Failures are always one of these cases — never a

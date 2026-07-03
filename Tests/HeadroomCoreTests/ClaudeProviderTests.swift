@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// A real (ANSI-stripped) capture of `claude`'s `/usage` panel, including the messy
 /// intermediate render states the parser must survive. The settled values are:
@@ -71,6 +71,20 @@ struct ClaudeUsageParserTests {
         """
         #expect(ClaudeUsageParser.parse(text).first?.resetLabel == "Resets Jul 9 at 10am")
     }
+
+    @Test func extractsPlanTierFromHeader() {
+        // The tier appears in the panel header line, e.g. "… · Claude Max".
+        #expect(ClaudeUsageParser.plan(in: "Fable 5 with high effort · Claude Max  ~/dir") == "Max")
+        #expect(ClaudeUsageParser.plan(in: "Sonnet 5 · Claude Pro") == "Pro")
+        #expect(ClaudeUsageParser.plan(in: "Opus 4.8 · Claude Max 20x") == "Max 20x")
+    }
+
+    @Test func planTierDoesNotMatchClaudeCodeOrPromoText() {
+        // "Claude Code" (the product name) and promo copy must not be read as a tier.
+        #expect(ClaudeUsageParser.plan(in: "Claude Code v2.1.199") == nil)
+        #expect(ClaudeUsageParser.plan(in: "up to 50% of your plan's weekly usage limit") == nil)
+        #expect(ClaudeUsageParser.plan(in: "") == nil)
+    }
 }
 
 struct ClaudeProviderTests {
@@ -87,6 +101,17 @@ struct ClaudeProviderTests {
         #expect(snap.windows.first { $0.kind == .fiveHour }?.percentRemaining == 0)
         #expect(snap.windows.first { $0.kind == .weekly }?.percentRemaining == 62)
         #expect(snap.windows.first { $0.kind == .weekly }?.resetLabel == "Resets Jul 2 at 10am")
+    }
+
+    @Test func liveSnapshotCarriesPlanTier() async {
+        let panel = """
+        Fable 5 with high effort · Claude Max  ~/dir
+        Current session
+        ████ 16% used
+        Resets 8:10pm (America/Los_Angeles)
+        """
+        let snap = await provider(.panel(panel)).fetchSnapshot()
+        #expect(snap.planLabel == "Max")
     }
 
     @Test func missingCLIDegradesToNotLoggedIn() async {

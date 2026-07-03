@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// U2 test scenarios: percent-remaining math and reset-countdown formatting (the
 /// pure core-correctness surface), plus the `.pending` first-run distinction.
@@ -50,6 +50,28 @@ struct UsageMathTests {
         #expect(FailureReason.scopeDenied("x").isPermanent)
         #expect(FailureReason.needsReauth("x").isPermanent)
         #expect(!FailureReason.transient("x").isPermanent)
+    }
+
+    @Test func severityBandsByRemaining() {
+        func severity(_ util: Double) -> UsageSeverity {
+            UsageWindow(kind: .fiveHour, utilization: util, resetsAt: .now).severity
+        }
+        #expect(severity(0) == .healthy)      // 100% left
+        #expect(severity(49) == .healthy)     // 51% left, just above the low band
+        #expect(severity(50) == .low)         // 50% left, top of the low band
+        #expect(severity(66) == .low)         // 34% left — amber, not a false all-clear
+        #expect(severity(84) == .low)         // 16% left, just above critical
+        #expect(severity(85) == .critical)    // 15% left, top of critical
+        #expect(severity(100) == .critical)   // fully consumed
+        #expect(severity(130) == .critical)   // over-limit clamps to 0 left
+    }
+
+    @Test func severityNeedsAttentionAndOrdering() {
+        #expect(!UsageSeverity.healthy.needsAttention)
+        #expect(UsageSeverity.low.needsAttention)
+        #expect(UsageSeverity.critical.needsAttention)
+        #expect(UsageSeverity.healthy < UsageSeverity.low)
+        #expect(UsageSeverity.low < UsageSeverity.critical)
     }
 
     @Test func updatedLabelFormatsRelativeTimes() {

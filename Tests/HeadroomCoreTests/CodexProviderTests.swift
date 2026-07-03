@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// U5 test scenarios: Codex decode, unknown plan_type (#709 guard), additional
 /// rate limits → `.other`, missing token, 401→reauth, network error.

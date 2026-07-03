@@ -1,13 +1,13 @@
 #!/bin/bash
-# Build UsageBar.app — a menu bar (LSUIElement) app bundle around the SwiftPM binary.
+# Build Headroom.app — a menu bar (LSUIElement) app bundle around the SwiftPM binary.
 # For local personal use. Finalize signing/notarization in Xcode for distribution.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${1:-release}"
-APP="UsageBar.app"
-BIN=".build/${CONFIG}/UsageBar"
-RESOURCE_BUNDLE=".build/${CONFIG}/UsageBar_UsageBarApp.bundle"
+APP="Headroom.app"
+BIN=".build/${CONFIG}/Headroom"
+RESOURCE_BUNDLE=".build/${CONFIG}/Headroom_HeadroomApp.bundle"
 
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
@@ -16,7 +16,7 @@ echo "→ assembling ${APP}"
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS"
 mkdir -p "${APP}/Contents/Resources"
-cp "${BIN}" "${APP}/Contents/MacOS/UsageBar"
+cp "${BIN}" "${APP}/Contents/MacOS/Headroom"
 if [[ -d "${RESOURCE_BUNDLE}" ]]; then
   find "${RESOURCE_BUNDLE}" -maxdepth 1 -type f \( -name '*.svg' -o -name 'SOURCES.md' \) -exec cp {} "${APP}/Contents/Resources/" \;
 fi
@@ -26,10 +26,10 @@ cat > "${APP}/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key><string>UsageBar</string>
-    <key>CFBundleIdentifier</key><string>com.kylezantos.usagebar</string>
-    <key>CFBundleName</key><string>UsageBar</string>
-    <key>CFBundleDisplayName</key><string>UsageBar</string>
+    <key>CFBundleExecutable</key><string>Headroom</string>
+    <key>CFBundleIdentifier</key><string>com.kylezantos.headroom</string>
+    <key>CFBundleName</key><string>Headroom</string>
+    <key>CFBundleDisplayName</key><string>Headroom</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>

@@ -8,8 +8,36 @@ public struct MenuBarSummary: Sendable, Equatable {
     public let providerID: ProviderID? // which provider the number is about
     public let detail: String?         // e.g. "Claude 5h"
     public let isNeutral: Bool         // true when no live data yet
+    /// Health of the shown window — tints the glyph by urgency, not brand (UI-03).
+    public let severity: UsageSeverity
+    /// Any provider is permanently stale (needs the user to re-auth in its CLI) — the
+    /// glyph shows a warning dot so a dead provider isn't invisible in the menu bar.
+    public let needsAttention: Bool
+
+    public init(
+        text: String,
+        providerID: ProviderID?,
+        detail: String?,
+        isNeutral: Bool,
+        severity: UsageSeverity = .healthy,
+        needsAttention: Bool = false
+    ) {
+        self.text = text
+        self.providerID = providerID
+        self.detail = detail
+        self.isNeutral = isNeutral
+        self.severity = severity
+        self.needsAttention = needsAttention
+    }
 
     public static let neutral = MenuBarSummary(text: "—", providerID: nil, detail: nil, isNeutral: true)
+
+    /// Copy of this summary with the menu-bar attention flag set — lets the neutral
+    /// (no-live-data) case still surface a needs-reauth provider.
+    func withAttention(_ flag: Bool) -> MenuBarSummary {
+        MenuBarSummary(text: text, providerID: providerID, detail: detail,
+                       isNeutral: isNeutral, severity: severity, needsAttention: flag)
+    }
 }
 
 /// The observable view model the UI and menu bar label bind to (U6). `@MainActor`
@@ -24,10 +52,15 @@ public final class UsageStore {
     public let providerOrder: [ProviderID]
     public let displayNames: [ProviderID: String]
 
+    /// True while a fetch cycle is in flight. Doubles as the popover's "Refreshing…"
+    /// signal (UI-02): a manual refresh spawns a 20–30s Claude CLI session, so the UI
+    /// must show progress or the button reads as broken. Also the reentrancy guard that
+    /// coalesces overlapping triggers into one cycle.
+    public private(set) var isRefreshing = false
+
     private let providers: [any UsageProvider]
     private let preferences: Preferences
     private var engine: PollingEngine?
-    private var isRefreshing = false
 
     public init(providers: [any UsageProvider], preferences: Preferences = Preferences()) {
         self.providers = providers
@@ -106,6 +139,12 @@ public final class UsageStore {
     /// The menu bar summary: the lowest `percentRemaining` among all live windows,
     /// tagged with its provider+window identity. Neutral until any live data exists.
     public var menuBarSummary: MenuBarSummary {
+        // A provider stuck in a permanent failure (needs the user to re-auth) should
+        // flag the glyph even when there is no live number to show yet.
+        let needsAttention = providerOrder.contains { id in
+            if case .stale(let reason) = snapshots[id]?.freshness { return reason.isPermanent }
+            return false
+        }
         var best: (id: ProviderID, window: UsageWindow)?
         for id in providerOrder {
             guard let snap = snapshots[id], snap.freshness == .live else { continue }
@@ -115,14 +154,16 @@ public final class UsageStore {
                 }
             }
         }
-        guard let best else { return .neutral }
+        guard let best else { return MenuBarSummary.neutral.withAttention(needsAttention) }
         let pct = Int(best.window.percentRemaining.rounded())
         let name = displayNames[best.id] ?? best.id.raw
         return MenuBarSummary(
             text: "\(pct)%",
             providerID: best.id,
             detail: "\(name) \(best.window.kind.shortLabel)",
-            isNeutral: false
+            isNeutral: false,
+            severity: best.window.severity,
+            needsAttention: needsAttention
         )
     }
 }

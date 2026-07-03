@@ -1,5 +1,6 @@
 import SwiftUI
-import UsageBarCore
+import AppKit
+import HeadroomCore
 
 /// Entry point. Supports a hidden `--probe-claude` diagnostic that runs the real
 /// PTY capture once and prints the parsed windows — used to verify the Claude CLI
@@ -15,7 +16,7 @@ enum Entry {
             runCodexProbe()
             return
         }
-        UsageBarApp.main()
+        HeadroomApp.main()
     }
 
     private static func runClaudeProbe() {
@@ -34,10 +35,10 @@ enum Entry {
                 for w in windows {
                     print("  • \(w.kind)  \(Int(w.percentUsed))% used  →  \(w.resetLabel ?? "no reset")  (remaining \(Int(100 - w.percentUsed))%)")
                 }
-                if windows.isEmpty {
-                    print("--- RAW PANEL (first 1500 chars) ---")
-                    print(String(text.prefix(1500)))
-                }
+                // Always dump the raw panel so we can see fields the parser doesn't yet
+                // extract (e.g. the subscription tier for the plan pill).
+                print("--- RAW PANEL (first 1500 chars) ---")
+                print(String(text.prefix(1500)))
             }
             semaphore.signal()
         }
@@ -79,14 +80,15 @@ enum Entry {
 /// Menu bar app (U1). `MenuBarExtra(.window)` gives a custom Liquid Glass popover
 /// (KTD9). No Dock icon in the shipped app — set `LSUIElement = YES` in the Xcode app
 /// target's Info.plist when finalizing the bundle (U1/KTD8).
-struct UsageBarApp: App {
+struct HeadroomApp: App {
     @State private var store = UsageStore(providers: AppComposition.providers())
     @Environment(\.openWindow) private var openWindow
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
         MenuBarExtra {
             PopoverView(store: store) {
-                openWindow(id: "settings")
+                openSettings()
             }
                 .task { await store.start() }
         } label: {
@@ -97,10 +99,33 @@ struct UsageBarApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("UsageBar Settings", id: "settings") {
+        Window("Headroom Settings", id: "settings") {
             SettingsView(store: store)
         }
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
+    }
+
+    /// Open (or re-focus) the Settings window. An accessory / `LSUIElement` app is not
+    /// activated by `openWindow` alone, so the window would open *behind* the frontmost
+    /// app or never take keyboard focus — and clicking the gear a second time would look
+    /// like a no-op because the already-open window stays buried. Activating brings it
+    /// forward and makes it key on both first open and re-open. (`Done`/⌘W close it via
+    /// the view's `dismiss`; this method reopens cleanly afterward.)
+    private func openSettings() {
+        openWindow(id: "settings")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Pins the process to `.accessory` at launch so it behaves as a pure menu-bar app —
+/// no Dock icon, no app-switcher entry — even when run via `swift run` (which has no
+/// `LSUIElement` Info.plist). This also makes the Settings-window activation path
+/// identical in development and in the shipped bundle, so "does the window open and
+/// close properly" can be verified with `swift run Headroom`.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
     }
 }
 

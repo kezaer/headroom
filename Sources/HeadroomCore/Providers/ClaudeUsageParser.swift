@@ -50,6 +50,20 @@ public enum ClaudeUsageParser {
         return byKind.values.sorted { rank($0.kind) < rank($1.kind) }
     }
 
+    /// Best-effort subscription tier from the panel header (e.g. the
+    /// "… · Claude Max" line Claude Code prints at the top of `/usage`). Returned
+    /// without the "Claude" prefix ("Max", "Pro", "Max 20x") for the plan pill; nil
+    /// when the header advertises no tier. Keyed on the stable "Claude <Tier>" shape and
+    /// fails safe — a miss just leaves the pill hidden, exactly as before.
+    public static func plan(in text: String) -> String? {
+        guard let m = text.firstMatch(
+            of: /Claude\s+(Max|Pro|Free|Team|Enterprise)(?:\s+(\d+x))?/.ignoresCase()
+        ) else { return nil }
+        let tier = String(m.1).capitalized
+        if let mult = m.2 { return "\(tier) \(String(mult).lowercased())" }
+        return tier
+    }
+
     // MARK: line classifiers
 
     /// Maps a panel label line to a window kind. Tolerant of casing and drift.

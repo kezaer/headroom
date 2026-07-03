@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// U3 test scenarios (Codex only — Claude no longer uses credentials): auth.json
 /// parsing, absent-credential handling, redaction.

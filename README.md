@@ -1,4 +1,4 @@
-# UsageBar
+# Headroom
 
 A macOS menu bar app that shows how much of your AI-subscription usage remains — the
 5-hour and weekly windows, when each resets, and a manually-entered monthly renewal
@@ -10,7 +10,7 @@ providers later behind one abstraction.
 - **Claude** — reads the real 5-hour and weekly windows by driving the official
   `claude` CLI's `/usage` panel in a pseudo-terminal and parsing what it prints. This is
   the **compliant** path: the official client makes the request (a free status fetch, no
-  model call), and UsageBar only reads its output. It deliberately does **not** reuse or
+  model call), and Headroom only reads its output. It deliberately does **not** reuse or
   mint Claude subscription OAuth tokens — Anthropic's Feb 2026 policy prohibits that and
   enforces it server-side, and those tokens get blocked. The CLI panel itself notes the
   figures are "approximate, based on local sessions on this machine," but it carries the
@@ -21,21 +21,21 @@ providers later behind one abstraction.
 ## Build & test
 
 ```bash
-swift build          # builds UsageBarCore (logic) + UsageBar (app)
-swift test           # 36 tests
-./Scripts/build-app.sh   # produces UsageBar.app (menu bar / LSUIElement), then: open UsageBar.app
+swift build          # builds HeadroomCore (logic) + Headroom (app)
+swift test           # 49 tests
+./Scripts/build-app.sh   # produces Headroom.app (menu bar / LSUIElement), then: open Headroom.app
 ```
 
 Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe), and the `claude` CLI installed and
-logged in. Diagnostic: `swift run UsageBar --probe-claude` prints the live parsed windows
+logged in. Diagnostic: `swift run Headroom --probe-claude` prints the live parsed windows
 so you can confirm the Claude path works on your machine.
 
 ## Structure
 
-- `Sources/UsageBarCore` — testable logic: domain model, the Claude `/usage` PTY probe
+- `Sources/HeadroomCore` — testable logic: domain model, the Claude `/usage` PTY probe
   (`ClaudeUsageCLIProbe`) + parser (`ClaudeUsageParser`), the Codex provider, the polling
   engine/`@Observable` store, and preferences.
-- `Sources/UsageBarApp` — the SwiftUI `MenuBarExtra` shell and the Tahoe / Liquid Glass
+- `Sources/HeadroomApp` — the SwiftUI `MenuBarExtra` shell and the Tahoe / Liquid Glass
   popover, cards, settings, and menu bar label.
 
 ## Robustness (the PTY scrape is inherently fragile, so it's contained)
@@ -54,7 +54,7 @@ so you can confirm the Claude path works on your machine.
 
 ## Finalizing as a distributable app (optional)
 
-`./Scripts/build-app.sh` produces an ad-hoc-signed `UsageBar.app` that runs locally. For a
+`./Scripts/build-app.sh` produces an ad-hoc-signed `Headroom.app` that runs locally. For a
 persistent build you rebuild often, open the package in Xcode 26, add a macOS App target,
 and sign with your free **Apple Development** identity — a stable signature keeps macOS
 permission grants from re-prompting after each rebuild. Leave App Sandbox **off** (needed
@@ -65,5 +65,5 @@ built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
 
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
 real account and from a bare launch environment), Codex via its endpoint, manual renewal
-dates, launch-at-login, and the Tahoe popover. 36 tests pass. Remaining polish is the
+dates, launch-at-login, and the Tahoe popover. 49 tests pass. Remaining polish is the
 Xcode signing above, an app icon, and visual/VoiceOver smoke on the running app.

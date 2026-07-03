@@ -1,4 +1,4 @@
-# AGENTS.md — UsageBar
+# AGENTS.md — Headroom
 
 Project-specific guidance for AI agents working in this repo. Read this before making
 changes.
@@ -28,7 +28,7 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
 
 ## Architecture
 
-- `Sources/UsageBarCore` — all testable logic (no SwiftUI):
+- `Sources/HeadroomCore` — all testable logic (no SwiftUI):
   - `Models/` — `UsageSnapshot`/`UsageWindow` (with `resetLabel`), `FailureReason`,
     `Freshness` (`.pending`/`.live`/`.stale`), `UsageProvider` protocol, `Countdown`.
   - `Providers/` — `ClaudeProvider` (via `ClaudeUsageSource`), `ClaudeUsageCLIProbe`
@@ -37,7 +37,7 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
   - `Credentials/` — `CredentialStore` (Codex-only), `CodexAuthReader`, `Redaction`.
   - `Engine/` — `PollingEngine`, `UsageStore` (`@MainActor @Observable`).
   - `Settings/` — `Preferences` (UserDefaults), `LaunchAtLogin` (SMAppService).
-- `Sources/UsageBarApp` — SwiftUI `MenuBarExtra(.window)` shell + Tahoe/Liquid Glass popover,
+- `Sources/HeadroomApp` — SwiftUI `MenuBarExtra(.window)` shell + Tahoe/Liquid Glass popover,
   cards, settings, menu bar label. `AppComposition` is the one place providers are wired.
 
 Data flow: `PollingEngine` → `UsageStore.refreshAll()` fetches providers concurrently →
@@ -46,10 +46,10 @@ merges with continuity → menu bar label + popover bind to the `@Observable` st
 ## Commands
 
 ```bash
-swift build                        # UsageBarCore + UsageBar
+swift build                        # HeadroomCore + Headroom
 swift test                         # unit suite (fast, all mocked — no CLI/network/Keychain)
-swift run UsageBar --probe-claude  # diagnostic: prints live parsed /usage windows
-./Scripts/build-app.sh             # → UsageBar.app (LSUIElement), then: open UsageBar.app
+swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windows
+./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
 ```
 
 Requires Xcode 26 / Swift 6.3, macOS 26, `claude` CLI logged in (Claude) and
@@ -69,7 +69,7 @@ Requires Xcode 26 / Swift 6.3, macOS 26, `claude` CLI logged in (Claude) and
   text (Claude); Codex uses a computed countdown from `resetsAt`.
 - Comments cite plan/decision anchors (e.g. `KTD7`, `R12`) as WHY notes — keep those; drop
   comments that just narrate WHAT the next line does.
-- Don't commit build artifacts (`.build/`, `UsageBar.app/`) — already gitignored.
+- Don't commit build artifacts (`.build/`, `Headroom.app/`) — already gitignored.
 
 ## Gotchas
 
