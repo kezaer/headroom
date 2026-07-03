@@ -10,3 +10,11 @@ public protocol UsageProvider: Sendable {
     var displayName: String { get }
     func fetchSnapshot() async -> UsageSnapshot
 }
+
+/// Money-based API cost providers are intentionally separate from subscription quota
+/// providers: a dollar total over a billing period is not a resettable usage window.
+public protocol APISpendProvider: Sendable {
+    var id: ProviderID { get }
+    var displayName: String { get }
+    func fetchSpend(period: APISpendPeriod) async -> APISpendSnapshot
+}

@@ -17,6 +17,7 @@ final class MockFetcher: UsageFetching, @unchecked Sendable {
     private let lock = NSLock()
     private var index = 0
     private(set) var lastHeaders: [String: String] = [:]
+    private(set) var lastURL: URL?
     private(set) var requestCount = 0
 
     init(_ responses: [Result<HTTPResult, FailureReason>]) { self.responses = responses }
@@ -27,10 +28,44 @@ final class MockFetcher: UsageFetching, @unchecked Sendable {
     func get(url: URL, headers: [String: String]) async -> Result<HTTPResult, FailureReason> {
         lock.withLock {
             lastHeaders = headers
+            lastURL = url
             requestCount += 1
             let r = responses[min(index, responses.count - 1)]
             index += 1
             return r
+        }
+    }
+}
+
+/// In-memory API key store double.
+final class MockAPIKeyStore: APIKeyStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var keys: [APIKeyProvider: String]
+    var shouldFail = false
+
+    init(keys: [APIKeyProvider: String] = [:]) {
+        self.keys = keys
+    }
+
+    func readAPIKey(for provider: APIKeyProvider) throws -> String {
+        try lock.withLock {
+            if shouldFail { throw CredentialError.keychainStatus(-1) }
+            guard let key = keys[provider] else { throw CredentialError.notLoggedIn }
+            return key
+        }
+    }
+
+    func saveAPIKey(_ key: String, for provider: APIKeyProvider) throws {
+        try lock.withLock {
+            if shouldFail { throw CredentialError.keychainStatus(-1) }
+            keys[provider] = key
+        }
+    }
+
+    func deleteAPIKey(for provider: APIKeyProvider) throws {
+        try lock.withLock {
+            if shouldFail { throw CredentialError.keychainStatus(-1) }
+            keys.removeValue(forKey: provider)
         }
     }
 }
@@ -76,6 +111,35 @@ final class CountingProvider: UsageProvider, @unchecked Sendable {
     func fetchSnapshot() async -> UsageSnapshot {
         lock.withLock { _count += 1 }
         return .live(id, windows: [UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: Date(timeIntervalSince1970: 3_000_000))])
+    }
+}
+
+/// API spend provider double that counts how many times it was fetched.
+final class CountingSpendProvider: APISpendProvider, @unchecked Sendable {
+    let id: ProviderID
+    let displayName: String
+    private let lock = NSLock()
+    private var _count = 0
+    let snapshot: APISpendSnapshot
+    var fetchCount: Int { lock.withLock { _count } }
+
+    init(id: ProviderID, displayName: String = "API", snapshot: APISpendSnapshot? = nil) {
+        self.id = id
+        self.displayName = displayName
+        self.snapshot = snapshot ?? APISpendSnapshot(
+            providerID: id,
+            displayName: displayName,
+            amount: 1,
+            currency: "usd",
+            periodLabel: APISpendPeriod.currentMonth.label,
+            capturedAt: Date(timeIntervalSince1970: 1_000),
+            freshness: .live
+        )
+    }
+
+    func fetchSpend(period: APISpendPeriod) async -> APISpendSnapshot {
+        lock.withLock { _count += 1 }
+        return snapshot
     }
 }
 

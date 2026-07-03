@@ -25,10 +25,11 @@ struct PopoverView: View {
                         onOpenSettings: onOpenSettings
                     )
                 }
+                APISpendSectionView(store: store, now: context.date, onOpenSettings: onOpenSettings)
                 footer
             }
             .padding(14)
-            .frame(width: 300)
+            .frame(width: 320)
             .background(.ultraThinMaterial)
             .glassEffect(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
