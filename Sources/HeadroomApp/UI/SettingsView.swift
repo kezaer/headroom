@@ -24,6 +24,16 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Custom header (the window uses a hidden title bar): the vessel logo anchors
+            // the title, drawn just below the floating traffic lights.
+            HStack(spacing: 8) {
+                VesselMark()
+                    .frame(width: 12, height: 17)
+                Text("Headroom Settings")
+                    .font(.headline)
+            }
+            .padding(.bottom, 2)
+
             VStack(alignment: .leading, spacing: 2) {
                 Stepper("Refresh every \(intervalMinutes) min", value: $intervalMinutes, in: 2...60)
                     .onChange(of: intervalMinutes) { _, newValue in
@@ -114,15 +124,10 @@ struct SettingsView: View {
                     GridRow {
                         Text("\(store.displayNames[id] ?? id.raw) renews")
                             .gridColumnAlignment(.leading)
-                        DatePicker(
-                            "",
-                            selection: Binding(
-                                get: { renewalDates[id] ?? Date() },
-                                set: { renewalDates[id] = $0; preferences.setRenewalDate($0, for: id) }
-                            ),
-                            displayedComponents: .date
-                        )
-                        .labelsHidden()
+                        RenewalDateField(date: Binding(
+                            get: { renewalDates[id] ?? Date() },
+                            set: { renewalDates[id] = $0; preferences.setRenewalDate($0, for: id) }
+                        ))
                     }
                 }
             }
@@ -139,16 +144,12 @@ struct SettingsView: View {
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
+        // Extra top inset clears the traffic lights that float over content when the window
+        // uses a hidden title bar (set on the Window scene in `HeadroomApp`).
+        .padding(.top, 30)
         .frame(width: 380)
-        // Center the window title. macOS 26 leading-aligns the default window title, so
-        // remove it and supply a centered principal item instead.
-        .toolbar(removing: .title)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Headroom Settings").font(.headline)
-            }
-        }
         .onAppear {
             // Clamp any legacy sub-2-minute interval up to the new floor.
             let saved = max(2, preferences.pollIntervalMinutes)
@@ -225,6 +226,57 @@ struct SettingsView: View {
             case .failure(let reason):
                 credentialMessage = reason.message
             }
+        }
+    }
+}
+
+/// Renewal date entry: a tidy bordered label showing the formatted date, opening a calendar
+/// on click. macOS has no compact tap-to-calendar `DatePicker` (that's iOS-only), and the
+/// `.field`/`.stepperField` styles space-pad single digits ("7/ 3/2026"), so we format the
+/// label ourselves ("Jul 3, 2026") and pop a `.graphical` picker for editing.
+private struct RenewalDateField: View {
+    @Binding var date: Date
+    @State private var isEditing = false
+
+    var body: some View {
+        Button {
+            isEditing.toggle()
+        } label: {
+            Text(date.formatted(.dateTime.month(.abbreviated).day().year()))
+                .monospacedDigit()
+        }
+        .buttonStyle(.bordered)
+        .popover(isPresented: $isEditing, arrowEdge: .bottom) {
+            DatePicker("", selection: $date, displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+                .padding(12)
+                .frame(width: 260)
+        }
+    }
+}
+
+/// The Headroom identity mark drawn as a crisp vector: a capsule vessel filled from the
+/// bottom (the empty space on top *is* the headroom). Rendered directly so it stays sharp
+/// at title-bar size — the full app icon (a detailed rounded-square) turns to mud when
+/// shrunk to ~18pt.
+private struct VesselMark: View {
+    /// Static half-fill matching the app icon; the mark is decorative here, not live.
+    var fillFraction: CGFloat = 0.5
+
+    var body: some View {
+        GeometryReader { geo in
+            let lineWidth: CGFloat = 1.4
+            ZStack(alignment: .bottom) {
+                Rectangle()
+                    .fill(Color(red: 0.29, green: 0.80, blue: 0.48))
+                    .frame(height: geo.size.height * fillFraction)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule().strokeBorder(Color.primary.opacity(0.55), lineWidth: lineWidth)
+            )
         }
     }
 }

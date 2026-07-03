@@ -11,6 +11,8 @@ struct PopoverView: View {
     var preferences = Preferences()
     var onOpenSettings: () -> Void
 
+    @State private var popoverWindow: NSWindow?
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             VStack(spacing: 10) {
@@ -22,24 +24,34 @@ struct PopoverView: View {
                         snapshot: store.snapshot(for: id),
                         renewalDate: preferences.renewalDate(for: id),
                         now: context.date,
-                        onOpenSettings: onOpenSettings
+                        onOpenSettings: openSettingsDismissingPopover
                     )
                 }
-                APISpendSectionView(store: store, now: context.date, onOpenSettings: onOpenSettings)
+                APISpendSectionView(store: store, now: context.date, onOpenSettings: openSettingsDismissingPopover)
                 footer
             }
             .padding(14)
             .frame(width: 320)
             .background(.ultraThinMaterial)
             .glassEffect(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            // Capture the popover's hosting window so opening Settings can dismiss it.
+            .background(WindowAccessor { popoverWindow = $0 })
         }
+    }
+
+    /// Native pattern: navigating out of the transient menu-bar popover into the persistent
+    /// Settings window dismisses the popover (mirrors Control Center → System Settings). The
+    /// popover is recreated on next menu-bar click, so closing its window is safe.
+    private func openSettingsDismissingPopover() {
+        popoverWindow?.close()
+        onOpenSettings()
     }
 
     private var header: some View {
         HStack {
             Text("Usage").font(.headline)
             Spacer()
-            Button(action: onOpenSettings) {
+            Button(action: openSettingsDismissingPopover) {
                 Image(systemName: "gearshape").foregroundStyle(.secondary)
             }
             .buttonStyle(HoverButtonStyle(horizontalPadding: 5, verticalPadding: 5))
@@ -69,5 +81,22 @@ struct PopoverView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Resolves the `NSWindow` hosting a SwiftUI view. Used to get a direct handle on the
+/// `MenuBarExtra(.window)` popover window — SwiftUI exposes no first-class dismissal for
+/// it, and matching by private class name is brittle, so we read `view.window` instead.
+private struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onResolve(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onResolve(nsView.window) }
     }
 }
