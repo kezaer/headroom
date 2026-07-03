@@ -112,6 +112,10 @@ struct HeadroomApp: App {
         Window("Headroom Settings", id: "settings") {
             SettingsView(store: store)
         }
+        // Hidden title bar: the settings window draws its own header (logo + title) in
+        // content, so traffic lights float on a transparent strip. Avoids Tahoe wrapping a
+        // toolbar item in a Liquid Glass container. (Standard modern-macOS utility pattern.)
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
     }
@@ -125,6 +129,38 @@ struct HeadroomApp: App {
     private func openSettings() {
         openWindow(id: "settings")
         NSApp.activate(ignoringOtherApps: true)
+        // `.defaultPosition(.center)` (and SwiftUI's persisted frame) can land the window on
+        // whichever display it was last on — often the wrong one on a multi-monitor setup.
+        // A menu-bar app is invoked from wherever the user is looking, so re-home it onto the
+        // screen under the cursor. Deferred a runloop tick so the NSWindow exists.
+        DispatchQueue.main.async { Self.placeSettingsWindowOnActiveScreen() }
+    }
+
+    /// Center the Settings window on the active screen (the one under the cursor). If the
+    /// window is already showing on that screen, its current position is respected so a
+    /// user's manual placement isn't yanked back to center on every re-open.
+    private static func placeSettingsWindowOnActiveScreen() {
+        let mouse = NSEvent.mouseLocation
+        let activeScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        guard let activeScreen,
+              let window = NSApp.windows.first(where: { $0.title == "Headroom Settings" })
+        else { return }
+
+        if window.isVisible, activeScreen.frame.intersects(window.frame) { return }
+
+        // Force the layout pass so `.contentSize` has resized the window to its final width
+        // before we read it. At open the window is briefly wider than its content, and reading
+        // that transient frame centers ~50px off.
+        window.layoutIfNeeded()
+        let visible = activeScreen.visibleFrame
+        let size = window.frame.size
+        // Horizontally centered; nudged slightly above the vertical midpoint, matching the
+        // weighting AppKit's own `NSWindow.center()` uses.
+        let origin = NSPoint(
+            x: visible.midX - size.width / 2,
+            y: visible.midY - size.height / 2 + size.height * 0.05
+        )
+        window.setFrameOrigin(origin)
     }
 }
 
