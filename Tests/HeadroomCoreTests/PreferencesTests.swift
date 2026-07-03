@@ -39,6 +39,15 @@ struct PreferencesTests {
         #expect(prefs.showMenuBarPercentage)
     }
 
+    @Test func widgetsEnabledDefaultsOnAndPersists() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(prefs.widgetsEnabled)
+        prefs.widgetsEnabled = false
+        #expect(!prefs.widgetsEnabled)
+        prefs.widgetsEnabled = true
+        #expect(prefs.widgetsEnabled)
+    }
+
     @Test func surfacesDefaultToSubscriptionsOnlyAndPersist() {
         let prefs = Preferences(defaults: freshDefaults())
         #expect(prefs.isSurfaceEnabled(.claudeSubscription))

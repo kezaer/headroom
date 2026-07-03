@@ -62,16 +62,19 @@ public final class UsageStore {
     private let providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
     private let preferences: Preferences
+    private let widgetExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
 
     public init(
         providers: [any UsageProvider],
         apiSpendProviders: [any APISpendProvider] = [],
-        preferences: Preferences = Preferences()
+        preferences: Preferences = Preferences(),
+        widgetExporter: (any WidgetSnapshotExporting)? = nil
     ) {
         self.providers = providers
         self.apiSpendProviders = apiSpendProviders
         self.preferences = preferences
+        self.widgetExporter = widgetExporter
         self.displayNames = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0.displayName) })
         self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
         self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
@@ -116,12 +119,22 @@ public final class UsageStore {
         showMenuBarPercentage = enabled
     }
 
+    public var widgetsEnabled: Bool { preferences.widgetsEnabled }
+
+    public func setWidgetsEnabled(_ enabled: Bool) {
+        preferences.widgetsEnabled = enabled
+        exportWidgetSnapshot()
+    }
+
     public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
         preferences.isSurfaceEnabled(surface)
     }
 
     public func setSurfaceEnabled(_ enabled: Bool, for surface: UsageSurface) {
         preferences.setSurfaceEnabled(enabled, for: surface)
+        if surface.isSubscription {
+            exportWidgetSnapshot()
+        }
     }
 
     public var apiSpendPeriod: APISpendPeriod {
@@ -149,6 +162,7 @@ public final class UsageStore {
             return acc
         }
         for (id, fresh) in results { merge(id: id, fresh: fresh) }
+        exportWidgetSnapshot()
 
         let spendPeriod = preferences.apiSpendPeriod
         let spendResults = await withTaskGroup(of: (ProviderID, APISpendSnapshot).self) { group in
@@ -201,6 +215,19 @@ public final class UsageStore {
             displayName: apiSpendDisplayNames[id] ?? id.raw,
             periodLabel: preferences.apiSpendPeriod.label
         )
+    }
+
+    private func exportWidgetSnapshot(generatedAt: Date = .now) {
+        guard let widgetExporter else { return }
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: snapshots,
+            providerOrder: providerOrder,
+            displayNames: displayNames,
+            renewalDate: { [preferences] in preferences.renewalDate(for: $0) },
+            widgetsEnabled: preferences.widgetsEnabled,
+            generatedAt: generatedAt
+        )
+        widgetExporter.export(envelope)
     }
 
     /// The menu bar summary: the lowest `percentRemaining` among all live windows,

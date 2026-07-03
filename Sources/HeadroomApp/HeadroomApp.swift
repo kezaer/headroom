@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WidgetKit
 import HeadroomCore
 
 /// Entry point. Supports a hidden `--probe-claude` diagnostic that runs the real
@@ -138,7 +139,8 @@ enum AppComposition {
         return UsageStore(
             providers: providers(credentials: credentials),
             apiSpendProviders: apiSpendProviders(credentials: credentials),
-            preferences: preferences
+            preferences: preferences,
+            widgetExporter: widgetExporter()
         )
     }
 
@@ -158,5 +160,11 @@ enum AppComposition {
             AnthropicAPISpendProvider(credentials: credentials),
             OpenAIAPISpendProvider(credentials: credentials),
         ]
+    }
+
+    static func widgetExporter() -> any WidgetSnapshotExporting {
+        WidgetSnapshotExporter(cache: .appGroup()) {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 }

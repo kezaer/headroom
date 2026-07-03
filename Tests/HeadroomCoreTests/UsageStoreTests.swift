@@ -137,6 +137,44 @@ struct UsageStoreTests {
         #expect(preferences.showMenuBarPercentage)
     }
 
+    @Test func refreshExportsWidgetSnapshot() async {
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset),
+                ])),
+            ],
+            widgetExporter: exporter
+        )
+
+        await store.refreshAll()
+
+        let exports = exporter.exports
+        #expect(exports.count == 1)
+        #expect(exports[0].providers[0].id == "claude")
+        #expect(exports[0].providers[0].weeklyWindow?.percentRemaining == 70)
+    }
+
+    @Test func disablingWidgetsExportsDisabledState() {
+        let suite = "headroom.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: preferences,
+            widgetExporter: exporter
+        )
+
+        store.setWidgetsEnabled(false)
+
+        #expect(!preferences.widgetsEnabled)
+        #expect(exporter.exports.last?.status == .disabled)
+        #expect(exporter.exports.last?.providers.isEmpty == true)
+    }
+
     @Test func apiSpendProvidersOnlyFetchWhenEnabled() async {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

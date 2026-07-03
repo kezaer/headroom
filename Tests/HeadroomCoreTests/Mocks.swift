@@ -114,6 +114,17 @@ final class CountingProvider: UsageProvider, @unchecked Sendable {
     }
 }
 
+/// Widget exporter double for store tests.
+final class SpyWidgetExporter: WidgetSnapshotExporting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _exports: [WidgetSnapshotEnvelope] = []
+    var exports: [WidgetSnapshotEnvelope] { lock.withLock { _exports } }
+
+    func export(_ envelope: WidgetSnapshotEnvelope) {
+        lock.withLock { _exports.append(envelope) }
+    }
+}
+
 /// API spend provider double that counts how many times it was fetched.
 final class CountingSpendProvider: APISpendProvider, @unchecked Sendable {
     let id: ProviderID
