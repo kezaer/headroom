@@ -9,7 +9,10 @@ public enum Redaction {
     /// Matches long opaque runs and the known `sk-ant-…` / `sess-…` shapes.
     public static func redact(_ text: String) -> String {
         var result = text
+        result = result.replacing(/sk-proj-[A-Za-z0-9_-]+/, with: "‹redacted›")
+        result = result.replacing(/sk-ant-admin[A-Za-z0-9_-]+/, with: "‹redacted›")
         result = result.replacing(/sk-ant-[A-Za-z0-9_-]+/, with: "‹redacted›")
+        result = result.replacing(/sk-[A-Za-z0-9_-]+/, with: "‹redacted›")
         result = result.replacing(/sess-[A-Za-z0-9_-]+/, with: "‹redacted›")
         result = result.replacing(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/, with: "‹redacted›") // JWTs
         result = result.replacing(/[A-Za-z0-9_-]{40,}/, with: "‹redacted›") // long opaque tokens

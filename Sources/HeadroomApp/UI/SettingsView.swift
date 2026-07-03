@@ -7,6 +7,7 @@ import HeadroomCore
 struct SettingsView: View {
     let store: UsageStore
     var preferences = Preferences()
+    var credentialStore = CredentialStore()
     var launchControl: LaunchAtLoginControlling = LaunchAtLogin()
 
     @Environment(\.dismiss) private var dismiss
@@ -15,6 +16,10 @@ struct SettingsView: View {
     @State private var widgetsEnabled = true
     @State private var launchAtLogin = false
     @State private var renewalDates: [ProviderID: Date] = [:]
+    @State private var apiSpendPeriod: APISpendPeriod = .currentMonth
+    @State private var openAIKey = ""
+    @State private var anthropicKey = ""
+    @State private var credentialMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -42,7 +47,54 @@ struct SettingsView: View {
 
             Divider()
 
-            ForEach(store.providerOrder, id: \.self) { id in
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Subscription Usage").font(.subheadline.weight(.semibold))
+                surfaceToggle(.claudeSubscription)
+                surfaceToggle(.codexSubscription)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("API Spend").font(.subheadline.weight(.semibold))
+                Picker("Period", selection: $apiSpendPeriod) {
+                    ForEach(APISpendPeriod.allCases, id: \.self) { period in
+                        Text(period.label).tag(period)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: apiSpendPeriod) { _, newValue in
+                    store.setAPISpendPeriod(newValue)
+                    store.refreshNow()
+                }
+
+                surfaceToggle(.anthropicAPI)
+                apiKeyRow(
+                    title: "Anthropic admin key",
+                    placeholder: "sk-ant-admin…",
+                    text: $anthropicKey,
+                    provider: .anthropic
+                )
+
+                surfaceToggle(.openAIAPI)
+                apiKeyRow(
+                    title: "OpenAI admin key",
+                    placeholder: "sk-…",
+                    text: $openAIKey,
+                    provider: .openAI
+                )
+
+                if let credentialMessage {
+                    Text(credentialMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Divider()
+
+            ForEach([ProviderID.claude, .codex], id: \.self) { id in
                 DatePicker(
                     "\(store.displayNames[id] ?? id.raw) renews",
                     selection: Binding(
@@ -66,7 +118,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .frame(width: 300)
+        .frame(width: 380)
         .onAppear {
             // Clamp any legacy sub-2-minute interval up to the new floor.
             let saved = max(2, preferences.pollIntervalMinutes)
@@ -77,9 +129,70 @@ struct SettingsView: View {
             intervalMinutes = saved
             showMenuBarPercentage = store.showMenuBarPercentage
             widgetsEnabled = store.widgetsEnabled
+            apiSpendPeriod = store.apiSpendPeriod
             launchAtLogin = launchControl.isEnabled
-            for id in store.providerOrder {
+            for id in [ProviderID.claude, .codex] {
                 if let date = preferences.renewalDate(for: id) { renewalDates[id] = date }
+            }
+        }
+    }
+
+    private func surfaceToggle(_ surface: UsageSurface) -> some View {
+        Toggle(surface.displayName, isOn: Binding(
+            get: { store.isSurfaceEnabled(surface) },
+            set: { newValue in
+                store.setSurfaceEnabled(newValue, for: surface)
+                store.refreshNow()
+            }
+        ))
+    }
+
+    private func apiKeyRow(
+        title: String,
+        placeholder: String,
+        text: Binding<String>,
+        provider: APIKeyProvider
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                SecureField(placeholder, text: text)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save") {
+                    saveKey(text.wrappedValue, for: provider)
+                    text.wrappedValue = ""
+                }
+                .buttonStyle(HoverButtonStyle(horizontalPadding: 8, verticalPadding: 4))
+                Button("Remove") {
+                    deleteKey(for: provider)
+                    text.wrappedValue = ""
+                }
+                .buttonStyle(HoverButtonStyle(horizontalPadding: 8, verticalPadding: 4))
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func saveKey(_ key: String, for provider: APIKeyProvider) {
+        Task {
+            switch await credentialStore.saveAPIKey(key, for: provider) {
+            case .success:
+                credentialMessage = "\(provider.displayName) API key saved"
+                store.refreshNow()
+            case .failure(let reason):
+                credentialMessage = reason.message
+            }
+        }
+    }
+
+    private func deleteKey(for provider: APIKeyProvider) {
+        Task {
+            switch await credentialStore.deleteAPIKey(for: provider) {
+            case .success:
+                credentialMessage = "\(provider.displayName) API key removed"
+                store.refreshNow()
+            case .failure(let reason):
+                credentialMessage = reason.message
             }
         }
     }

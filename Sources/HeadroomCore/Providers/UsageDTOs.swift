@@ -98,6 +98,111 @@ struct CodexNamedWindowDTO: Decodable {
     }
 }
 
+// MARK: - API spend reports
+
+struct OpenAICostsDTO: Decodable {
+    let data: [CostBucketDTO]
+}
+
+struct AnthropicCostReportDTO: Decodable {
+    let data: [CostBucketDTO]?
+    let results: [CostResultDTO]?
+    let buckets: [CostBucketDTO]?
+    let cost: FlexibleAmountDTO?
+    let amount: FlexibleAmountDTO?
+    let currency: String?
+
+    var costResults: [CostResultDTO] {
+        var all = (data ?? []).flatMap(\.results) + (buckets ?? []).flatMap(\.results) + (results ?? [])
+        if let cost { all.append(CostResultDTO(amount: cost, currency: currency)) }
+        if let amount { all.append(CostResultDTO(amount: amount, currency: currency)) }
+        return all
+    }
+
+    var hasCostContainer: Bool {
+        data != nil || buckets != nil || results != nil || cost != nil || amount != nil
+    }
+}
+
+struct CostBucketDTO: Decodable {
+    let results: [CostResultDTO]
+
+    enum CodingKeys: String, CodingKey { case results }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        results = (try? c.decode([CostResultDTO].self, forKey: .results)) ?? []
+    }
+}
+
+struct CostResultDTO: Decodable {
+    let amount: FlexibleAmountDTO?
+    let currency: String?
+
+    init(amount: FlexibleAmountDTO?, currency: String?) {
+        self.amount = amount
+        self.currency = currency
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case amount, cost, currency
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        amount = (try? c.decode(FlexibleAmountDTO.self, forKey: .amount))
+              ?? (try? c.decode(FlexibleAmountDTO.self, forKey: .cost))
+        currency = c.flexibleString(.currency)
+    }
+}
+
+struct FlexibleAmountDTO: Decodable {
+    let value: Double?
+    let currency: String?
+
+    enum CodingKeys: String, CodingKey { case value, amount, total, currency }
+
+    init(value: Double?, currency: String?) {
+        self.value = value
+        self.currency = currency
+    }
+
+    init(from decoder: Decoder) throws {
+        if let value = try? decoder.singleValueContainer().decode(Double.self) {
+            self.value = value
+            self.currency = nil
+            return
+        }
+        if let value = try? decoder.singleValueContainer().decode(String.self) {
+            self.value = Double(value)
+            self.currency = nil
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        value = c.flexibleDouble(.value) ?? c.flexibleDouble(.amount) ?? c.flexibleDouble(.total)
+        currency = c.flexibleString(.currency)
+    }
+}
+
+enum CostAccumulator {
+    static func total(from results: [CostResultDTO], emptyIsZero: Bool = false) -> (amount: Double, currency: String)? {
+        if results.isEmpty, emptyIsZero { return (0, "usd") }
+        var total = 0.0
+        var currency: String?
+        var sawAmount = false
+        for result in results {
+            guard let value = result.amount?.value else { continue }
+            let resultCurrency = result.amount?.currency ?? result.currency ?? "usd"
+            if let currency, currency != resultCurrency { return nil }
+            currency = resultCurrency
+            total += value
+            sawAmount = true
+        }
+        guard sawAmount else { return nil }
+        return (total, currency ?? "usd")
+    }
+}
+
 // MARK: - Shared window construction
 
 /// Builds a `UsageWindow` from decoded parts, tolerating either an ISO reset time or

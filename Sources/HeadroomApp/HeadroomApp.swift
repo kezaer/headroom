@@ -82,10 +82,7 @@ enum Entry {
 /// (KTD9). No Dock icon in the shipped app — set `LSUIElement = YES` in the Xcode app
 /// target's Info.plist when finalizing the bundle (U1/KTD8).
 struct HeadroomApp: App {
-    @State private var store = UsageStore(
-        providers: AppComposition.providers(),
-        widgetExporter: AppComposition.widgetExporter()
-    )
+    @State private var store = AppComposition.store()
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -136,10 +133,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Composition root (R13): the one place concrete providers are wired to the engine.
 /// Adding a third provider is a one-line append here plus a card — no engine change.
 enum AppComposition {
+    @MainActor
+    static func store(preferences: Preferences = Preferences()) -> UsageStore {
+        let credentials = CredentialStore()
+        return UsageStore(
+            providers: providers(credentials: credentials),
+            apiSpendProviders: apiSpendProviders(credentials: credentials),
+            preferences: preferences,
+            widgetExporter: widgetExporter()
+        )
+    }
+
     static func providers() -> [any UsageProvider] {
+        providers(credentials: CredentialStore())
+    }
+
+    private static func providers(credentials: CredentialStore) -> [any UsageProvider] {
         return [
             ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory())),
-            CodexProvider(credentials: CredentialStore()), // reads ~/.codex/auth.json + wham/usage
+            CodexProvider(credentials: credentials), // reads ~/.codex/auth.json + wham/usage
+        ]
+    }
+
+    private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {
+        [
+            AnthropicAPISpendProvider(credentials: credentials),
+            OpenAIAPISpendProvider(credentials: credentials),
         ]
     }
 

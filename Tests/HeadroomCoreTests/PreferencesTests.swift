@@ -47,4 +47,24 @@ struct PreferencesTests {
         prefs.widgetsEnabled = true
         #expect(prefs.widgetsEnabled)
     }
+
+    @Test func surfacesDefaultToSubscriptionsOnlyAndPersist() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(prefs.isSurfaceEnabled(.claudeSubscription))
+        #expect(prefs.isSurfaceEnabled(.codexSubscription))
+        #expect(!prefs.isSurfaceEnabled(.anthropicAPI))
+        #expect(!prefs.isSurfaceEnabled(.openAIAPI))
+
+        prefs.setSurfaceEnabled(false, for: .claudeSubscription)
+        prefs.setSurfaceEnabled(true, for: .openAIAPI)
+        #expect(!prefs.isSurfaceEnabled(.claudeSubscription))
+        #expect(prefs.isSurfaceEnabled(.openAIAPI))
+    }
+
+    @Test func apiSpendPeriodDefaultsAndPersists() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(prefs.apiSpendPeriod == .currentMonth)
+        prefs.apiSpendPeriod = .rolling30Days
+        #expect(prefs.apiSpendPeriod == .rolling30Days)
+    }
 }

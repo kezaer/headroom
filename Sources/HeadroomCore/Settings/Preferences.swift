@@ -11,7 +11,9 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let interval = "pollIntervalMinutes"
         static let showMenuBarPercentage = "showMenuBarPercentage"
         static let widgetsEnabled = "widgetsEnabled"
+        static let apiSpendPeriod = "apiSpendPeriod"
         static func renewal(_ id: ProviderID) -> String { "renewalDate.\(id.raw)" }
+        static func surfaceEnabled(_ surface: UsageSurface) -> String { "surfaceEnabled.\(surface.rawValue)" }
     }
 
     public static let defaultIntervalMinutes = 5
@@ -35,6 +37,28 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
             return defaults.bool(forKey: Key.widgetsEnabled)
         }
         nonmutating set { defaults.set(newValue, forKey: Key.widgetsEnabled) }
+    }
+
+    public var apiSpendPeriod: APISpendPeriod {
+        get {
+            guard let raw = defaults.string(forKey: Key.apiSpendPeriod),
+                  let period = APISpendPeriod(rawValue: raw)
+            else { return .currentMonth }
+            return period
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.apiSpendPeriod) }
+    }
+
+    public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
+        let key = Key.surfaceEnabled(surface)
+        guard defaults.object(forKey: key) != nil else {
+            return surface.isSubscription
+        }
+        return defaults.bool(forKey: key)
+    }
+
+    public func setSurfaceEnabled(_ enabled: Bool, for surface: UsageSurface) {
+        defaults.set(enabled, forKey: Key.surfaceEnabled(surface))
     }
 
     public func renewalDate(for id: ProviderID) -> Date? {

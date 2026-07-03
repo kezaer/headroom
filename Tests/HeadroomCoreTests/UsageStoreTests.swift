@@ -174,4 +174,27 @@ struct UsageStoreTests {
         #expect(exporter.exports.last?.status == .disabled)
         #expect(exporter.exports.last?.providers.isEmpty == true)
     }
+
+    @Test func apiSpendProvidersOnlyFetchWhenEnabled() async {
+        let suite = "headroom.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        let spend = CountingSpendProvider(id: .codex, displayName: "OpenAI API")
+        let store = UsageStore(
+            providers: [],
+            apiSpendProviders: [spend],
+            preferences: preferences
+        )
+
+        await store.refreshAll()
+        #expect(spend.fetchCount == 0)
+        #expect(store.apiSpendProviderOrder.isEmpty)
+
+        store.setSurfaceEnabled(true, for: .openAIAPI)
+        await store.refreshAll()
+        #expect(spend.fetchCount == 1)
+        #expect(store.apiSpendProviderOrder == [.codex])
+        #expect(store.apiSpendSnapshot(for: .codex).freshness == .live)
+    }
 }

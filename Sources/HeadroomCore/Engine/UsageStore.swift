@@ -48,9 +48,10 @@ public struct MenuBarSummary: Sendable, Equatable {
 @Observable
 public final class UsageStore {
     public private(set) var snapshots: [ProviderID: UsageSnapshot]
+    public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
-    public let providerOrder: [ProviderID]
     public let displayNames: [ProviderID: String]
+    public let apiSpendDisplayNames: [ProviderID: String]
 
     /// True while a fetch cycle is in flight. Doubles as the popover's "Refreshing…"
     /// signal (UI-02): a manual refresh spawns a 20–30s Claude CLI session, so the UI
@@ -59,22 +60,36 @@ public final class UsageStore {
     public private(set) var isRefreshing = false
 
     private let providers: [any UsageProvider]
+    private let apiSpendProviders: [any APISpendProvider]
     private let preferences: Preferences
     private let widgetExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
 
     public init(
         providers: [any UsageProvider],
+        apiSpendProviders: [any APISpendProvider] = [],
         preferences: Preferences = Preferences(),
         widgetExporter: (any WidgetSnapshotExporting)? = nil
     ) {
         self.providers = providers
+        self.apiSpendProviders = apiSpendProviders
         self.preferences = preferences
         self.widgetExporter = widgetExporter
-        self.providerOrder = providers.map(\.id)
         self.displayNames = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0.displayName) })
+        self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
         self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
+        self.apiSpendSnapshots = Dictionary(uniqueKeysWithValues: apiSpendProviders.map {
+            ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
+        })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
+    }
+
+    public var providerOrder: [ProviderID] {
+        providers.map(\.id).filter { preferences.isSurfaceEnabled(subscriptionSurface(for: $0)) }
+    }
+
+    public var apiSpendProviderOrder: [ProviderID] {
+        apiSpendProviders.map(\.id).filter { preferences.isSurfaceEnabled(apiSurface(for: $0)) }
     }
 
     /// Begin polling: an immediate refresh, then the interval loop. Idempotent — a
@@ -111,6 +126,25 @@ public final class UsageStore {
         exportWidgetSnapshot()
     }
 
+    public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
+        preferences.isSurfaceEnabled(surface)
+    }
+
+    public func setSurfaceEnabled(_ enabled: Bool, for surface: UsageSurface) {
+        preferences.setSurfaceEnabled(enabled, for: surface)
+        if surface.isSubscription {
+            exportWidgetSnapshot()
+        }
+    }
+
+    public var apiSpendPeriod: APISpendPeriod {
+        preferences.apiSpendPeriod
+    }
+
+    public func setAPISpendPeriod(_ period: APISpendPeriod) {
+        preferences.apiSpendPeriod = period
+    }
+
     /// Fetch every provider concurrently and merge results with continuity. Guarded
     /// so overlapping triggers (a timer tick during a popover-open `refreshNow()`)
     /// coalesce into one in-flight cycle instead of racing duplicate fetches.
@@ -120,6 +154,7 @@ public final class UsageStore {
         defer { isRefreshing = false }
         let results = await withTaskGroup(of: (ProviderID, UsageSnapshot).self) { group in
             for provider in providers {
+                guard preferences.isSurfaceEnabled(subscriptionSurface(for: provider.id)) else { continue }
                 group.addTask { (provider.id, await provider.fetchSnapshot()) }
             }
             var acc: [(ProviderID, UsageSnapshot)] = []
@@ -128,6 +163,18 @@ public final class UsageStore {
         }
         for (id, fresh) in results { merge(id: id, fresh: fresh) }
         exportWidgetSnapshot()
+
+        let spendPeriod = preferences.apiSpendPeriod
+        let spendResults = await withTaskGroup(of: (ProviderID, APISpendSnapshot).self) { group in
+            for provider in apiSpendProviders {
+                guard preferences.isSurfaceEnabled(apiSurface(for: provider.id)) else { continue }
+                group.addTask { (provider.id, await provider.fetchSpend(period: spendPeriod)) }
+            }
+            var acc: [(ProviderID, APISpendSnapshot)] = []
+            for await pair in group { acc.append(pair) }
+            return acc
+        }
+        for (id, fresh) in spendResults { mergeSpend(id: id, fresh: fresh) }
     }
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
@@ -146,8 +193,28 @@ public final class UsageStore {
         if snapshots[id] != next { snapshots[id] = next }
     }
 
+    private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {
+        let next: APISpendSnapshot
+        if case .stale(let reason) = fresh.freshness,
+           fresh.amount == nil,
+           let prior = apiSpendSnapshots[id], prior.amount != nil {
+            next = prior.markedStale(reason)
+        } else {
+            next = fresh
+        }
+        if apiSpendSnapshots[id] != next { apiSpendSnapshots[id] = next }
+    }
+
     public func snapshot(for id: ProviderID) -> UsageSnapshot {
         snapshots[id] ?? .pending(for: id)
+    }
+
+    public func apiSpendSnapshot(for id: ProviderID) -> APISpendSnapshot {
+        apiSpendSnapshots[id] ?? .pending(
+            providerID: id,
+            displayName: apiSpendDisplayNames[id] ?? id.raw,
+            periodLabel: preferences.apiSpendPeriod.label
+        )
     }
 
     private func exportWidgetSnapshot(generatedAt: Date = .now) {
@@ -192,5 +259,13 @@ public final class UsageStore {
             severity: best.window.severity,
             needsAttention: needsAttention
         )
+    }
+
+    private func subscriptionSurface(for id: ProviderID) -> UsageSurface {
+        id == .claude ? .claudeSubscription : .codexSubscription
+    }
+
+    private func apiSurface(for id: ProviderID) -> UsageSurface {
+        id == .claude ? .anthropicAPI : .openAIAPI
     }
 }
