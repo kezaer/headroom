@@ -271,6 +271,9 @@ private struct VesselMark: View {
             let w = geo.size.width, h = geo.size.height
             let rim = max(1.3, w * 0.12)
             ZStack(alignment: .bottom) {
+                // Full-size base so the ZStack fills the frame; without it the ZStack shrinks
+                // to the liquid's height and `.frame` centers it — the "floating pill" bug.
+                Color.clear
                 Rectangle()
                     .fill(LinearGradient(
                         colors: [Color(red: 0.58, green: 1.00, blue: 0.78),
