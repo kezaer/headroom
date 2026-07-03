@@ -190,6 +190,10 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         usleep(800_000) // let the input box settle before typing
         _ = "/usage".withCString { write(master, $0, strlen($0)) }
         usleep(500_000) // gap so the slash-command autocomplete resolves before Enter
+        // Claude Code 2.1.200 can consume the first Enter to accept the `/usage`
+        // autocomplete row; the second Enter executes the accepted command.
+        _ = "\r".withCString { write(master, $0, strlen($0)) }
+        usleep(250_000)
         _ = "\r".withCString { write(master, $0, strlen($0)) }
         drain(master: master, maxSeconds: panel, quiet: 2.5, into: &buffer) // the panel
         teardown()
