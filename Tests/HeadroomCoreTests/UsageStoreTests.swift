@@ -67,6 +67,41 @@ struct UsageStoreTests {
         #expect(provider.fetchCount == 1)
     }
 
+    @Test func concurrentStartCoalescesInitialRefresh() async {
+        let provider = SlowCountingProvider(id: .claude)
+        let store = UsageStore(providers: [provider])
+
+        let firstStart = Task { await store.start() }
+        await provider.waitUntilFetchStarts()
+        let secondStart = Task { await store.start() }
+
+        await secondStart.value
+        #expect(provider.fetchCount == 1)
+
+        provider.releaseFetch()
+        await firstStart.value
+        #expect(provider.fetchCount == 1)
+    }
+
+    @Test func startExportsRefreshedWidgetSnapshotWithoutClobberingCacheFirst() async {
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 25, resetsAt: reset),
+                ])),
+            ],
+            widgetExporter: exporter
+        )
+
+        await store.start()
+
+        let exports = exporter.exports
+        #expect(exports.count == 1)
+        #expect(exports.first?.providers.first?.freshness == .live)
+        #expect(exports.first?.providers.first?.weeklyWindow?.percentRemaining == 75)
+    }
+
     @Test func menuBarSummaryPicksLowestLiveWithIdentity() async {
         let store = UsageStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [

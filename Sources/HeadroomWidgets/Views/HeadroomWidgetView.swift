@@ -9,7 +9,7 @@ struct HeadroomWidgetView: View {
         Group {
             switch entry.state {
             case .setupNeeded:
-                WidgetStatusView(title: "Setup Needed", message: "Open Headroom after signing with App Groups.")
+                WidgetStatusView(title: "Widget Data Unavailable", message: "Open Headroom to refresh the widget cache.")
             case .disabled:
                 WidgetStatusView(title: "Widgets Paused", message: "Enable widget data in Headroom Settings.")
             case .pending:

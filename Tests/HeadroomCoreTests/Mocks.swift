@@ -114,6 +114,80 @@ final class CountingProvider: UsageProvider, @unchecked Sendable {
     }
 }
 
+/// Provider double that blocks a fetch until the test releases it.
+final class SlowCountingProvider: UsageProvider, @unchecked Sendable {
+    let id: ProviderID
+    let displayName: String
+    private let lock = NSLock()
+    private var _count = 0
+    private var didStart = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var shouldRelease = false
+    var fetchCount: Int { lock.withLock { _count } }
+
+    init(id: ProviderID, displayName: String = "P") {
+        self.id = id
+        self.displayName = displayName
+    }
+
+    func waitUntilFetchStarts() async {
+        let alreadyStarted = lock.withLock { didStart }
+        if alreadyStarted { return }
+        await withCheckedContinuation { continuation in
+            var resumeImmediately = false
+            lock.withLock {
+                if didStart {
+                    resumeImmediately = true
+                } else {
+                    startContinuation = continuation
+                }
+            }
+            if resumeImmediately { continuation.resume() }
+        }
+    }
+
+    func releaseFetch() {
+        let continuation = lock.withLock {
+            shouldRelease = true
+            let continuation = releaseContinuation
+            releaseContinuation = nil
+            return continuation
+        }
+        continuation?.resume()
+    }
+
+    func fetchSnapshot() async -> UsageSnapshot {
+        let start = lock.withLock {
+            _count += 1
+            didStart = true
+            let continuation = startContinuation
+            startContinuation = nil
+            return continuation
+        }
+        start?.resume()
+
+        let released = lock.withLock { shouldRelease }
+        if !released {
+            await withCheckedContinuation { continuation in
+                var resumeImmediately = false
+                lock.withLock {
+                    if shouldRelease {
+                        resumeImmediately = true
+                    } else {
+                        releaseContinuation = continuation
+                    }
+                }
+                if resumeImmediately { continuation.resume() }
+            }
+        }
+
+        return .live(id, windows: [
+            UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: Date(timeIntervalSince1970: 3_000_000)),
+        ])
+    }
+}
+
 /// Widget exporter double for store tests.
 final class SpyWidgetExporter: WidgetSnapshotExporting, @unchecked Sendable {
     private let lock = NSLock()

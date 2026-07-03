@@ -82,9 +82,16 @@ enum Entry {
 /// (KTD9). No Dock icon in the shipped app — set `LSUIElement = YES` in the Xcode app
 /// target's Info.plist when finalizing the bundle (U1/KTD8).
 struct HeadroomApp: App {
-    @State private var store = AppComposition.store()
+    @State private var store: UsageStore
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    @MainActor
+    init() {
+        let store = AppComposition.store()
+        _store = State(initialValue: store)
+        AppDelegate.startUsageStore = { Task { await store.start() } }
+    }
 
     var body: some Scene {
         MenuBarExtra {
@@ -97,6 +104,7 @@ struct HeadroomApp: App {
                 summary: store.menuBarSummary,
                 showsPercentage: store.showMenuBarPercentage
             )
+            .task { await store.start() }
         }
         .menuBarExtraStyle(.window)
 
@@ -124,9 +132,13 @@ struct HeadroomApp: App {
 /// `LSUIElement` Info.plist). This also makes the Settings-window activation path
 /// identical in development and in the shipped bundle, so "does the window open and
 /// close properly" can be verified with `swift run Headroom`.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    static var startUsageStore: (() -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        Self.startUsageStore?()
     }
 }
 

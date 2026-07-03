@@ -4,7 +4,7 @@ public protocol WidgetSnapshotExporting: Sendable {
     func export(_ envelope: WidgetSnapshotEnvelope)
 }
 
-/// Writes widget data and asks the host app to reload WidgetKit timelines only after a
+/// Writes widget data and asks the host app to reload WidgetKit timelines after a
 /// successful cache write. The reload closure keeps WidgetKit out of HeadroomCore.
 public struct WidgetSnapshotExporter: WidgetSnapshotExporting {
     private let cache: WidgetSnapshotCache
@@ -17,8 +17,6 @@ public struct WidgetSnapshotExporter: WidgetSnapshotExporting {
 
     public func export(_ envelope: WidgetSnapshotEnvelope) {
         do {
-            let prior = cache.read().envelope
-            guard prior != envelope else { return }
             try cache.write(envelope)
             reloadTimelines()
         } catch {
