@@ -1,6 +1,6 @@
 # Deferred / Follow-up
 
-Non-blocking items. The app works end-to-end (63 tests pass; live Claude + Codex data
+Non-blocking items. The app works end-to-end (75 tests pass; live Claude + Codex data
 verified). The earlier OAuth/Keychain-token approach and its U9 spike are **obsolete** —
 Anthropic prohibits and blocks third-party subscription-OAuth use, so Claude now reads the
 official `claude` CLI's `/usage` panel instead.
@@ -29,7 +29,3 @@ official `claude` CLI's `/usage` panel instead.
 
 - App icon (`CFBundleIconFile`) — user to provide.
 - `MenuBarLabel` uses a fixed font size (menu bar height is OS-constrained).
-- Xcode signing with a stable Apple Development identity for persistent permission grants
-  and App Group-backed widgets (see README) — the ad-hoc `build-app.sh` bundle may
-  re-prompt or fail persistent sharing after rebuilds.
-- Manual widget-gallery / VoiceOver smoke on a signed local build.
