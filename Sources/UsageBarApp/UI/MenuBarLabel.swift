@@ -1,16 +1,16 @@
 import SwiftUI
 import UsageBarCore
 
-/// The always-visible menu bar content (R5): an icon plus the tightest live window's
-/// remaining percent. Self-contained — the number carries a provider indicator via
-/// the accessibility label and the accent-tinted glyph.
+/// The always-visible menu bar content (R5): the compact gauge icon, with the tightest
+/// live window's remaining percent optionally shown beside it.
 struct MenuBarLabel: View {
     let summary: MenuBarSummary
+    let showsPercentage: Bool
 
     var body: some View {
         HStack(spacing: 3) {
             Image(systemName: "gauge.with.dots.needle.bottom.50percent")
-            if !summary.isNeutral {
+            if showsPercentage, !summary.isNeutral {
                 Text(summary.text).font(.system(size: 12, weight: .semibold).monospacedDigit())
             }
         }

@@ -50,15 +50,25 @@ public struct CodexProvider: UsageProvider {
         }
         var windows: [UsageWindow] = []
         if let w = dto.rate_limit?.primary_window,
-           let win = UsageWindowBuilder.make(.fiveHour, utilization: w.utilizationValue, resetsAt: w.resets_at, resetsInSeconds: w.resets_in_seconds, now: now) {
+           let win = UsageWindowBuilder.make(.fiveHour, utilization: w.utilizationValue, resetsAt: w.resetAtValue, resetEpochSeconds: w.resetEpochValue, resetsInSeconds: w.resetSecondsValue, now: now) {
             windows.append(win)
         }
         if let w = dto.rate_limit?.secondary_window,
-           let win = UsageWindowBuilder.make(.weekly, utilization: w.utilizationValue, resetsAt: w.resets_at, resetsInSeconds: w.resets_in_seconds, now: now) {
+           let win = UsageWindowBuilder.make(.weekly, utilization: w.utilizationValue, resetsAt: w.resetAtValue, resetEpochSeconds: w.resetEpochValue, resetsInSeconds: w.resetSecondsValue, now: now) {
             windows.append(win)
         }
         for extra in dto.additional_rate_limits ?? [] {
-            if let win = UsageWindowBuilder.make(.other(extra.displayLabel), utilization: extra.utilizationValue, resetsAt: extra.resets_at, resetsInSeconds: extra.resets_in_seconds, now: now) {
+            let label = extra.displayLabel
+            if let w = extra.rate_limit?.primary_window,
+               let win = UsageWindowBuilder.make(.other("\(label) 5h"), utilization: w.utilizationValue, resetsAt: w.resetAtValue, resetEpochSeconds: w.resetEpochValue, resetsInSeconds: w.resetSecondsValue, now: now) {
+                windows.append(win)
+            }
+            if let w = extra.rate_limit?.secondary_window,
+               let win = UsageWindowBuilder.make(.other("\(label) weekly"), utilization: w.utilizationValue, resetsAt: w.resetAtValue, resetEpochSeconds: w.resetEpochValue, resetsInSeconds: w.resetSecondsValue, now: now) {
+                windows.append(win)
+            }
+            if extra.rate_limit == nil,
+               let win = UsageWindowBuilder.make(.other(label), utilization: extra.utilizationValue, resetsAt: extra.resetAtValue, resetEpochSeconds: extra.resetEpochValue, resetsInSeconds: extra.resetSecondsValue, now: now) {
                 windows.append(win)
             }
         }

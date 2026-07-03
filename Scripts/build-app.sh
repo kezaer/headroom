@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 APP="UsageBar.app"
 BIN=".build/${CONFIG}/UsageBar"
+RESOURCE_BUNDLE=".build/${CONFIG}/UsageBar_UsageBarApp.bundle"
 
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
@@ -14,7 +15,11 @@ swift build -c "${CONFIG}"
 echo "→ assembling ${APP}"
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS"
+mkdir -p "${APP}/Contents/Resources"
 cp "${BIN}" "${APP}/Contents/MacOS/UsageBar"
+if [[ -d "${RESOURCE_BUNDLE}" ]]; then
+  find "${RESOURCE_BUNDLE}" -maxdepth 1 -type f \( -name '*.svg' -o -name 'SOURCES.md' \) -exec cp {} "${APP}/Contents/Resources/" \;
+fi
 
 cat > "${APP}/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

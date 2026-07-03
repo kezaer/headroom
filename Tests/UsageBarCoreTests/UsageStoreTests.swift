@@ -84,4 +84,20 @@ struct UsageStoreTests {
         #expect(summary.detail == "Claude weekly")
         #expect(!summary.isNeutral)
     }
+
+    @Test func menuBarPercentageVisibilityPersistsThroughStore() {
+        let suite = "usagebar.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: preferences
+        )
+
+        #expect(!store.showMenuBarPercentage)
+        store.setShowMenuBarPercentage(true)
+        #expect(store.showMenuBarPercentage)
+        #expect(preferences.showMenuBarPercentage)
+    }
 }

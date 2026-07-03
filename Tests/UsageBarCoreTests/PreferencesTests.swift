@@ -31,4 +31,11 @@ struct PreferencesTests {
         prefs.pollIntervalMinutes = 0            // clamped to >= 1
         #expect(prefs.pollIntervalMinutes >= 1)
     }
+
+    @Test func menuBarPercentageDefaultsOffAndPersists() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(!prefs.showMenuBarPercentage)
+        prefs.showMenuBarPercentage = true
+        #expect(prefs.showMenuBarPercentage)
+    }
 }

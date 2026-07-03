@@ -11,6 +11,10 @@ enum Entry {
             runClaudeProbe()
             return
         }
+        if CommandLine.arguments.contains("--probe-codex") {
+            runCodexProbe()
+            return
+        }
         UsageBarApp.main()
     }
 
@@ -19,7 +23,7 @@ enum Entry {
         Task {
             let path = ClaudeUsageCLIProbe.resolveClaudePath() ?? "(not found)"
             print("claude path: \(path)")
-            switch await ClaudeUsageCLIProbe().capturePanel() {
+            switch await ClaudeUsageCLIProbe(workingDirectory: claudeWorkingDirectory()).capturePanel() {
             case .cliNotFound:
                 print("RESULT: CLI not found")
             case .failed:
@@ -39,6 +43,37 @@ enum Entry {
         }
         semaphore.wait()
     }
+
+    fileprivate static func claudeWorkingDirectory() -> String {
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension == "app" {
+            return bundleURL.deletingLastPathComponent().path
+        }
+        return FileManager.default.currentDirectoryPath
+    }
+
+    private static func runCodexProbe() {
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let snapshot = await CodexProvider(credentials: CredentialStore()).fetchSnapshot()
+            switch snapshot.freshness {
+            case .pending:
+                print("RESULT: pending")
+            case .live:
+                print("RESULT: live Codex snapshot, parsed \(snapshot.windows.count) window(s):")
+                if let plan = snapshot.planLabel {
+                    print("  plan: \(plan)")
+                }
+                for window in snapshot.windows {
+                    print("  • \(window.kind)  \(Int(window.utilization.rounded()))% used  →  \(window.resetsAt)  (remaining \(Int(window.percentRemaining.rounded()))%)")
+                }
+            case .stale(let reason):
+                print("RESULT: stale Codex snapshot: \(reason.message)")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
 }
 
 /// Menu bar app (U1). `MenuBarExtra(.window)` gives a custom Liquid Glass popover
@@ -46,15 +81,26 @@ enum Entry {
 /// target's Info.plist when finalizing the bundle (U1/KTD8).
 struct UsageBarApp: App {
     @State private var store = UsageStore(providers: AppComposition.providers())
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         MenuBarExtra {
-            PopoverView(store: store)
+            PopoverView(store: store) {
+                openWindow(id: "settings")
+            }
                 .task { await store.start() }
         } label: {
-            MenuBarLabel(summary: store.menuBarSummary)
+            MenuBarLabel(
+                summary: store.menuBarSummary,
+                showsPercentage: store.showMenuBarPercentage
+            )
         }
         .menuBarExtraStyle(.window)
+
+        Window("UsageBar Settings", id: "settings") {
+            SettingsView(store: store)
+        }
+        .windowResizability(.contentSize)
     }
 }
 
@@ -63,7 +109,7 @@ struct UsageBarApp: App {
 enum AppComposition {
     static func providers() -> [any UsageProvider] {
         return [
-            ClaudeProvider(),                              // reads Claude Code's /usage panel
+            ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory())),
             CodexProvider(credentials: CredentialStore()), // reads ~/.codex/auth.json + wham/usage
         ]
     }

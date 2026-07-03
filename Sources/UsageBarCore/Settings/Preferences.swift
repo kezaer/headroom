@@ -9,6 +9,7 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
 
     private enum Key {
         static let interval = "pollIntervalMinutes"
+        static let showMenuBarPercentage = "showMenuBarPercentage"
         static func renewal(_ id: ProviderID) -> String { "renewalDate.\(id.raw)" }
     }
 
@@ -20,6 +21,11 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
             return v > 0 ? v : Self.defaultIntervalMinutes
         }
         nonmutating set { defaults.set(max(1, newValue), forKey: Key.interval) }
+    }
+
+    public var showMenuBarPercentage: Bool {
+        get { defaults.bool(forKey: Key.showMenuBarPercentage) }
+        nonmutating set { defaults.set(newValue, forKey: Key.showMenuBarPercentage) }
     }
 
     public func renewalDate(for id: ProviderID) -> Date? {

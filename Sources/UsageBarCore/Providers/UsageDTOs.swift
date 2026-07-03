@@ -23,23 +23,79 @@ struct CodexWindowDTO: Decodable {
     let used_percent: Double?
     let usage_percent: Double?
     let utilization: Double?
+    let reset_at: String?
+    let resetAtEpoch: Double?
     let resets_at: String?
+    let reset_after_seconds: Double?
     let resets_in_seconds: Double?
 
     var utilizationValue: Double? { used_percent ?? usage_percent ?? utilization }
+    var resetAtValue: String? { resets_at ?? reset_at }
+    var resetEpochValue: Double? { resetAtEpoch }
+    var resetSecondsValue: Double? { resets_in_seconds ?? reset_after_seconds }
+
+    enum CodingKeys: String, CodingKey {
+        case used_percent, usage_percent, utilization
+        case reset_at, resets_at, reset_after_seconds, resets_in_seconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        used_percent = c.flexibleDouble(.used_percent)
+        usage_percent = c.flexibleDouble(.usage_percent)
+        utilization = c.flexibleDouble(.utilization)
+        resets_at = c.flexibleString(.resets_at)
+        reset_at = c.flexibleString(.reset_at)
+        resetAtEpoch = c.flexibleDouble(.reset_at)
+        reset_after_seconds = c.flexibleDouble(.reset_after_seconds)
+        resets_in_seconds = c.flexibleDouble(.resets_in_seconds)
+    }
 }
 
 struct CodexNamedWindowDTO: Decodable {
     let name: String?
     let label: String?
+    let limit_name: String?
+    let metered_feature: String?
     let used_percent: Double?
     let usage_percent: Double?
     let utilization: Double?
+    let reset_at: String?
+    let resetAtEpoch: Double?
     let resets_at: String?
+    let reset_after_seconds: Double?
     let resets_in_seconds: Double?
+    let rate_limit: CodexRateLimitDTO?
 
-    var displayLabel: String { name ?? label ?? "other" }
+    var displayLabel: String { name ?? label ?? limit_name ?? metered_feature ?? "other" }
     var utilizationValue: Double? { used_percent ?? usage_percent ?? utilization }
+    var resetAtValue: String? { resets_at ?? reset_at }
+    var resetEpochValue: Double? { resetAtEpoch }
+    var resetSecondsValue: Double? { resets_in_seconds ?? reset_after_seconds }
+
+    enum CodingKeys: String, CodingKey {
+        case name, label, limit_name, metered_feature
+        case used_percent, usage_percent, utilization
+        case reset_at, resets_at, reset_after_seconds, resets_in_seconds
+        case rate_limit
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = c.flexibleString(.name)
+        label = c.flexibleString(.label)
+        limit_name = c.flexibleString(.limit_name)
+        metered_feature = c.flexibleString(.metered_feature)
+        used_percent = c.flexibleDouble(.used_percent)
+        usage_percent = c.flexibleDouble(.usage_percent)
+        utilization = c.flexibleDouble(.utilization)
+        resets_at = c.flexibleString(.resets_at)
+        reset_at = c.flexibleString(.reset_at)
+        resetAtEpoch = c.flexibleDouble(.reset_at)
+        reset_after_seconds = c.flexibleDouble(.reset_after_seconds)
+        resets_in_seconds = c.flexibleDouble(.resets_in_seconds)
+        rate_limit = try? c.decode(CodexRateLimitDTO.self, forKey: .rate_limit)
+    }
 }
 
 // MARK: - Shared window construction
@@ -52,6 +108,7 @@ enum UsageWindowBuilder {
         _ kind: WindowKind,
         utilization: Double?,
         resetsAt: String?,
+        resetEpochSeconds: Double? = nil,
         resetsInSeconds: Double?,
         now: () -> Date
     ) -> UsageWindow? {
@@ -59,6 +116,8 @@ enum UsageWindowBuilder {
         let reset: Date
         if let d = DateParsing.iso8601(resetsAt) {
             reset = d
+        } else if let epoch = resetEpochSeconds {
+            reset = Date(timeIntervalSince1970: epoch)
         } else if let seconds = resetsInSeconds {
             reset = now().addingTimeInterval(seconds)
         } else {
@@ -71,5 +130,19 @@ enum UsageWindowBuilder {
     static func genericFailure(for status: Int) -> FailureReason {
         status == 429 ? .transient("Rate limited — will retry")
                       : .transient("Service error (\(status))")
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func flexibleDouble(_ key: Key) -> Double? {
+        if let value = try? decode(Double.self, forKey: key) { return value }
+        if let value = try? decode(Int.self, forKey: key) { return Double(value) }
+        if let value = try? decode(String.self, forKey: key) { return Double(value) }
+        return nil
+    }
+
+    func flexibleString(_ key: Key) -> String? {
+        if let value = try? decode(String.self, forKey: key) { return value }
+        return nil
     }
 }
