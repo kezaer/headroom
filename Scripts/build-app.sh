@@ -10,6 +10,38 @@ BIN=".build/${CONFIG}/Headroom"
 WIDGET_BIN=".build/${CONFIG}/HeadroomWidgets"
 RESOURCE_BUNDLE=".build/${CONFIG}/Headroom_HeadroomApp.bundle"
 WIDGET_APPEX="${APP}/Contents/PlugIns/HeadroomWidgets.appex"
+HEADROOM_CODESIGN_IDENTITY="${HEADROOM_CODESIGN_IDENTITY:-}"
+
+select_codesign_identity() {
+  if [[ -n "${HEADROOM_CODESIGN_IDENTITY}" ]]; then
+    printf '%s\n' "${HEADROOM_CODESIGN_IDENTITY}"
+    return
+  fi
+
+  local identities
+  identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  local identity
+  identity="$(printf '%s\n' "${identities}" | sed -n 's/^.*"\(Apple Development:[^"]*\)".*$/\1/p' | head -n 1)"
+  if [[ -z "${identity}" ]]; then
+    identity="$(printf '%s\n' "${identities}" | sed -n 's/^.*"\(Developer ID Application:[^"]*\)".*$/\1/p' | head -n 1)"
+  fi
+
+  printf '%s\n' "${identity:--}"
+}
+
+sign_bundle() {
+  local entitlements="$1"
+  local bundle="$2"
+
+  if codesign --force --sign "${CODESIGN_IDENTITY}" --entitlements "${entitlements}" "${bundle}"; then
+    return
+  fi
+
+  echo "  codesign failed for ${bundle}" >&2
+  return 1
+}
+
+CODESIGN_IDENTITY="$(select_codesign_identity)"
 
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
@@ -68,10 +100,13 @@ cat > "${WIDGET_APPEX}/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Ad-hoc sign so it launches locally. For persistent Keychain grants across rebuilds,
-# re-sign in Xcode with a stable Apple Development identity (see README).
-codesign --force --sign - --entitlements Sources/HeadroomWidgets/HeadroomWidgets.entitlements "${WIDGET_APPEX}" >/dev/null 2>&1 || echo "  (widget codesign skipped)"
-codesign --force --sign - --entitlements Sources/HeadroomApp/HeadroomApp.entitlements "${APP}" >/dev/null 2>&1 || echo "  (codesign skipped)"
+if [[ "${CODESIGN_IDENTITY}" == "-" ]]; then
+  echo "→ codesign ad-hoc (set HEADROOM_CODESIGN_IDENTITY to use an Apple certificate)"
+else
+  echo "→ codesign with ${CODESIGN_IDENTITY}"
+fi
+sign_bundle Sources/HeadroomWidgets/HeadroomWidgets.entitlements "${WIDGET_APPEX}"
+sign_bundle Sources/HeadroomApp/HeadroomApp.entitlements "${APP}"
 
 echo "✓ Built ${APP}"
 echo "  Launch:  open ${APP}    (look for the gauge icon in the menu bar)"

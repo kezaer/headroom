@@ -73,18 +73,27 @@ setup state rather than reading provider credentials directly.
 
 ## Finalizing as a distributable app (optional)
 
-`./Scripts/build-app.sh` produces an ad-hoc-signed `Headroom.app` with the widget
-extension embedded at `Contents/PlugIns/HeadroomWidgets.appex`. For a persistent build
-you rebuild often, sign with your free **Apple Development** identity — a stable
-signature keeps macOS permission grants and App Group sharing from re-prompting or
-failing after each rebuild. Leave App Sandbox **off** (needed to spawn `claude` and read
-`~/.codex/auth.json`). Notarization isn't needed for a locally built/run app. Provide an
-app icon via `CFBundleIconFile` when you have one.
+`./Scripts/build-app.sh` embeds the widget extension at
+`Contents/PlugIns/HeadroomWidgets.appex` and signs both the app and extension with the
+first local **Apple Development** identity it finds. If no Apple signing identity is
+installed, it falls back to an ad-hoc signature so the app can still launch locally.
+
+To use a specific certificate:
+
+```bash
+security find-identity -v -p codesigning
+HEADROOM_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./Scripts/build-app.sh debug
+```
+
+A stable Apple Development signature keeps macOS permission grants and App Group sharing
+from re-prompting or failing after each rebuild. Leave App Sandbox **off** (needed to
+spawn `claude` and read `~/.codex/auth.json`). Notarization isn't needed for a locally
+built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
 
 ## Status
 
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
 real account and from a bare launch environment), Codex via its endpoint, manual renewal
 dates, launch-at-login, the Tahoe popover, widget cache export, and the bundled widget
-extension. 63 tests pass. Remaining polish is stable Xcode/Apple Development signing, an
-app icon, and visual/VoiceOver smoke on the running app and widgets.
+extension. 64 tests pass. Remaining polish is installing a local Apple Development
+certificate, an app icon, and visual/VoiceOver smoke on the running app and widgets.
