@@ -177,3 +177,139 @@ public struct UsageSnapshot: Sendable, Equatable {
         )
     }
 }
+
+/// Which usage surface a user can opt into. This static catalog keeps Settings able
+/// to show disabled surfaces, while polling still fetches only enabled providers.
+public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
+    case claudeSubscription
+    case codexSubscription
+    case anthropicAPI
+    case openAIAPI
+
+    public var providerID: ProviderID {
+        switch self {
+        case .claudeSubscription, .anthropicAPI: return .claude
+        case .codexSubscription, .openAIAPI: return .codex
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .claudeSubscription: return "Claude subscription"
+        case .codexSubscription: return "Codex subscription"
+        case .anthropicAPI: return "Anthropic API spend"
+        case .openAIAPI: return "OpenAI API spend"
+        }
+    }
+
+    public var isSubscription: Bool {
+        switch self {
+        case .claudeSubscription, .codexSubscription: return true
+        case .anthropicAPI, .openAIAPI: return false
+        }
+    }
+}
+
+/// User-selectable period for API cost reports. The provider converts this into the
+/// endpoint's query shape at fetch time so later periods do not change UI state.
+public enum APISpendPeriod: String, CaseIterable, Sendable, Codable, Equatable {
+    case currentMonth
+    case rolling30Days
+
+    public var label: String {
+        switch self {
+        case .currentMonth: return "Current month"
+        case .rolling30Days: return "Last 30 days"
+        }
+    }
+
+    public func range(now: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> APISpendRange {
+        var calendar = calendar
+        calendar.timeZone = .current
+        switch self {
+        case .currentMonth:
+            let components = calendar.dateComponents([.year, .month], from: now)
+            let start = calendar.date(from: components) ?? now
+            return APISpendRange(start: start, end: now, label: label)
+        case .rolling30Days:
+            return APISpendRange(start: now.addingTimeInterval(-30 * 24 * 60 * 60), end: now, label: label)
+        }
+    }
+}
+
+public struct APISpendRange: Sendable, Equatable {
+    public let start: Date
+    public let end: Date
+    public let label: String
+
+    public init(start: Date, end: Date, label: String) {
+        self.start = start
+        self.end = end
+        self.label = label
+    }
+}
+
+/// Money-based API spend for one provider over a selected reporting period.
+public struct APISpendSnapshot: Sendable, Equatable {
+    public let providerID: ProviderID
+    public let displayName: String
+    public let amount: Double?
+    public let currency: String?
+    public let periodLabel: String
+    public let capturedAt: Date?
+    public let freshness: Freshness
+
+    public init(
+        providerID: ProviderID,
+        displayName: String,
+        amount: Double?,
+        currency: String?,
+        periodLabel: String,
+        capturedAt: Date?,
+        freshness: Freshness
+    ) {
+        self.providerID = providerID
+        self.displayName = displayName
+        self.amount = amount
+        self.currency = currency
+        self.periodLabel = periodLabel
+        self.capturedAt = capturedAt
+        self.freshness = freshness
+    }
+
+    public static func pending(providerID: ProviderID, displayName: String, periodLabel: String) -> APISpendSnapshot {
+        APISpendSnapshot(
+            providerID: providerID,
+            displayName: displayName,
+            amount: nil,
+            currency: nil,
+            periodLabel: periodLabel,
+            capturedAt: nil,
+            freshness: .pending
+        )
+    }
+
+    public static func stale(providerID: ProviderID, displayName: String, periodLabel: String, reason: FailureReason) -> APISpendSnapshot {
+        APISpendSnapshot(
+            providerID: providerID,
+            displayName: displayName,
+            amount: nil,
+            currency: nil,
+            periodLabel: periodLabel,
+            capturedAt: nil,
+            freshness: .stale(reason)
+        )
+    }
+
+    public func markedStale(_ reason: FailureReason) -> APISpendSnapshot {
+        APISpendSnapshot(
+            providerID: providerID,
+            displayName: displayName,
+            amount: amount,
+            currency: currency,
+            periodLabel: periodLabel,
+            capturedAt: capturedAt,
+            freshness: .stale(reason)
+        )
+    }
+}

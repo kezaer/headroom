@@ -2,8 +2,9 @@
 
 A macOS menu bar app that shows how much of your AI-subscription usage remains — the
 5-hour and weekly windows, when each resets, and a manually-entered monthly renewal
-date — for **Anthropic Claude** and **ChatGPT/Codex**, side by side. Built to add more
-providers later behind one abstraction.
+date — for **Anthropic Claude** and **ChatGPT/Codex**, side by side. It can also show
+optional API dollar spend in a separate section for users who use metered OpenAI or
+Anthropic APIs.
 
 ## How it gets the data (and why this way)
 
@@ -17,24 +18,31 @@ providers later behind one abstraction.
   official reset windows.
 - **Codex/ChatGPT** — reads `~/.codex/auth.json` and calls the `wham/usage` endpoint
   (the same data Codex's `/status` shows).
+- **API spend** — optional and off by default. When enabled in Settings, Headroom stores
+  provider admin/reporting keys in the macOS Keychain and reads official cost-report
+  endpoints for the selected period: OpenAI organization costs and Anthropic organization
+  cost reports. These keys are separate from CLI subscription login, and Headroom never
+  uses Claude subscription OAuth credentials for API spend.
 
 ## Build & test
 
 ```bash
 swift build          # builds HeadroomCore (logic) + Headroom (app)
-swift test           # 49 tests
+swift test           # 59 tests
 ./Scripts/build-app.sh   # produces Headroom.app (menu bar / LSUIElement), then: open Headroom.app
 ```
 
 Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe), and the `claude` CLI installed and
-logged in. Diagnostic: `swift run Headroom --probe-claude` prints the live parsed windows
-so you can confirm the Claude path works on your machine.
+logged in. Codex subscription usage requires `~/.codex/auth.json`. API spend rows require
+the relevant OpenAI/Anthropic admin keys entered in Settings. Diagnostic:
+`swift run Headroom --probe-claude` prints the live parsed windows so you can confirm the
+Claude path works on your machine.
 
 ## Structure
 
 - `Sources/HeadroomCore` — testable logic: domain model, the Claude `/usage` PTY probe
-  (`ClaudeUsageCLIProbe`) + parser (`ClaudeUsageParser`), the Codex provider, the polling
-  engine/`@Observable` store, and preferences.
+  (`ClaudeUsageCLIProbe`) + parser (`ClaudeUsageParser`), the Codex provider, optional API
+  spend providers, the polling engine/`@Observable` store, credentials, and preferences.
 - `Sources/HeadroomApp` — the SwiftUI `MenuBarExtra` shell and the Tahoe / Liquid Glass
   popover, cards, settings, and menu bar label.
 
@@ -64,6 +72,7 @@ built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
 ## Status
 
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
-real account and from a bare launch environment), Codex via its endpoint, manual renewal
-dates, launch-at-login, and the Tahoe popover. 49 tests pass. Remaining polish is the
-Xcode signing above, an app icon, and visual/VoiceOver smoke on the running app.
+real account and from a bare launch environment), Codex via its endpoint, optional
+OpenAI/Anthropic API spend rows, manual renewal dates, launch-at-login, and the Tahoe
+popover. 59 tests pass. Remaining polish is the Xcode signing above, an app icon, and
+visual/VoiceOver smoke on the running app.

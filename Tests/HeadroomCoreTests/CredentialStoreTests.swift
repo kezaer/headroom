@@ -43,4 +43,34 @@ struct CredentialStoreTests {
         #expect(!out.contains("sk-ant-sid01-abcDEF1234567890abcDEF1234567890xyz"))
         #expect(out.contains("‹redacted›"))
     }
+
+    @Test func apiKeysRoundTripThroughStore() async {
+        let apiKeys = MockAPIKeyStore()
+        let store = CredentialStore(codexReader: MockCodexReader(credential: nil), apiKeyStore: apiKeys)
+
+        if case .failure(let reason) = await store.saveAPIKey(" sk-test ", for: .openAI) {
+            Issue.record("save failed: \(reason.message)")
+        }
+        #expect(await store.apiKey(for: .openAI) == .success("sk-test"))
+        if case .failure(let reason) = await store.deleteAPIKey(for: .openAI) {
+            Issue.record("delete failed: \(reason.message)")
+        }
+
+        guard case .failure(let reason) = await store.apiKey(for: .openAI) else {
+            Issue.record("expected missing API key")
+            return
+        }
+        #expect(reason.isPermanent)
+    }
+
+    @Test func apiKeyStoreErrorsAreRedacted() async {
+        let apiKeys = MockAPIKeyStore()
+        apiKeys.shouldFail = true
+        let store = CredentialStore(codexReader: MockCodexReader(credential: nil), apiKeyStore: apiKeys)
+        guard case .failure(let reason) = await store.apiKey(for: .anthropic) else {
+            Issue.record("expected failure")
+            return
+        }
+        #expect(!reason.message.contains("sk-"))
+    }
 }
