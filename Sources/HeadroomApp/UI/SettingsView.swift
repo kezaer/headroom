@@ -48,7 +48,7 @@ struct SettingsView: View {
                 .onChange(of: menuBarFillSource) { _, newValue in
                     store.setMenuBarFillSource(newValue)
                 }
-                Text("Drains with the chosen provider's weekly usage; None keeps it static.")
+                Text("Drains with the chosen provider's weekly usage; None keeps the level static.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

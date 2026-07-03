@@ -2,11 +2,11 @@ import SwiftUI
 import HeadroomCore
 
 /// The always-visible menu bar content (R5, UI-03): the compact vessel glyph, with the
-/// tightest live window's remaining percent optionally shown beside it. The glyph is
-/// tinted by *severity* (healthy → amber → red), not by brand color, so the menu bar
-/// means "how close am I to running out" at a glance; a small warning dot appears when a
-/// provider needs re-auth, so a dead provider isn't silently invisible. Static only — no
-/// pulsing (user's standing rule).
+/// weekly remaining percent optionally shown beside it. The glyph is tinted by weekly
+/// *severity* (healthy → amber → red), not by brand color, so the menu bar means "how
+/// close is my weekly allotment to running out" at a glance; a small warning dot appears
+/// when a provider needs re-auth, so a dead provider isn't silently invisible. Static
+/// only — no pulsing (user's standing rule).
 struct MenuBarLabel: View {
     let summary: MenuBarSummary
     let showsPercentage: Bool

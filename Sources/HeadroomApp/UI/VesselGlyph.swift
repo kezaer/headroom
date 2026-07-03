@@ -8,7 +8,7 @@ import AppKit
 /// `MenuBarExtra` labels only reliably rasterize `Text`/`Image` primitives; a custom
 /// `Shape`/`GeometryReader` view renders blank in the menu bar (that's why the item was
 /// invisible). So the glyph is drawn into a **template `NSImage`** and shown via
-/// `Image(nsImage:)`. Being a template, it inherits the severity tint from the
+/// `Image(nsImage:)`. Being a template, it inherits the weekly severity tint from the
 /// surrounding `foregroundStyle` (healthy → amber → red) exactly like an SF Symbol.
 /// Images are cached per whole-percent fill level so live updates don't re-rasterize on
 /// every redraw. Static — no motion (user's standing rule).

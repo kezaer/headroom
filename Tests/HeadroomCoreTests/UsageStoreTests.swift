@@ -102,30 +102,50 @@ struct UsageStoreTests {
         #expect(exports.first?.providers.first?.weeklyWindow?.percentRemaining == 75)
     }
 
-    @Test func menuBarSummaryPicksLowestLiveWithIdentity() async {
+    @Test func menuBarSummaryDefaultsToLowestWeeklyWithIdentity() async {
         let store = UsageStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
-                UsageWindow(kind: .fiveHour, utilization: 42.5, resetsAt: reset),   // 57.5% left
-                UsageWindow(kind: .weekly, utilization: 70, resetsAt: reset),       // 30% left  <- lowest
+                UsageWindow(kind: .fiveHour, utilization: 95, resetsAt: reset),     // ignored: 5h
+                UsageWindow(kind: .weekly, utilization: 70, resetsAt: reset),       // 30% left
             ])),
             StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
-                UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset),     // 90% left
+                UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset),     // ignored: 5h
+                UsageWindow(kind: .weekly, utilization: 80, resetsAt: reset),       // 20% left <- lowest weekly
             ])),
         ])
         await store.refreshAll()
         let summary = store.menuBarSummary
-        #expect(summary.text == "30%")
-        #expect(summary.providerID == .claude)
-        #expect(summary.detail == "Claude weekly")
+        #expect(summary.text == "20%")
+        #expect(summary.providerID == .codex)
+        #expect(summary.detail == "Codex weekly")
         #expect(!summary.isNeutral)
-        #expect(summary.severity == .low)         // 30% left → amber, not healthy
+        #expect(summary.severity == .low)         // 20% left -> amber, not healthy
         #expect(!summary.needsAttention)
     }
 
-    @Test func menuBarSummaryCarriesSeverityOfTightestWindow() async {
+    @Test func menuBarSummaryTracksSelectedProviderWeekly() async {
+        let store = makeStore(source: .claude, providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 95, resetsAt: reset),     // ignored: 5h
+                UsageWindow(kind: .weekly, utilization: 40, resetsAt: reset),       // 60% left
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 90, resetsAt: reset),       // ignored: source is Claude
+            ])),
+        ])
+        await store.refreshAll()
+        let summary = store.menuBarSummary
+        #expect(summary.text == "60%")
+        #expect(summary.providerID == .claude)
+        #expect(summary.detail == "Claude weekly")
+        #expect(summary.severity == .healthy)
+    }
+
+    @Test func menuBarSummaryCarriesSeverityOfWeeklyWindow() async {
         let store = UsageStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
-                UsageWindow(kind: .fiveHour, utilization: 95, resetsAt: reset),   // 5% left → critical
+                UsageWindow(kind: .fiveHour, utilization: 95, resetsAt: reset),   // ignored: 5h
+                UsageWindow(kind: .weekly, utilization: 88, resetsAt: reset),     // 12% left -> critical
             ])),
         ])
         await store.refreshAll()

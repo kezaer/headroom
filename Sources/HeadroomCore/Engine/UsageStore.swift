@@ -136,9 +136,9 @@ public final class UsageStore {
     /// falls back to a static decorative fill.
     public var menuBarFill: Double? {
         guard let id = menuBarFillSource.providerID,
-              let weekly = snapshots[id]?.windows.first(where: { $0.kind == .weekly })
+              let weekly = weeklyWindow(for: id)
         else { return nil }
-        return weekly.percentRemaining / 100
+        return weekly.window.percentRemaining / 100
     }
 
     public var widgetsEnabled: Bool { preferences.widgetsEnabled }
@@ -252,8 +252,11 @@ public final class UsageStore {
         widgetExporter.export(envelope)
     }
 
-    /// The menu bar summary: the lowest `percentRemaining` among all live windows,
-    /// tagged with its provider+window identity. Neutral until any live data exists.
+    /// The menu bar summary: weekly allotment remaining, tagged with provider identity.
+    /// If Settings chooses a fill source, the number and severity follow that provider's
+    /// weekly window so the text, vessel fill, and color all mean the same thing. If no
+    /// source is chosen, the text/tint use the lowest enabled weekly balance while the
+    /// vessel level stays decorative. Neutral until weekly data exists.
     public var menuBarSummary: MenuBarSummary {
         // A provider stuck in a permanent failure (needs the user to re-auth) should
         // flag the glyph even when there is no live number to show yet.
@@ -261,26 +264,34 @@ public final class UsageStore {
             if case .stale(let reason) = snapshots[id]?.freshness { return reason.isPermanent }
             return false
         }
-        var best: (id: ProviderID, window: UsageWindow)?
-        for id in providerOrder {
-            guard let snap = snapshots[id], snap.freshness == .live else { continue }
-            for window in snap.windows {
-                if best == nil || window.percentRemaining < best!.window.percentRemaining {
-                    best = (id, window)
-                }
-            }
-        }
+        let best = menuBarWeeklyWindow()
         guard let best else { return MenuBarSummary.neutral.withAttention(needsAttention) }
         let pct = Int(best.window.percentRemaining.rounded())
         let name = displayNames[best.id] ?? best.id.raw
         return MenuBarSummary(
             text: "\(pct)%",
             providerID: best.id,
-            detail: "\(name) \(best.window.kind.shortLabel)",
+            detail: "\(name) weekly",
             isNeutral: false,
             severity: best.window.severity,
             needsAttention: needsAttention
         )
+    }
+
+    private func menuBarWeeklyWindow() -> (id: ProviderID, window: UsageWindow)? {
+        if let id = menuBarFillSource.providerID {
+            return weeklyWindow(for: id)
+        }
+        return providerOrder.compactMap { weeklyWindow(for: $0) }
+            .min { $0.window.percentRemaining < $1.window.percentRemaining }
+    }
+
+    private func weeklyWindow(for id: ProviderID) -> (id: ProviderID, window: UsageWindow)? {
+        guard providerOrder.contains(id),
+              snapshots[id]?.freshness != .pending,
+              let window = snapshots[id]?.windows.first(where: { $0.kind == .weekly })
+        else { return nil }
+        return (id, window)
     }
 
     private func subscriptionSurface(for id: ProviderID) -> UsageSurface {
