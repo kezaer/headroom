@@ -20,7 +20,8 @@ let package = Package(
         .target(name: "UsageBarCore"),
         .executableTarget(
             name: "UsageBarApp",
-            dependencies: ["UsageBarCore"]
+            dependencies: ["UsageBarCore"],
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "UsageBarCoreTests",

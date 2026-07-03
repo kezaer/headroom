@@ -14,8 +14,8 @@ struct CodexProviderTests {
     @Test func decodesLiveResponse() async {
         let json = """
         { "rate_limit": {
-            "primary_window": {"used_percent": 30, "resets_at": "2026-07-02T12:00:00Z"},
-            "secondary_window": {"used_percent": 55, "resets_at": "2026-07-08T00:00:00Z"} },
+            "primary_window": {"used_percent": 30, "reset_at": 1783023708},
+            "secondary_window": {"used_percent": 55, "reset_at": "2026-07-08T00:00:00Z"} },
           "plan_type": "pro" }
         """
         let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
@@ -29,7 +29,7 @@ struct CodexProviderTests {
         // A new plan_type value (the CodexBar #709 break) passes through as a string
         // and does not fail the snapshot.
         let json = """
-        { "rate_limit": { "primary_window": {"used_percent": 5, "resets_at": "2026-07-02T12:00:00Z"} },
+        { "rate_limit": { "primary_window": {"used_percent": 5, "reset_at": "2026-07-02T12:00:00Z"} },
           "plan_type": "prolite" }
         """
         let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
@@ -39,12 +39,26 @@ struct CodexProviderTests {
 
     @Test func additionalRateLimitsSurfaceAsOther() async {
         let json = """
-        { "rate_limit": { "primary_window": {"used_percent": 5, "resets_at": "2026-07-02T12:00:00Z"} },
-          "additional_rate_limits": [ {"name": "codex-spark", "used_percent": 12, "resets_at": "2026-07-02T18:00:00Z"} ],
+        { "rate_limit": { "primary_window": {"used_percent": 5, "reset_at": "2026-07-02T12:00:00Z"} },
+          "additional_rate_limits": [ {"limit_name": "codex-spark", "rate_limit": {
+              "primary_window": {"used_percent": 12, "reset_after_seconds": 3600},
+              "secondary_window": {"used_percent": 22, "reset_at": 1783023708}
+          }} ],
           "plan_type": "pro" }
         """
         let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
-        #expect(snap.windows.contains { $0.kind == .other("codex-spark") })
+        #expect(snap.windows.contains { $0.kind == .other("codex-spark 5h") })
+        #expect(snap.windows.contains { $0.kind == .other("codex-spark weekly") })
+    }
+
+    @Test func legacyResetFieldNamesStillDecode() async {
+        let json = """
+        { "rate_limit": { "primary_window": {"used_percent": 5, "resets_at": "2026-07-02T12:00:00Z"} },
+          "additional_rate_limits": [ {"label": "legacy", "utilization": 12, "resets_in_seconds": 3600} ] }
+        """
+        let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
+        #expect(snap.freshness == .live)
+        #expect(snap.windows.contains { $0.kind == .other("legacy") })
     }
 
     @Test func missingTokenIsNotLoggedIn() async {

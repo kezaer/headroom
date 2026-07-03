@@ -62,6 +62,15 @@ struct ClaudeUsageParserTests {
         let text = "Until July 7, you can use up to 50% of your plan's weekly usage limit on Fable 5."
         #expect(ClaudeUsageParser.parse(text).isEmpty)
     }
+
+    @Test func normalizesResetLabelRenderArtifacts() {
+        let text = """
+        Current week (all models)
+        █████ 5% used
+        Resets Jul 9  t 10am (America/Los_Angeles)
+        """
+        #expect(ClaudeUsageParser.parse(text).first?.resetLabel == "Resets Jul 9 at 10am")
+    }
 }
 
 struct ClaudeProviderTests {
@@ -96,5 +105,11 @@ struct ClaudeProviderTests {
         let snap = await provider(.panel("Please run /login to log in to Claude")).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
         #expect(reason.isPermanent)    // needsReauth
+    }
+
+    @Test func trustPromptAsksUserToOpenClaude() async {
+        let snap = await provider(.panel("Quick safety check: Is this a project you created or one you trust?")).fetchSnapshot()
+        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
+        #expect(reason == .needsReauth("Open Claude and trust the launch folder"))
     }
 }

@@ -19,12 +19,6 @@ official `claude` CLI's `/usage` panel instead.
   mock source (fast, deterministic). The real `ClaudeUsageCLIProbe` is verified manually
   via `--probe-claude`; a machine-dependent integration test would need the CLI logged in.
 
-## Codex
-
-- **DTO field names need a live check.** `CodexProvider` tolerates several percent field
-  names (`used_percent`/`usage_percent`/`utilization`) for the undocumented `wham/usage`
-  endpoint; confirm the real field against a live capture and tighten.
-
 ## Reliability (carried from earlier review)
 
 - **No backoff on repeated failures.** Both providers retry every cycle at the fixed

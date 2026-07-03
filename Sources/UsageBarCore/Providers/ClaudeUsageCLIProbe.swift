@@ -29,15 +29,18 @@ public enum ClaudePanelResult: Sendable, Equatable {
 /// from Finder with a bare environment.
 public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     public let claudePath: String?
+    public let workingDirectory: String
     public let bootTimeout: TimeInterval
     public let panelTimeout: TimeInterval
 
     public init(
         claudePath: String? = ClaudeUsageCLIProbe.resolveClaudePath(),
+        workingDirectory: String = FileManager.default.currentDirectoryPath,
         bootTimeout: TimeInterval = 30,
         panelTimeout: TimeInterval = 20
     ) {
         self.claudePath = claudePath
+        self.workingDirectory = workingDirectory
         self.bootTimeout = bootTimeout
         self.panelTimeout = panelTimeout
     }
@@ -50,7 +53,10 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         return await withCheckedContinuation { continuation in
             Thread.detachNewThread {
                 let raw = Self.runBlocking(
-                    claudePath: claudePath, boot: bootTimeout, panel: panelTimeout
+                    claudePath: claudePath,
+                    workingDirectory: workingDirectory,
+                    boot: bootTimeout,
+                    panel: panelTimeout
                 )
                 guard let raw, !raw.isEmpty else {
                     continuation.resume(returning: .failed); return
@@ -109,7 +115,12 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
     // MARK: pty mechanics
 
-    private static func runBlocking(claudePath: String, boot: TimeInterval, panel: TimeInterval) -> String? {
+    private static func runBlocking(
+        claudePath: String,
+        workingDirectory: String,
+        boot: TimeInterval,
+        panel: TimeInterval
+    ) -> String? {
         var master: Int32 = -1
         var slave: Int32 = -1
         var win = winsize(ws_row: 45, ws_col: 140, ws_xpixel: 0, ws_ypixel: 0)
@@ -117,6 +128,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         var fileActions = posix_spawn_file_actions_t(bitPattern: 0)
         posix_spawn_file_actions_init(&fileActions)
+        posix_spawn_file_actions_addchdir(&fileActions, workingDirectory)
         posix_spawn_file_actions_adddup2(&fileActions, slave, 0)
         posix_spawn_file_actions_adddup2(&fileActions, slave, 1)
         posix_spawn_file_actions_adddup2(&fileActions, slave, 2)
@@ -136,6 +148,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         envDict["LINES"] = "45"
         envDict["LANG"] = envDict["LANG"] ?? "en_US.UTF-8"
         envDict["PATH"] = loginPath()
+        envDict["PWD"] = workingDirectory
         let env = envDict.map { "\($0.key)=\($0.value)" }
         var pid: pid_t = 0
         let argv = [claudePath]
@@ -169,6 +182,11 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         var buffer = Data()
         drain(master: master, maxSeconds: boot, quiet: 2.5, into: &buffer) // boot + prompt
+        if let bootText = String(data: buffer, encoding: .utf8),
+           ANSI.strip(bootText).localizedCaseInsensitiveContains("Quick safety check") {
+            teardown()
+            return bootText
+        }
         usleep(800_000) // let the input box settle before typing
         _ = "/usage".withCString { write(master, $0, strlen($0)) }
         usleep(500_000) // gap so the slash-command autocomplete resolves before Enter

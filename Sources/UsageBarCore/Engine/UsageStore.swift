@@ -20,6 +20,7 @@ public struct MenuBarSummary: Sendable, Equatable {
 @Observable
 public final class UsageStore {
     public private(set) var snapshots: [ProviderID: UsageSnapshot]
+    public private(set) var showMenuBarPercentage: Bool
     public let providerOrder: [ProviderID]
     public let displayNames: [ProviderID: String]
 
@@ -34,6 +35,7 @@ public final class UsageStore {
         self.providerOrder = providers.map(\.id)
         self.displayNames = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0.displayName) })
         self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
+        self.showMenuBarPercentage = preferences.showMenuBarPercentage
     }
 
     /// Begin polling: an immediate refresh, then the interval loop. Idempotent — a
@@ -57,6 +59,11 @@ public final class UsageStore {
 
     /// Restart the loop so a changed poll interval takes effect now (R14).
     public func reschedulePolling() { engine?.reschedule() }
+
+    public func setShowMenuBarPercentage(_ enabled: Bool) {
+        preferences.showMenuBarPercentage = enabled
+        showMenuBarPercentage = enabled
+    }
 
     /// Fetch every provider concurrently and merge results with continuity. Guarded
     /// so overlapping triggers (a timer tick during a popover-open `refreshNow()`)

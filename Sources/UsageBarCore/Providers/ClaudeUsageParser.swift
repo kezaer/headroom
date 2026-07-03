@@ -81,6 +81,8 @@ public enum ClaudeUsageParser {
         var value = String(m.1).trimmingCharacters(in: .whitespaces)
         // Drop a trailing "(America/Los_Angeles)" for brevity.
         if let paren = value.range(of: " (") { value = String(value[..<paren.lowerBound]) }
+        value = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        value = value.replacingOccurrences(of: #"\b([A-Za-z]{3,9}\s+\d{1,2})\s+t\s+(\d)"#, with: "$1 at $2", options: .regularExpression)
         return "Resets \(value)"
     }
 

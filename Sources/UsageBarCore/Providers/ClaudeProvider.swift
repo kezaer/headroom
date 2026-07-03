@@ -28,6 +28,10 @@ public struct ClaudeProvider: UsageProvider {
         case .panel(let text):
             let parsed = ClaudeUsageParser.parse(text)
             guard !parsed.isEmpty else {
+                if text.localizedCaseInsensitiveContains("Quick safety check")
+                    || text.localizedCaseInsensitiveContains("trust this folder") {
+                    return stale(.needsReauth("Open Claude and trust the launch folder"))
+                }
                 // Panel captured but no windows found: most often "not logged in".
                 if text.lowercased().contains("log in") || text.lowercased().contains("login") {
                     return stale(.needsReauth("Run `claude` and log in"))

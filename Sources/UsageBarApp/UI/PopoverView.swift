@@ -9,7 +9,7 @@ import UsageBarCore
 struct PopoverView: View {
     var store: UsageStore
     var preferences = Preferences()
-    @State private var showingSettings = false
+    var onOpenSettings: () -> Void
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -22,7 +22,7 @@ struct PopoverView: View {
                         snapshot: store.snapshot(for: id),
                         renewalDate: preferences.renewalDate(for: id),
                         now: context.date,
-                        onOpenSettings: { showingSettings = true }
+                        onOpenSettings: onOpenSettings
                     )
                 }
                 footer
@@ -32,16 +32,13 @@ struct PopoverView: View {
             .background(.ultraThinMaterial)
             .glassEffect(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(store: store, preferences: preferences)
-        }
     }
 
     private var header: some View {
         HStack {
             Text("Usage").font(.headline)
             Spacer()
-            Button { showingSettings = true } label: {
+            Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.plain)

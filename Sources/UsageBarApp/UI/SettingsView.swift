@@ -2,8 +2,8 @@ import SwiftUI
 import UsageBarCore
 
 /// Settings pane (U8): poll interval, per-provider renewal dates (R4), and
-/// launch-at-login (R15). Reached from the popover gear or a card's "not set"
-/// affordance. Controls follow a sensible keyboard focus order (design review).
+/// launch-at-login (R15). Presented in its own window so dismissing settings never
+/// closes the menu bar popover behind it.
 struct SettingsView: View {
     let store: UsageStore
     var preferences = Preferences()
@@ -11,6 +11,7 @@ struct SettingsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
+    @State private var showMenuBarPercentage = false
     @State private var launchAtLogin = false
     @State private var renewalDates: [ProviderID: Date] = [:]
 
@@ -22,6 +23,11 @@ struct SettingsView: View {
                 .onChange(of: intervalMinutes) { _, newValue in
                     preferences.pollIntervalMinutes = newValue
                     store.reschedulePolling()
+                }
+
+            Toggle("Show percentage in menu bar", isOn: $showMenuBarPercentage)
+                .onChange(of: showMenuBarPercentage) { _, newValue in
+                    store.setShowMenuBarPercentage(newValue)
                 }
 
             Divider()
@@ -53,6 +59,7 @@ struct SettingsView: View {
         .frame(width: 300)
         .onAppear {
             intervalMinutes = preferences.pollIntervalMinutes
+            showMenuBarPercentage = store.showMenuBarPercentage
             launchAtLogin = launchControl.isEnabled
             for id in store.providerOrder {
                 if let date = preferences.renewalDate(for: id) { renewalDates[id] = date }
