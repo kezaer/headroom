@@ -1,5 +1,5 @@
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// Codex reader double.
 struct MockCodexReader: CodexAuthReading {

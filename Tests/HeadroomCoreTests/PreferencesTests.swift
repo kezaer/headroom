@@ -1,11 +1,11 @@
 import Testing
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// U8 test scenarios: renewal-date round-trip and poll-interval persistence/default.
 struct PreferencesTests {
     private func freshDefaults() -> UserDefaults {
-        let suite = "usagebar.tests.\(UUID().uuidString)"
+        let suite = "headroom.tests.\(UUID().uuidString)"
         let d = UserDefaults(suiteName: suite)!
         d.removePersistentDomain(forName: suite)
         return d

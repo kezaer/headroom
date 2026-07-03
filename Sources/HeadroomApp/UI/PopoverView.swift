@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import UsageBarCore
+import HeadroomCore
 
 /// The Liquid Glass popover (U7). Composes one card per provider on a Tahoe glass
 /// surface, a gear that opens Settings, and a Quit control (required — the app has no
@@ -39,21 +39,32 @@ struct PopoverView: View {
             Text("Usage").font(.headline)
             Spacer()
             Button(action: onOpenSettings) {
-                Image(systemName: "gearshape")
+                Image(systemName: "gearshape").foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle(horizontalPadding: 5, verticalPadding: 5))
             .accessibilityLabel("Settings")
         }
     }
 
+    /// Left slot shows a live "Refreshing…" state while a cycle is in flight (UI-02) —
+    /// a manual refresh spawns a 20–30s Claude session, so without this the button reads
+    /// as broken. The spinner is bound to real work, not decorative motion.
     private var footer: some View {
         HStack {
-            Button("Refresh") { store.refreshNow() }
-                .buttonStyle(.plain)
-                .font(.caption)
+            if store.isRefreshing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Refreshing…").font(.caption).foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Refreshing usage")
+            } else {
+                Button("Refresh") { store.refreshNow() }
+                    .buttonStyle(HoverButtonStyle())
+                    .font(.caption)
+            }
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(.plain)
+                .buttonStyle(HoverButtonStyle())
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

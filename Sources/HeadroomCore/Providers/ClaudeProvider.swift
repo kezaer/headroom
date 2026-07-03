@@ -49,7 +49,7 @@ public struct ClaudeProvider: UsageProvider {
             return UsageSnapshot(
                 providerID: id,
                 windows: windows,
-                planLabel: nil,
+                planLabel: ClaudeUsageParser.plan(in: text),
                 capturedAt: now(),
                 freshness: .live
             )

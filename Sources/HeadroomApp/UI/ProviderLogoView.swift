@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import UsageBarCore
+import HeadroomCore
 
 /// Provider brand mark used at small UI sizes. Bundled SVGs render through AppKit;
 /// SF Symbols remain the fallback for unknown providers.
@@ -40,7 +40,7 @@ private enum BrandIconImage {
             return url
         }
         let swiftPMBundleURL = Bundle.main.bundleURL
-            .appendingPathComponent("UsageBar_UsageBarApp.bundle")
+            .appendingPathComponent("Headroom_HeadroomApp.bundle")
         return Bundle(url: swiftPMBundleURL)?
             .url(forResource: name, withExtension: "svg")
     }

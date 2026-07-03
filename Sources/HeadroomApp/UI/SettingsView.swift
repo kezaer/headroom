@@ -1,5 +1,5 @@
 import SwiftUI
-import UsageBarCore
+import HeadroomCore
 
 /// Settings pane (U8): poll interval, per-provider renewal dates (R4), and
 /// launch-at-login (R15). Presented in its own window so dismissing settings never
@@ -19,11 +19,15 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Settings").font(.title3.bold())
 
-            Stepper("Refresh every \(intervalMinutes) min", value: $intervalMinutes, in: 1...60)
-                .onChange(of: intervalMinutes) { _, newValue in
-                    preferences.pollIntervalMinutes = newValue
-                    store.reschedulePolling()
-                }
+            VStack(alignment: .leading, spacing: 2) {
+                Stepper("Refresh every \(intervalMinutes) min", value: $intervalMinutes, in: 2...60)
+                    .onChange(of: intervalMinutes) { _, newValue in
+                        preferences.pollIntervalMinutes = newValue
+                        store.reschedulePolling()
+                    }
+                Text("Each Claude refresh runs a CLI session (~20–30s). Minimum 2 min.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
 
             Toggle("Show percentage in menu bar", isOn: $showMenuBarPercentage)
                 .onChange(of: showMenuBarPercentage) { _, newValue in
@@ -58,7 +62,13 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 300)
         .onAppear {
-            intervalMinutes = preferences.pollIntervalMinutes
+            // Clamp any legacy sub-2-minute interval up to the new floor.
+            let saved = max(2, preferences.pollIntervalMinutes)
+            if saved != preferences.pollIntervalMinutes {
+                preferences.pollIntervalMinutes = saved
+                store.reschedulePolling()
+            }
+            intervalMinutes = saved
             showMenuBarPercentage = store.showMenuBarPercentage
             launchAtLogin = launchControl.isEnabled
             for id in store.providerOrder {

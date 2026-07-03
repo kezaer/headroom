@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import UsageBarCore
+@testable import HeadroomCore
 
 /// U6 test scenarios: concurrent population, per-provider isolation, continuity on
 /// stale, and the menu bar summary (lowest live window + provider identity).
@@ -83,10 +83,46 @@ struct UsageStoreTests {
         #expect(summary.providerID == .claude)
         #expect(summary.detail == "Claude weekly")
         #expect(!summary.isNeutral)
+        #expect(summary.severity == .low)         // 30% left → amber, not healthy
+        #expect(!summary.needsAttention)
+    }
+
+    @Test func menuBarSummaryCarriesSeverityOfTightestWindow() async {
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 95, resetsAt: reset),   // 5% left → critical
+            ])),
+        ])
+        await store.refreshAll()
+        #expect(store.menuBarSummary.severity == .critical)
+    }
+
+    @Test func menuBarSummaryFlagsPermanentFailureEvenWhenNeutral() async {
+        // A logged-out provider with no live data still surfaces attention in the bar.
+        let store = UsageStore(providers: [
+            StubProvider(id: .codex, displayName: "Codex",
+                         snapshot: .stale(for: .codex, reason: .needsReauth("Run `codex login`"))),
+        ])
+        await store.refreshAll()
+        let summary = store.menuBarSummary
+        #expect(summary.isNeutral)          // no live number to show
+        #expect(summary.needsAttention)     // …but the glyph should still warn
+    }
+
+    @Test func transientFailureDoesNotFlagAttention() async {
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex",
+                         snapshot: .stale(for: .codex, reason: .transient("blip"))),
+        ])
+        await store.refreshAll()
+        #expect(!store.menuBarSummary.needsAttention)   // transient ≠ needs the user
     }
 
     @Test func menuBarPercentageVisibilityPersistsThroughStore() {
-        let suite = "usagebar.tests.\(UUID().uuidString)"
+        let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         let preferences = Preferences(defaults: defaults)
