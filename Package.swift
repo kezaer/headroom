@@ -28,7 +28,7 @@ let package = Package(
         .executableTarget(
             name: "HeadroomWidgets",
             dependencies: ["HeadroomCore"],
-            exclude: ["HeadroomWidgets.entitlements"]
+            exclude: ["HeadroomWidgets.entitlements", "Info.plist"]
         ),
         .testTarget(
             name: "HeadroomCoreTests",

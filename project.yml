@@ -1,0 +1,69 @@
+name: Headroom
+options:
+  bundleIdPrefix: com.kylezantos
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: 8D42S4MS38
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  HeadroomCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/HeadroomCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kylezantos.headroom.core
+        GENERATE_INFOPLIST_FILE: YES
+  Headroom:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/HeadroomApp
+        excludes:
+          - HeadroomApp.entitlements
+    dependencies:
+      - target: HeadroomCore
+      - target: HeadroomWidgets
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kylezantos.headroom
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_ENTITLEMENTS: Sources/HeadroomApp/HeadroomApp.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: Headroom
+        INFOPLIST_KEY_CFBundleName: Headroom
+        INFOPLIST_KEY_CFBundleShortVersionString: 0.1.0
+        INFOPLIST_KEY_CFBundleVersion: 1
+        INFOPLIST_KEY_LSMinimumSystemVersion: "26.0"
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: Personal use
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+  HeadroomWidgets:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Sources/HeadroomWidgets
+        excludes:
+          - HeadroomWidgets.entitlements
+          - Info.plist
+    dependencies:
+      - target: HeadroomCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kylezantos.headroom.widgets
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Sources/HeadroomWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/HeadroomWidgets/HeadroomWidgets.entitlements
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"

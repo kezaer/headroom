@@ -33,9 +33,11 @@ swift test
 ./Scripts/build-app.sh   # produces Headroom.app (menu bar / LSUIElement), then: open Headroom.app
 ```
 
-Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe), and the `claude` CLI installed and
-logged in. Codex subscription usage requires `~/.codex/auth.json`. API spend rows require
-the relevant OpenAI/Anthropic admin keys entered in Settings. Diagnostic:
+Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe). The app bundle build also requires
+`xcodegen` because macOS widget discovery expects a real Xcode app-extension target:
+`brew install xcodegen`. Claude usage requires the `claude` CLI installed and logged in.
+Codex subscription usage requires `~/.codex/auth.json`. API spend rows require the
+relevant OpenAI/Anthropic admin keys entered in Settings. Diagnostic:
 `swift run Headroom --probe-claude` prints the live parsed windows so you can confirm the
 Claude path works on your machine.
 
@@ -82,10 +84,11 @@ setup state rather than reading provider credentials directly.
 
 ## Finalizing as a distributable app (optional)
 
-`./Scripts/build-app.sh` embeds the widget extension at
-`Contents/PlugIns/HeadroomWidgets.appex` and signs both the app and extension with the
-first local **Apple Development** identity it finds. If no Apple signing identity is
-installed, it falls back to an ad-hoc signature so the app can still launch locally.
+`./Scripts/build-app.sh` generates `Headroom.xcodeproj` from `project.yml`, builds a real
+macOS app target with an embedded WidgetKit app-extension target, then signs both the app
+and extension with the first local **Apple Development** identity it finds. If no Apple
+signing identity is installed, it falls back to an ad-hoc signature so the app can still
+launch locally.
 
 To use a specific certificate:
 
@@ -95,8 +98,9 @@ HEADROOM_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./Scripts/bui
 ```
 
 A stable Apple Development signature keeps macOS permission grants and App Group sharing
-from re-prompting or failing after each rebuild. Leave App Sandbox **off** (needed to
-spawn `claude` and read `~/.codex/auth.json`). Notarization isn't needed for a locally
+from re-prompting or failing after each rebuild. Leave App Sandbox **off** for the host
+app (needed to spawn `claude` and read `~/.codex/auth.json`); the widget extension is
+sandboxed and reads only the App Group cache. Notarization isn't needed for a locally
 built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
 
 ## Status
