@@ -64,6 +64,7 @@ public final class UsageStore {
     private let preferences: Preferences
     private let widgetExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
+    private var isStarting = false
 
     public init(
         providers: [any UsageProvider],
@@ -96,7 +97,9 @@ public final class UsageStore {
     /// second call (e.g. the popover re-appearing) does not restart the loop or
     /// reset the cadence.
     public func start() async {
-        guard engine == nil else { return }
+        guard engine == nil, !isStarting else { return }
+        isStarting = true
+        defer { isStarting = false }
         await refreshAll()
         let engine = PollingEngine(
             intervalMinutes: { [preferences] in preferences.pollIntervalMinutes },

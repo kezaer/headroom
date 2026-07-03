@@ -66,7 +66,9 @@ remove, and resize widgets from macOS itself; Settings controls data export, not
 installation. Widget data sharing uses the App Group `group.com.kylezantos.headroom`, so
 the app and extension need matching entitlements under a stable Apple Development
 signature for persistent real-world use. If the App Group is unavailable, widgets show a
-setup state rather than reading provider credentials directly.
+setup state rather than reading provider credentials directly. Local manual-signed builds
+also mirror the redaction-safe widget snapshot into the widget extension container as a
+development fallback while App Group provisioning is being finished.
 
 ## Robustness (the PTY scrape is inherently fragile, so it's contained)
 
