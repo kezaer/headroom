@@ -38,4 +38,13 @@ struct PreferencesTests {
         prefs.showMenuBarPercentage = true
         #expect(prefs.showMenuBarPercentage)
     }
+
+    @Test func widgetsEnabledDefaultsOnAndPersists() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(prefs.widgetsEnabled)
+        prefs.widgetsEnabled = false
+        #expect(!prefs.widgetsEnabled)
+        prefs.widgetsEnabled = true
+        #expect(prefs.widgetsEnabled)
+    }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import WidgetKit
 import HeadroomCore
 
 /// Entry point. Supports a hidden `--probe-claude` diagnostic that runs the real
@@ -81,7 +82,10 @@ enum Entry {
 /// (KTD9). No Dock icon in the shipped app — set `LSUIElement = YES` in the Xcode app
 /// target's Info.plist when finalizing the bundle (U1/KTD8).
 struct HeadroomApp: App {
-    @State private var store = UsageStore(providers: AppComposition.providers())
+    @State private var store = UsageStore(
+        providers: AppComposition.providers(),
+        widgetExporter: AppComposition.widgetExporter()
+    )
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -137,5 +141,11 @@ enum AppComposition {
             ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory())),
             CodexProvider(credentials: CredentialStore()), // reads ~/.codex/auth.json + wham/usage
         ]
+    }
+
+    static func widgetExporter() -> any WidgetSnapshotExporting {
+        WidgetSnapshotExporter(cache: .appGroup()) {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
     }
 }

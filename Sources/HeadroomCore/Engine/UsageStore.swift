@@ -60,11 +60,17 @@ public final class UsageStore {
 
     private let providers: [any UsageProvider]
     private let preferences: Preferences
+    private let widgetExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
 
-    public init(providers: [any UsageProvider], preferences: Preferences = Preferences()) {
+    public init(
+        providers: [any UsageProvider],
+        preferences: Preferences = Preferences(),
+        widgetExporter: (any WidgetSnapshotExporting)? = nil
+    ) {
         self.providers = providers
         self.preferences = preferences
+        self.widgetExporter = widgetExporter
         self.providerOrder = providers.map(\.id)
         self.displayNames = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0.displayName) })
         self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
@@ -98,6 +104,13 @@ public final class UsageStore {
         showMenuBarPercentage = enabled
     }
 
+    public var widgetsEnabled: Bool { preferences.widgetsEnabled }
+
+    public func setWidgetsEnabled(_ enabled: Bool) {
+        preferences.widgetsEnabled = enabled
+        exportWidgetSnapshot()
+    }
+
     /// Fetch every provider concurrently and merge results with continuity. Guarded
     /// so overlapping triggers (a timer tick during a popover-open `refreshNow()`)
     /// coalesce into one in-flight cycle instead of racing duplicate fetches.
@@ -114,6 +127,7 @@ public final class UsageStore {
             return acc
         }
         for (id, fresh) in results { merge(id: id, fresh: fresh) }
+        exportWidgetSnapshot()
     }
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
@@ -134,6 +148,19 @@ public final class UsageStore {
 
     public func snapshot(for id: ProviderID) -> UsageSnapshot {
         snapshots[id] ?? .pending(for: id)
+    }
+
+    private func exportWidgetSnapshot(generatedAt: Date = .now) {
+        guard let widgetExporter else { return }
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: snapshots,
+            providerOrder: providerOrder,
+            displayNames: displayNames,
+            renewalDate: { [preferences] in preferences.renewalDate(for: $0) },
+            widgetsEnabled: preferences.widgetsEnabled,
+            generatedAt: generatedAt
+        )
+        widgetExporter.export(envelope)
     }
 
     /// The menu bar summary: the lowest `percentRemaining` among all live windows,

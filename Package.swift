@@ -15,13 +15,20 @@ let package = Package(
     products: [
         .library(name: "HeadroomCore", targets: ["HeadroomCore"]),
         .executable(name: "Headroom", targets: ["HeadroomApp"]),
+        .executable(name: "HeadroomWidgets", targets: ["HeadroomWidgets"]),
     ],
     targets: [
         .target(name: "HeadroomCore"),
         .executableTarget(
             name: "HeadroomApp",
             dependencies: ["HeadroomCore"],
+            exclude: ["HeadroomApp.entitlements"],
             resources: [.process("Resources")]
+        ),
+        .executableTarget(
+            name: "HeadroomWidgets",
+            dependencies: ["HeadroomCore"],
+            exclude: ["HeadroomWidgets.entitlements"]
         ),
         .testTarget(
             name: "HeadroomCoreTests",

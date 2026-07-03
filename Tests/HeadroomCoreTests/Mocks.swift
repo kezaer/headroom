@@ -79,6 +79,17 @@ final class CountingProvider: UsageProvider, @unchecked Sendable {
     }
 }
 
+/// Widget exporter double for store tests.
+final class SpyWidgetExporter: WidgetSnapshotExporting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _exports: [WidgetSnapshotEnvelope] = []
+    var exports: [WidgetSnapshotEnvelope] { lock.withLock { _exports } }
+
+    func export(_ envelope: WidgetSnapshotEnvelope) {
+        lock.withLock { _exports.append(envelope) }
+    }
+}
+
 extension UsageSnapshot {
     static func live(_ id: ProviderID, windows: [UsageWindow], plan: String? = nil, at: Date = Date()) -> UsageSnapshot {
         UsageSnapshot(providerID: id, windows: windows, planLabel: plan, capturedAt: at, freshness: .live)

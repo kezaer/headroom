@@ -12,6 +12,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
     @State private var showMenuBarPercentage = false
+    @State private var widgetsEnabled = true
     @State private var launchAtLogin = false
     @State private var renewalDates: [ProviderID: Date] = [:]
 
@@ -32,6 +33,11 @@ struct SettingsView: View {
             Toggle("Show percentage in menu bar", isOn: $showMenuBarPercentage)
                 .onChange(of: showMenuBarPercentage) { _, newValue in
                     store.setShowMenuBarPercentage(newValue)
+                }
+
+            WidgetSettingsSection(widgetsEnabled: $widgetsEnabled)
+                .onChange(of: widgetsEnabled) { _, newValue in
+                    store.setWidgetsEnabled(newValue)
                 }
 
             Divider()
@@ -70,6 +76,7 @@ struct SettingsView: View {
             }
             intervalMinutes = saved
             showMenuBarPercentage = store.showMenuBarPercentage
+            widgetsEnabled = store.widgetsEnabled
             launchAtLogin = launchControl.isEnabled
             for id in store.providerOrder {
                 if let date = preferences.renewalDate(for: id) { renewalDates[id] = date }

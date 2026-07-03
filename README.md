@@ -3,7 +3,8 @@
 A macOS menu bar app that shows how much of your AI-subscription usage remains — the
 5-hour and weekly windows, when each resets, and a manually-entered monthly renewal
 date — for **Anthropic Claude** and **ChatGPT/Codex**, side by side. Built to add more
-providers later behind one abstraction.
+providers later behind one abstraction. It also bundles macOS widgets for small,
+medium, and large glanceable desktop / Notification Center views.
 
 ## How it gets the data (and why this way)
 
@@ -21,8 +22,8 @@ providers later behind one abstraction.
 ## Build & test
 
 ```bash
-swift build          # builds HeadroomCore (logic) + Headroom (app)
-swift test           # 49 tests
+swift build          # builds HeadroomCore + Headroom + HeadroomWidgets
+swift test           # 63 tests
 ./Scripts/build-app.sh   # produces Headroom.app (menu bar / LSUIElement), then: open Headroom.app
 ```
 
@@ -34,9 +35,27 @@ so you can confirm the Claude path works on your machine.
 
 - `Sources/HeadroomCore` — testable logic: domain model, the Claude `/usage` PTY probe
   (`ClaudeUsageCLIProbe`) + parser (`ClaudeUsageParser`), the Codex provider, the polling
-  engine/`@Observable` store, and preferences.
+  engine/`@Observable` store, widget cache/export models, and preferences.
 - `Sources/HeadroomApp` — the SwiftUI `MenuBarExtra` shell and the Tahoe / Liquid Glass
   popover, cards, settings, and menu bar label.
+- `Sources/HeadroomWidgets` — the WidgetKit extension. It reads only the redaction-safe
+  App Group cache written by the app; it never spawns `claude`, reads credentials, or
+  calls provider endpoints.
+
+## Widgets
+
+Headroom includes one WidgetKit extension with size-specific layouts:
+
+- **Small** — weekly percentage left for Claude and Codex, provider-by-provider.
+- **Medium** — weekly and 5-hour usage for both providers.
+- **Large** — adds reset, freshness, and renewal-date context.
+
+Enable or pause widget data in Headroom Settings with **Share data with widgets**. Add,
+remove, and resize widgets from macOS itself; Settings controls data export, not OS
+installation. Widget data sharing uses the App Group `group.com.kylezantos.headroom`, so
+the app and extension need matching entitlements under a stable Apple Development
+signature for persistent real-world use. If the App Group is unavailable, widgets show a
+setup state rather than reading provider credentials directly.
 
 ## Robustness (the PTY scrape is inherently fragile, so it's contained)
 
@@ -54,16 +73,18 @@ so you can confirm the Claude path works on your machine.
 
 ## Finalizing as a distributable app (optional)
 
-`./Scripts/build-app.sh` produces an ad-hoc-signed `Headroom.app` that runs locally. For a
-persistent build you rebuild often, open the package in Xcode 26, add a macOS App target,
-and sign with your free **Apple Development** identity — a stable signature keeps macOS
-permission grants from re-prompting after each rebuild. Leave App Sandbox **off** (needed
-to spawn `claude` and read `~/.codex/auth.json`). Notarization isn't needed for a locally
-built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
+`./Scripts/build-app.sh` produces an ad-hoc-signed `Headroom.app` with the widget
+extension embedded at `Contents/PlugIns/HeadroomWidgets.appex`. For a persistent build
+you rebuild often, sign with your free **Apple Development** identity — a stable
+signature keeps macOS permission grants and App Group sharing from re-prompting or
+failing after each rebuild. Leave App Sandbox **off** (needed to spawn `claude` and read
+`~/.codex/auth.json`). Notarization isn't needed for a locally built/run app. Provide an
+app icon via `CFBundleIconFile` when you have one.
 
 ## Status
 
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
 real account and from a bare launch environment), Codex via its endpoint, manual renewal
-dates, launch-at-login, and the Tahoe popover. 49 tests pass. Remaining polish is the
-Xcode signing above, an app icon, and visual/VoiceOver smoke on the running app.
+dates, launch-at-login, the Tahoe popover, widget cache export, and the bundled widget
+extension. 63 tests pass. Remaining polish is stable Xcode/Apple Development signing, an
+app icon, and visual/VoiceOver smoke on the running app and widgets.
