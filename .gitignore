@@ -6,12 +6,7 @@ xcuserdata/
 !*.xcodeproj/project.pbxproj
 .swiftpm/
 DerivedData/
-/.xcode-derived/
-/.xcode-derived-signed/
-/.xcode-derived-device/
-/.xcode-derived-ios/
-/.xcode-derived-mac-provisioned/
-/.xcode-derived-mac-signed/
+/.xcode-derived*/
 /.codex/
 /scratchpad
 /dist
