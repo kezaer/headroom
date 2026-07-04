@@ -23,6 +23,7 @@ struct HeadroomIOSWidgetView: View {
             }
         }
         .containerBackground(.background, for: .widget)
+        .widgetURL(URL(string: "headroom://usage"))
     }
 
     @ViewBuilder
@@ -38,9 +39,9 @@ struct HeadroomIOSWidgetView: View {
     }
 
     private func small(_ envelope: WidgetSnapshotEnvelope) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 7) {
             Text("Weekly left")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(IOSWidgetStyle.secondaryText(scheme: scheme))
             ForEach(envelope.weeklyProviders) { provider in
                 providerWeeklyLine(provider)
@@ -53,7 +54,8 @@ struct HeadroomIOSWidgetView: View {
                     .lineLimit(1)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 11)
     }
 
     private func medium(_ envelope: WidgetSnapshotEnvelope) -> some View {
@@ -112,16 +114,24 @@ struct HeadroomIOSWidgetView: View {
     }
 
     private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                providerIcon(provider.id, size: 13)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                providerIcon(provider.id, size: 12)
                 Text(provider.displayName)
-                    .font(.caption2.weight(.medium))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(IOSWidgetStyle.textAccent(for: provider.id, scheme: scheme))
                     .lineLimit(1)
-                Spacer(minLength: 4)
+                    .minimumScaleFactor(0.82)
+                    .allowsTightening(true)
+                    .layoutPriority(1)
+                Spacer(minLength: 2)
                 Text(percent(provider.weeklyWindow))
-                    .font(.callout.bold().monospacedDigit())
+                    .font(.system(size: 14, weight: .bold).monospacedDigit())
+                    .foregroundStyle(provider.weeklyWindow == nil ? IOSWidgetStyle.secondaryText(scheme: scheme) : .primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+                    .allowsTightening(true)
+                    .frame(width: 36, alignment: .trailing)
             }
             IOSWidgetUsageBar(
                 percentRemaining: provider.weeklyWindow?.percentRemaining ?? 0,

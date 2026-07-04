@@ -86,7 +86,9 @@ Enable **Sync snapshot to iPhone** in Headroom Settings to publish the same widg
 summary through iCloud Key-Value Store. The synced payload contains provider names,
 window labels, percentages, reset labels, freshness, and update time; it does not include
 Claude/Codex credentials, API keys, raw auth files, or provider endpoints. The iPhone app
-and iPhone widgets are read-only views over that snapshot.
+and iPhone widgets are read-only views over that snapshot. The companion app mirrors the
+Mac popover with provider tiles, session/weekly bars, stale/attention treatments, and a
+small About sheet for sync status and device-local appearance.
 
 Local simulator smoke test:
 
