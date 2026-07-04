@@ -7,6 +7,9 @@ struct WidgetUsageMeter: View {
     var now: Date?
     var showsResetInline = false
     var compact = false
+    // Large widget's tiles read as a premium surface, so their meters get bumped type
+    // and a taller bar than the medium/small families.
+    var prominent = false
 
     @Environment(\.colorScheme) private var scheme
 
@@ -24,29 +27,42 @@ struct WidgetUsageMeter: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+        VStack(alignment: .leading, spacing: prominent ? 5 : (compact ? 2 : 4)) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(window?.label ?? fallbackLabel)
-                    .font(compact ? .caption2.weight(.medium) : .caption)
+                    .font(labelFont)
                     .foregroundStyle(WidgetProviderStyle.secondaryText(scheme: scheme))
                     .lineLimit(1)
                 if let resetText {
                     Text("· \(resetText)")
-                        .font(.caption2.monospacedDigit())
+                        .font(resetFont)
                         .foregroundStyle(WidgetProviderStyle.tertiaryText(scheme: scheme))
                         .lineLimit(1)
                         .layoutPriority(-1)
                 }
                 Spacer(minLength: 2)
                 Text(percentText)
-                    .font((compact ? Font.caption2 : Font.caption).bold().monospacedDigit())
+                    .font(percentFont)
                     .foregroundStyle(window == nil ? WidgetProviderStyle.secondaryText(scheme: scheme) : .primary)
             }
             WidgetUsageBar(
                 percentRemaining: window?.percentRemaining ?? 0,
                 severity: window?.severity ?? .healthy,
-                dimmed: window == nil
+                dimmed: window == nil,
+                height: prominent ? 8 : 6
             )
         }
+    }
+
+    private var labelFont: Font {
+        prominent ? .system(size: 13, weight: .medium) : (compact ? .caption2.weight(.medium) : .caption)
+    }
+
+    private var resetFont: Font {
+        prominent ? .system(size: 11).monospacedDigit() : .caption2.monospacedDigit()
+    }
+
+    private var percentFont: Font {
+        prominent ? .system(size: 16, weight: .bold).monospacedDigit() : (compact ? Font.caption2 : Font.caption).bold().monospacedDigit()
     }
 }

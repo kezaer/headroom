@@ -20,7 +20,12 @@ struct ProviderLogoView: View {
         }
         .frame(width: size, height: size)
         .padding(size * 0.20)
-        .background(HeadroomTheme.providerAccent(for: providerID).opacity(scheme == .dark ? 0.18 : 0.13), in: Circle())
+        // Squircle to match the app-icon language (HeadroomAppIconView's 0.22 superellipse
+        // ratio), applied to the padded badge (size * 1.4) — not a Circle.
+        .background(
+            HeadroomTheme.providerAccent(for: providerID).opacity(scheme == .dark ? 0.18 : 0.13),
+            in: RoundedRectangle(cornerRadius: size * 1.4 * 0.22, style: .continuous)
+        )
         .accessibilityHidden(true)
     }
 

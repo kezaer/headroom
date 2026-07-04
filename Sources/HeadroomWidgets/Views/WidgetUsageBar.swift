@@ -5,6 +5,7 @@ struct WidgetUsageBar: View {
     let percentRemaining: Double
     let severity: WidgetUsageSeverity
     var dimmed = false
+    var height: CGFloat = 6
 
     @Environment(\.colorScheme) private var scheme
 
@@ -27,7 +28,7 @@ struct WidgetUsageBar: View {
                     .frame(width: fillWidth(in: geo.size.width))
             }
         }
-        .frame(height: 6)
+        .frame(height: height)
         .accessibilityHidden(true)
     }
 }

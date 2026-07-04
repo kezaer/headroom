@@ -91,26 +91,68 @@ struct HeadroomIOSWidgetView: View {
     }
 
     private func large(_ envelope: WidgetSnapshotEnvelope) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                Text("Headroom")
-                    .font(.headline)
-                Spacer()
-                Text(Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date) ?? "")
-                    .font(.caption)
-                    .foregroundStyle(IOSWidgetStyle.secondaryText(scheme: scheme))
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Headroom")
+                .font(.system(size: 19, weight: .semibold))
+            ForEach(envelope.providers) { provider in
+                largeProviderTile(provider)
             }
-            ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
-                providerSection(provider)
-                if index < envelope.providers.count - 1 {
-                    Rectangle()
-                        .fill(IOSWidgetStyle.hairline(scheme: scheme))
-                        .frame(height: 1)
+            if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date) {
+                Text("from Mac · \(updated)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, largeTileInset)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+    }
+
+    // Shared by the tiles (their horizontal inset) and the footer (its trailing inset),
+    // so the timestamp lines up with the % column instead of hugging the corner radius.
+    private var largeTileInset: CGFloat { 12 }
+
+    private func largeProviderTile(_ provider: WidgetProviderSummary) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                providerIcon(provider.id, size: 20)
+                Text(provider.displayName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(IOSWidgetStyle.textAccent(for: provider.id, scheme: scheme))
+                    .lineLimit(1)
+                if let planLabel = provider.planLabel {
+                    Text(planLabel)
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(IOSWidgetStyle.secondaryText(scheme: scheme))
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(IOSWidgetStyle.barTrack(scheme: scheme), in: Capsule())
+                }
+                Spacer(minLength: 4)
+                if provider.freshness.needsAttention {
+                    Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
+                        .labelStyle(.iconOnly)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(IOSWidgetStyle.severityColor(for: .low))
+                }
+                if let renewalDate = provider.renewalDate {
+                    Text("Renews \(renewalDate.formatted(.dateTime.month(.abbreviated).day()))")
+                        .font(.system(size: 11))
+                        .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                        .lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
+            IOSWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, prominent: true)
+            IOSWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
         }
-        .padding(12)
+        .padding(.horizontal, largeTileInset)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .modifier(IOSWidgetTile())
     }
 
     private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
@@ -161,42 +203,6 @@ struct HeadroomIOSWidgetView: View {
             IOSWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", compact: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func providerSection(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                providerIcon(provider.id, size: 16)
-                Text(provider.displayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(IOSWidgetStyle.textAccent(for: provider.id, scheme: scheme))
-                    .lineLimit(1)
-                if let planLabel = provider.planLabel {
-                    Text(planLabel)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(IOSWidgetStyle.secondaryText(scheme: scheme))
-                        .lineLimit(1)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(IOSWidgetStyle.barTrack(scheme: scheme), in: Capsule())
-                }
-                Spacer(minLength: 4)
-                if provider.freshness.needsAttention {
-                    Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
-                        .labelStyle(.iconOnly)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(IOSWidgetStyle.severityColor(for: .low))
-                }
-            }
-            IOSWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true)
-            IOSWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", now: entry.date, showsResetInline: true)
-            if let renewalDate = provider.renewalDate {
-                Text("Renews \(renewalDate.formatted(.dateTime.month(.abbreviated).day()))")
-                    .font(.caption2)
-                    .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-        }
     }
 
     private func window(_ kind: WidgetWindowKind, in provider: WidgetProviderSummary) -> WidgetWindowSummary? {
@@ -251,34 +257,50 @@ private struct IOSWidgetUsageMeter: View {
     var now: Date?
     var showsResetInline = false
     var compact = false
+    // The large widget's tiles read as a premium surface, so their meters get bumped
+    // type and a taller bar than the medium/small families.
+    var prominent = false
 
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+        VStack(alignment: .leading, spacing: prominent ? 5 : (compact ? 2 : 4)) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(window?.label ?? fallbackLabel)
-                    .font(compact ? .caption2.weight(.medium) : .caption)
+                    .font(labelFont)
                     .foregroundStyle(IOSWidgetStyle.secondaryText(scheme: scheme))
                     .lineLimit(1)
                 if let resetText {
                     Text("· \(resetText)")
-                        .font(.caption2.monospacedDigit())
+                        .font(resetFont)
                         .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
                         .lineLimit(1)
                         .layoutPriority(-1)
                 }
                 Spacer(minLength: 2)
                 Text(percentText)
-                    .font((compact ? Font.caption2 : Font.caption).bold().monospacedDigit())
+                    .font(percentFont)
                     .foregroundStyle(window == nil ? IOSWidgetStyle.secondaryText(scheme: scheme) : .primary)
             }
             IOSWidgetUsageBar(
                 percentRemaining: window?.percentRemaining ?? 0,
                 severity: window?.severity ?? .healthy,
-                dimmed: window == nil
+                dimmed: window == nil,
+                height: prominent ? 8 : 6
             )
         }
+    }
+
+    private var labelFont: Font {
+        prominent ? .system(size: 13, weight: .medium) : (compact ? .caption2.weight(.medium) : .caption)
+    }
+
+    private var resetFont: Font {
+        prominent ? .system(size: 11).monospacedDigit() : .caption2.monospacedDigit()
+    }
+
+    private var percentFont: Font {
+        prominent ? .system(size: 16, weight: .bold).monospacedDigit() : (compact ? Font.caption2 : Font.caption).bold().monospacedDigit()
     }
 
     private var percentText: String {
@@ -299,6 +321,7 @@ private struct IOSWidgetUsageBar: View {
     let percentRemaining: Double
     let severity: WidgetUsageSeverity
     var dimmed = false
+    var height: CGFloat = 6
 
     @Environment(\.colorScheme) private var scheme
 
@@ -321,7 +344,7 @@ private struct IOSWidgetUsageBar: View {
                     .frame(width: fillWidth(in: geo.size.width))
             }
         }
-        .frame(height: 6)
+        .frame(height: height)
         .accessibilityHidden(true)
     }
 }
@@ -364,6 +387,48 @@ private enum IOSWidgetStyle {
     static func hairline(scheme: ColorScheme) -> Color {
         scheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.09)
     }
+
+    // Elevated tile surface for the large widget's provider cards. Light mode sits the
+    // white card on the white widget background (defined purely by ring + ambient
+    // shadow); dark mode lifts it a step above the near-black container.
+    static func tileSurface(scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color(red: 0.14, green: 0.14, blue: 0.15) : .white
+    }
+
+    // The ring layer that replaces a border (KTD/Jakub elevation): a hairline in light,
+    // a faint top-lit glow in dark.
+    static func tileRing(scheme: ColorScheme) -> AnyShapeStyle {
+        scheme == .dark
+            ? AnyShapeStyle(LinearGradient(
+                colors: [.white.opacity(0.14), .white.opacity(0.04)],
+                startPoint: .top,
+                endPoint: .bottom))
+            : AnyShapeStyle(Color.black.opacity(0.05))
+    }
+}
+
+/// Mirror of the macOS `WidgetTileBackground` (KTD/Jakub elevation) so the iOS large
+/// widget's provider tiles carry the same ring-shadow / light-glow surface.
+private struct IOSWidgetTile: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    var cornerRadius: CGFloat = 14
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(IOSWidgetStyle.tileSurface(scheme: scheme))
+                    .shadow(color: ambient, radius: scheme == .dark ? 10 : 8, x: 0, y: scheme == .dark ? 8 : 4)
+                    .shadow(color: ambientTight, radius: 2, x: 0, y: 1)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(IOSWidgetStyle.tileRing(scheme: scheme), lineWidth: 1)
+            }
+    }
+
+    private var ambient: Color { scheme == .dark ? .black.opacity(0.38) : .black.opacity(0.05) }
+    private var ambientTight: Color { scheme == .dark ? .black.opacity(0.20) : .black.opacity(0.06) }
 }
 
 private extension Color {
