@@ -77,6 +77,7 @@ public final class UsageStore {
     private let apiSpendProviders: [any APISpendProvider]
     private let preferences: Preferences
     private let widgetExporter: (any WidgetSnapshotExporting)?
+    private let phoneSyncExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
     private var isStarting = false
 
@@ -84,12 +85,14 @@ public final class UsageStore {
         providers: [any UsageProvider],
         apiSpendProviders: [any APISpendProvider] = [],
         preferences: Preferences = Preferences(),
-        widgetExporter: (any WidgetSnapshotExporting)? = nil
+        widgetExporter: (any WidgetSnapshotExporting)? = nil,
+        phoneSyncExporter: (any WidgetSnapshotExporting)? = nil
     ) {
         self.providers = providers
         self.apiSpendProviders = apiSpendProviders
         self.preferences = preferences
         self.widgetExporter = widgetExporter
+        self.phoneSyncExporter = phoneSyncExporter
         self.displayNames = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0.displayName) })
         self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
         self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
@@ -167,10 +170,16 @@ public final class UsageStore {
     }
 
     public var widgetsEnabled: Bool { preferences.widgetsEnabled }
+    public var syncToIPhoneEnabled: Bool { preferences.syncToIPhoneEnabled }
 
     public func setWidgetsEnabled(_ enabled: Bool) {
         preferences.widgetsEnabled = enabled
         exportWidgetSnapshot()
+    }
+
+    public func setSyncToIPhoneEnabled(_ enabled: Bool) {
+        preferences.syncToIPhoneEnabled = enabled
+        exportPhoneSyncSnapshot()
     }
 
     public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
@@ -181,6 +190,7 @@ public final class UsageStore {
         preferences.setSurfaceEnabled(enabled, for: surface)
         if surface.isSubscription {
             exportWidgetSnapshot()
+            exportPhoneSyncSnapshot()
         }
     }
 
@@ -210,6 +220,7 @@ public final class UsageStore {
         }
         for (id, fresh) in results { merge(id: id, fresh: fresh) }
         exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
 
         let spendPeriod = preferences.apiSpendPeriod
         let spendResults = await withTaskGroup(of: (ProviderID, APISpendSnapshot).self) { group in
@@ -266,15 +277,23 @@ public final class UsageStore {
 
     private func exportWidgetSnapshot(generatedAt: Date = .now) {
         guard let widgetExporter else { return }
-        let envelope = WidgetSnapshotProjector.project(
+        widgetExporter.export(widgetSnapshot(widgetsEnabled: preferences.widgetsEnabled, generatedAt: generatedAt))
+    }
+
+    private func exportPhoneSyncSnapshot(generatedAt: Date = .now) {
+        guard let phoneSyncExporter else { return }
+        phoneSyncExporter.export(widgetSnapshot(widgetsEnabled: preferences.syncToIPhoneEnabled, generatedAt: generatedAt))
+    }
+
+    private func widgetSnapshot(widgetsEnabled: Bool, generatedAt: Date) -> WidgetSnapshotEnvelope {
+        WidgetSnapshotProjector.project(
             snapshots: snapshots,
             providerOrder: providerOrder,
             displayNames: displayNames,
             renewalDate: { [preferences] in preferences.renewalDate(for: $0) },
-            widgetsEnabled: preferences.widgetsEnabled,
+            widgetsEnabled: widgetsEnabled,
             generatedAt: generatedAt
         )
-        widgetExporter.export(envelope)
     }
 
     /// The menu bar summary: weekly allotment remaining, tagged with provider identity.

@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.kylezantos
   deploymentTarget:
     macOS: "26.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 settings:
   base:
@@ -79,3 +80,54 @@ targets:
         INFOPLIST_KEY_HeadroomAppGroupIdentifier: "$(HEADROOM_APP_GROUP_IDENTIFIER)"
         CODE_SIGN_ENTITLEMENTS: Sources/HeadroomWidgets/HeadroomWidgets.entitlements
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
+  HeadroomIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/HeadroomIOS
+        excludes:
+          - HeadroomIOS.entitlements
+      - path: Sources/HeadroomCore/Models/Countdown.swift
+      - path: Sources/HeadroomCore/Widgets
+        excludes:
+          - WidgetSnapshotProjector.swift
+      - path: Sources/HeadroomCore/Sync
+    dependencies:
+      - target: HeadroomIOSWidgets
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kylezantos.headroom.ios
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_ENTITLEMENTS: Sources/HeadroomIOS/HeadroomIOS.entitlements
+        INFOPLIST_KEY_CFBundleDisplayName: Headroom
+        INFOPLIST_KEY_CFBundleName: Headroom
+        INFOPLIST_KEY_CFBundleShortVersionString: 0.1.0
+        INFOPLIST_KEY_CFBundleVersion: 1
+        INFOPLIST_KEY_HeadroomAppGroupIdentifier: "$(HEADROOM_APP_GROUP_IDENTIFIER)"
+        TARGETED_DEVICE_FAMILY: 1
+  HeadroomIOSWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/HeadroomIOSWidgets
+        excludes:
+          - HeadroomIOSWidgets.entitlements
+          - Info.plist
+      - path: Sources/HeadroomCore/Models/Countdown.swift
+      - path: Sources/HeadroomCore/Widgets
+        excludes:
+          - WidgetSnapshotProjector.swift
+      - path: Sources/HeadroomCore/Sync
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kylezantos.headroom.ios.widgets
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Sources/HeadroomIOSWidgets/Info.plist
+        INFOPLIST_KEY_HeadroomAppGroupIdentifier: "$(HEADROOM_APP_GROUP_IDENTIFIER)"
+        CODE_SIGN_ENTITLEMENTS: Sources/HeadroomIOSWidgets/HeadroomIOSWidgets.entitlements
+        TARGETED_DEVICE_FAMILY: 1

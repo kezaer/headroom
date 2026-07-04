@@ -42,7 +42,8 @@ public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thre
         let fileURL = FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: appGroupSuiteName)?
             .appendingPathComponent(Self.fileName)
-        let widgetContainerURL = FileManager.default.homeDirectoryForCurrentUser
+        #if os(macOS)
+        let widgetContainerURL: URL? = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Containers", isDirectory: true)
             .appendingPathComponent(Self.widgetBundleIdentifier, isDirectory: true)
@@ -50,6 +51,9 @@ public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thre
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Application Support", isDirectory: true)
             .appendingPathComponent(Self.fileName)
+        #else
+        let widgetContainerURL: URL? = nil
+        #endif
         let sandboxApplicationSupportURL = Bundle.main.bundleIdentifier == Self.widgetBundleIdentifier
             ? FileManager.default
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)

@@ -55,6 +55,15 @@ struct PreferencesTests {
         #expect(prefs.widgetsEnabled)
     }
 
+    @Test func syncToIPhoneDefaultsOffAndPersists() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(!prefs.syncToIPhoneEnabled)
+        prefs.syncToIPhoneEnabled = true
+        #expect(prefs.syncToIPhoneEnabled)
+        prefs.syncToIPhoneEnabled = false
+        #expect(!prefs.syncToIPhoneEnabled)
+    }
+
     @Test func surfacesDefaultToSubscriptionsOnlyAndPersist() {
         let prefs = Preferences(defaults: freshDefaults())
         #expect(prefs.isSurfaceEnabled(.claudeSubscription))

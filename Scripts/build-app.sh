@@ -27,6 +27,8 @@ SPARKLE_ARTIFACT_URL="https://github.com/sparkle-project/Sparkle/releases/downlo
 HEADROOM_CODESIGN_IDENTITY="${HEADROOM_CODESIGN_IDENTITY:-}"
 HEADROOM_CODESIGN_OPTIONS="${HEADROOM_CODESIGN_OPTIONS:---timestamp=none}"
 HEADROOM_APP_GROUP_IDENTIFIER="${HEADROOM_APP_GROUP_IDENTIFIER:-group.com.kylezantos.headroom}"
+HEADROOM_ENABLE_ICLOUD_ENTITLEMENT="${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT:-0}"
+HEADROOM_TEAM_IDENTIFIER="${HEADROOM_TEAM_IDENTIFIER:-}"
 HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL:-}"
 HEADROOM_SPARKLE_PUBLIC_ED_KEY="${HEADROOM_SPARKLE_PUBLIC_ED_KEY:-VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=}"
 read -r -a CODESIGN_OPTIONS <<< "${HEADROOM_CODESIGN_OPTIONS}"
@@ -54,6 +56,28 @@ sign_path() {
   codesign --force --sign "${CODESIGN_IDENTITY}" "${CODESIGN_OPTIONS[@]}" "$@" "${path}"
 }
 
+derive_team_identifier() {
+  if [[ -n "${HEADROOM_TEAM_IDENTIFIER}" ]]; then
+    printf '%s\n' "${HEADROOM_TEAM_IDENTIFIER}"
+    return
+  fi
+
+  if [[ "${CODESIGN_IDENTITY}" != "-" ]] && command -v openssl >/dev/null 2>&1; then
+    local subject
+    subject="$(security find-certificate -c "${CODESIGN_IDENTITY}" -p 2>/dev/null \
+      | openssl x509 -noout -subject 2>/dev/null \
+      | head -n 1 || true)"
+    local team
+    team="$(printf '%s\n' "${subject}" | sed -n 's/.*OU=\([^,\/]*\).*/\1/p')"
+    if [[ -n "${team}" ]]; then
+      printf '%s\n' "${team}"
+      return
+    fi
+  fi
+
+  sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM:[[:space:]]*\([^[:space:]]*\).*$/\1/p' project.yml | head -n 1
+}
+
 prepare_sparkle_artifact() {
   if [[ -d "${SPARKLE_ARTIFACT_DIR}/Sparkle.xcframework" ]]; then
     return
@@ -73,6 +97,21 @@ prepare_entitlements() {
   cp Sources/HeadroomWidgets/HeadroomWidgets.entitlements "${WIDGET_ENTITLEMENTS}"
   /usr/libexec/PlistBuddy -c "Set :com.apple.security.application-groups:0 ${HEADROOM_APP_GROUP_IDENTIFIER}" "${APP_ENTITLEMENTS}"
   /usr/libexec/PlistBuddy -c "Set :com.apple.security.application-groups:0 ${HEADROOM_APP_GROUP_IDENTIFIER}" "${WIDGET_ENTITLEMENTS}"
+
+  if [[ "${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT}" == "1" ]]; then
+    local team_identifier
+    team_identifier="$(derive_team_identifier)"
+    if [[ -z "${team_identifier}" ]]; then
+      echo "Couldn't derive a Team ID for the iCloud KVS entitlement." >&2
+      echo "Set HEADROOM_TEAM_IDENTIFIER and rerun." >&2
+      exit 65
+    fi
+    /usr/libexec/PlistBuddy -c "Set :com.apple.developer.ubiquity-kvstore-identifier ${team_identifier}.com.kylezantos.headroom" "${APP_ENTITLEMENTS}"
+    /usr/libexec/PlistBuddy -c "Set :com.apple.developer.ubiquity-kvstore-identifier ${team_identifier}.com.kylezantos.headroom" "${WIDGET_ENTITLEMENTS}"
+  else
+    /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-kvstore-identifier" "${APP_ENTITLEMENTS}" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Delete :com.apple.developer.ubiquity-kvstore-identifier" "${WIDGET_ENTITLEMENTS}" 2>/dev/null || true
+  fi
 }
 
 stamp_app_group_info() {
@@ -140,6 +179,7 @@ else
 fi
 echo "→ codesign options: ${HEADROOM_CODESIGN_OPTIONS}"
 echo "→ app group: ${HEADROOM_APP_GROUP_IDENTIFIER}"
+echo "→ iCloud KVS entitlement: ${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT}"
 
 while IFS= read -r dylib; do
   sign_path "${dylib}"

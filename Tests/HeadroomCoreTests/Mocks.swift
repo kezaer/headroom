@@ -199,6 +199,16 @@ final class SpyWidgetExporter: WidgetSnapshotExporting, @unchecked Sendable {
     }
 }
 
+final class FailingWidgetExporter: WidgetSnapshotExporting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _exportCount = 0
+    var exportCount: Int { lock.withLock { _exportCount } }
+
+    func export(_ envelope: WidgetSnapshotEnvelope) {
+        lock.withLock { _exportCount += 1 }
+    }
+}
+
 /// API spend provider double that counts how many times it was fetched.
 final class CountingSpendProvider: APISpendProvider, @unchecked Sendable {
     let id: ProviderID
