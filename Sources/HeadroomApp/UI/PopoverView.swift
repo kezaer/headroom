@@ -9,8 +9,9 @@ import HeadroomCore
 struct PopoverView: View {
     var store: UsageStore
     var preferences = Preferences()
-    var onClose: () -> Void = {}
     var onOpenSettings: () -> Void
+
+    @State private var popoverWindow: NSWindow?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -33,13 +34,16 @@ struct PopoverView: View {
             .frame(width: 320)
             .background(.ultraThinMaterial)
             .glassEffect(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            // Capture the popover's hosting window so opening Settings can dismiss it.
+            .background(WindowAccessor { popoverWindow = $0 })
         }
     }
 
     /// Native pattern: navigating out of the transient menu-bar popover into the persistent
-    /// Settings window dismisses the popover (mirrors Control Center → System Settings).
+    /// Settings window dismisses the popover (mirrors Control Center → System Settings). The
+    /// popover is recreated on next menu-bar click, so closing its window is safe.
     private func openSettingsDismissingPopover() {
-        onClose()
+        popoverWindow?.close()
         onOpenSettings()
     }
 
@@ -77,5 +81,22 @@ struct PopoverView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Resolves the `NSWindow` hosting a SwiftUI view. Used to get a direct handle on the
+/// `MenuBarExtra(.window)` popover window — SwiftUI exposes no first-class dismissal for
+/// it, and matching by private class name is brittle, so we read `view.window` instead.
+private struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onResolve(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { onResolve(nsView.window) }
     }
 }
