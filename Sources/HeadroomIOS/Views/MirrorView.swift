@@ -9,7 +9,7 @@ struct MirrorView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var showAbout = false
+    @State private var showSettings = false
     @State private var headerAppeared = false
 
     var body: some View {
@@ -32,21 +32,34 @@ struct MirrorView: View {
         }
         .background(HeadroomTheme.background(scheme).ignoresSafeArea())
         .refreshable { onRefresh() }
-        .navigationTitle("Usage")
+        .navigationTitle("Headroom")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                navigationTitle
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showAbout = true
+                    showSettings = true
                 } label: {
-                    Image(systemName: "info.circle")
+                    Image(systemName: "gearshape")
                 }
-                .accessibilityLabel("About Headroom")
+                .accessibilityLabel("Settings")
             }
         }
-        .sheet(isPresented: $showAbout) {
-            AboutSheetView(envelope: envelope, syncInfo: syncInfo, appearance: $appearance)
+        .sheet(isPresented: $showSettings) {
+            SettingsSheetView(envelope: envelope, syncInfo: syncInfo, appearance: $appearance)
         }
+    }
+
+    private var navigationTitle: some View {
+        HStack(spacing: 8) {
+            HeadroomAppIconView(size: 28)
+            Text("Headroom")
+                .font(.headline.weight(.semibold))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Headroom")
     }
 
     private var header: some View {

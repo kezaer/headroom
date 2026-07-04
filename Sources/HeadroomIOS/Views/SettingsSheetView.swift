@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct AboutSheetView: View {
+struct SettingsSheetView: View {
     let envelope: WidgetSnapshotEnvelope?
     let syncInfo: IOSCompanionSyncInfo?
     @Binding var appearance: AppearanceSetting
@@ -12,9 +12,8 @@ struct AboutSheetView: View {
         NavigationStack {
             List {
                 Section {
-                    row("Sync", value: syncStatus)
-                    row("Source", value: syncInfo?.sourceDescription ?? "Mac snapshot")
-                    row("Version", value: versionText)
+                    appHeader
+                        .listRowInsets(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
                 }
 
                 Section("Appearance") {
@@ -24,16 +23,27 @@ struct AboutSheetView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                 }
 
-                Section {
-                    Text("Refresh interval, API keys, and renewal dates are managed in Headroom on your Mac. This iPhone only mirrors what the Mac sends.")
+                Section("Sync") {
+                    row("Status", value: syncStatus)
+                    row("Source", value: syncInfo?.sourceDescription ?? "Mac snapshot")
+                    row("Widgets", value: envelope?.status == .enabled ? "Enabled" : "Paused")
+                }
+
+                Section("Managed on Mac") {
+                    Label("Refresh interval, API keys, provider selection, and renewal dates stay in Headroom on your Mac.", systemImage: "macbook")
                         .font(.footnote)
                         .foregroundStyle(HeadroomTheme.secondaryText(scheme))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                Section("App") {
+                    row("Version", value: versionText)
+                }
             }
-            .navigationTitle("About Headroom")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -41,7 +51,21 @@ struct AboutSheetView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
+    }
+
+    private var appHeader: some View {
+        HStack(spacing: 14) {
+            HeadroomAppIconView(size: 48)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Headroom")
+                    .font(.title3.weight(.semibold))
+                Text("iPhone companion")
+                    .font(.subheadline)
+                    .foregroundStyle(HeadroomTheme.secondaryText(scheme))
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func row(_ title: String, value: String) -> some View {
