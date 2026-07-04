@@ -63,12 +63,14 @@ Headroom includes one WidgetKit extension with size-specific layouts:
 
 Enable or pause widget data in Headroom Settings with **Share data with widgets**. Add,
 remove, and resize widgets from macOS itself; Settings controls data export, not OS
-installation. Widget data sharing uses the App Group `group.com.kylezantos.headroom`, so
-the app and extension need matching entitlements under a stable Apple Development
-signature for persistent real-world use. If the App Group is unavailable, widgets show a
-setup state rather than reading provider credentials directly. Local manual-signed builds
-also mirror the redaction-safe widget snapshot into the widget extension container as a
-development fallback while App Group provisioning is being finished.
+installation. Widget data sharing uses an App Group, so the app and extension need
+matching entitlements under a stable signing identity for persistent real-world use. Local
+development defaults to `group.com.kylezantos.headroom`; the release script stamps a
+Developer ID team-prefixed group such as `TEAMID.com.kylezantos.headroom`. If the App
+Group is unavailable, widgets show a setup state rather than reading provider credentials
+directly. Local manual-signed builds also mirror the redaction-safe widget snapshot into
+the widget extension container as a development fallback while App Group provisioning is
+being finished.
 
 ## Robustness (the PTY scrape is inherently fragile, so it's contained)
 
@@ -84,7 +86,7 @@ development fallback while App Group provisioning is being finished.
   can't drift from what Claude Code itself displays.
 - The probe runs off the main actor, on the poll timer (default 5 min) — never per-render.
 
-## Finalizing as a distributable app (optional)
+## Local app build
 
 `./Scripts/build-app.sh` generates `Headroom.xcodeproj` from `project.yml`, builds a real
 macOS app target with an embedded WidgetKit app-extension target, then signs both the app
@@ -103,12 +105,83 @@ A stable Apple Development signature keeps macOS permission grants and App Group
 from re-prompting or failing after each rebuild. Leave App Sandbox **off** for the host
 app (needed to spawn `claude` and read `~/.codex/auth.json`); the widget extension is
 sandboxed and reads only the App Group cache. Notarization isn't needed for a locally
-built/run app. Provide an app icon via `CFBundleIconFile` when you have one.
+built/run app.
+
+## Website release build
+
+For a public website download, local Apple Development signing is not enough. macOS
+Gatekeeper expects a Developer ID-signed and notarized artifact. `Scripts/release-app.sh`
+builds the release app with hardened runtime, submits the app and DMG to Apple's notary
+service, staples the tickets, signs the DMG for Sparkle updates, and verifies both with
+`spctl` / `stapler`.
+
+One-time requirements:
+
+- Active Apple Developer Program membership.
+- A **Developer ID Application** certificate installed in Keychain.
+- Notary credentials stored in the local keychain, or supplied through environment
+  variables.
+- A Sparkle EdDSA key pair, with the private key in your login Keychain and the public key
+  stamped into the release app as `SUPublicEDKey`.
+
+Recommended one-time notary setup:
+
+```bash
+xcrun notarytool store-credentials headroom-notary \
+  --apple-id "you@example.com" \
+  --team-id "TEAMID" \
+  --password "<app-specific-password>"
+```
+
+Recommended one-time Sparkle setup:
+
+```bash
+./.xcode-derived/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys
+```
+
+That stores the private EdDSA key in your login Keychain and prints the public key. Keep
+the private key backed up; use the printed public key as `HEADROOM_SPARKLE_PUBLIC_ED_KEY`.
+The current public key is:
+
+```text
+VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=
+```
+
+Then build the website DMG:
+
+```bash
+HEADROOM_SPARKLE_FEED_URL="https://your-site.example/headroom/appcast.xml" \
+HEADROOM_NOTARY_PROFILE=headroom-notary ./Scripts/release-app.sh
+```
+
+The script writes `dist/Headroom-<version>-<build>.dmg`, which is the file to upload to
+the website. It also writes `dist/Headroom-<version>-<build>.dmg.sparkle-signature.txt`
+for manual appcast work. If `HEADROOM_SPARKLE_UPDATES_DIR` points at a local website
+downloads folder, the script copies the DMG there and runs Sparkle's `generate_appcast`
+tool for that folder with a download URL prefix derived from `HEADROOM_SPARKLE_FEED_URL`
+(override with `HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX` if the DMG is hosted elsewhere).
+If multiple Developer ID Application certificates are installed, pin one:
+
+```bash
+HEADROOM_DEVELOPER_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)" \
+HEADROOM_NOTARY_PROFILE=headroom-notary \
+  ./Scripts/release-app.sh
+```
+
+The host app intentionally remains non-sandboxed for 1.0 so it can spawn the official
+`claude` CLI and read Codex's local auth file. The widget extension remains sandboxed and
+uses only the App Group cache. By default, `Scripts/release-app.sh` derives the release
+App Group from the Developer ID certificate's Team ID (`TEAMID.com.kylezantos.headroom`);
+override `HEADROOM_APP_GROUP_IDENTIFIER` only if you intentionally use another macOS App
+Group id. Before publishing a new DMG, run a clean download-style smoke test: open the
+DMG, drag Headroom to `/Applications`, launch it, verify the menu bar item appears,
+confirm Claude/Codex setup or live states, and check that widgets can be added and read
+the app's exported cache.
 
 ## Status
 
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
 real account and from a bare launch environment), Codex via its endpoint, optional
 OpenAI/Anthropic API spend rows, manual renewal dates, launch-at-login, the Tahoe popover,
-widget cache export, and the bundled widget extension. Remaining polish is an app icon
-and visual/VoiceOver smoke on the running app and widgets.
+widget cache export, app icon, and the bundled widget extension. Remaining release polish
+is Developer ID notarization plus visual/VoiceOver smoke on the running app and widgets.

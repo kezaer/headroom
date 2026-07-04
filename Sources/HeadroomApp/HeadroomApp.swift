@@ -79,10 +79,11 @@ enum Entry {
 }
 
 /// Menu bar app (U1). `MenuBarExtra(.window)` gives a custom Liquid Glass popover
-/// (KTD9). No Dock icon in the shipped app — set `LSUIElement = YES` in the Xcode app
-/// target's Info.plist when finalizing the bundle (U1/KTD8).
+/// (KTD9). No Dock icon in the shipped app — `LSUIElement = YES` is stamped into the
+/// Xcode app target's Info.plist when finalizing the bundle (U1/KTD8).
 struct HeadroomApp: App {
     @State private var store: UsageStore
+    @StateObject private var softwareUpdates = SoftwareUpdateController()
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -101,16 +102,15 @@ struct HeadroomApp: App {
                 .task { await store.start() }
         } label: {
             MenuBarLabel(
-                summary: store.menuBarSummary,
-                showsPercentage: store.showMenuBarPercentage,
-                fill: store.menuBarFill
+                meters: store.menuBarMeters,
+                showsPercentage: store.showMenuBarPercentage
             )
             .task { await store.start() }
         }
         .menuBarExtraStyle(.window)
 
         Window("Headroom Settings", id: "settings") {
-            SettingsView(store: store)
+            SettingsView(store: store, softwareUpdates: softwareUpdates)
         }
         // Hidden title bar: the settings window draws its own header (logo + title) in
         // content, so traffic lights float on a transparent strip. Avoids Tahoe wrapping a

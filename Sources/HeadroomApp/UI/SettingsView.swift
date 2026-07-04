@@ -6,9 +6,11 @@ import HeadroomCore
 /// closes the menu bar popover behind it.
 struct SettingsView: View {
     let store: UsageStore
+    var softwareUpdates: SoftwareUpdateControlling = DisabledSoftwareUpdateController()
     var preferences = Preferences()
     var credentialStore = CredentialStore()
     var launchControl: LaunchAtLoginControlling = LaunchAtLogin()
+    var onDone: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
@@ -58,7 +60,7 @@ struct SettingsView: View {
                 .onChange(of: menuBarFillSource) { _, newValue in
                     store.setMenuBarFillSource(newValue)
                 }
-                Text("Drains with the chosen provider's weekly usage; None keeps the level static.")
+                Text("Drains with weekly usage; Both shows Claude and Codex side by side.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -139,9 +141,14 @@ struct SettingsView: View {
                     try? launchControl.setEnabled(newValue)
                 }
 
+            Button("Check for Updates…") {
+                softwareUpdates.checkForUpdates()
+            }
+            .disabled(!softwareUpdates.canCheckForUpdates)
+
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { onDone?() ?? dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(.horizontal, 20)

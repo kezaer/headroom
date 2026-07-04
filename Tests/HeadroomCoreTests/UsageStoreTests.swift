@@ -237,9 +237,66 @@ struct UsageStoreTests {
         )
 
         #expect(store.menuBarFillSource == .none)   // default
-        store.setMenuBarFillSource(.codex)
-        #expect(store.menuBarFillSource == .codex)
-        #expect(preferences.menuBarFillSource == .codex)
+        store.setMenuBarFillSource(.both)
+        #expect(store.menuBarFillSource == .both)
+        #expect(preferences.menuBarFillSource == .both)
+    }
+
+    @Test func menuBarMetersDefaultToSingleSummary() async {
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 88, resetsAt: reset),
+            ])),
+        ])
+        await store.refreshAll()
+        let meters = store.menuBarMeters
+        #expect(meters.count == 1)
+        #expect(meters[0].summary.providerID == .codex)
+        #expect(meters[0].summary.severity == .critical)
+        #expect(meters[0].fill == nil)      // `.none` uses static vessel level.
+    }
+
+    @Test func menuBarMetersCanShowClaudeAndCodexSideBySide() async {
+        let store = makeStore(source: .both, providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 35, resetsAt: reset),      // 65% left
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 88, resetsAt: reset),      // 12% left
+            ])),
+        ])
+        await store.refreshAll()
+        let meters = store.menuBarMeters
+        #expect(meters.count == 2)
+        #expect(meters[0].summary.providerID == .claude)
+        #expect(meters[0].summary.text == "65%")
+        #expect(meters[0].summary.severity == .healthy)
+        #expect(meters[0].fill == 0.65)
+        #expect(meters[1].summary.providerID == .codex)
+        #expect(meters[1].summary.text == "12%")
+        #expect(meters[1].summary.severity == .critical)
+        #expect(meters[1].fill == 0.12)
+    }
+
+    @Test func menuBarMetersInBothModeKeepProviderSpecificAttention() async {
+        let store = makeStore(source: .both, providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 10, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex",
+                         snapshot: .stale(for: .codex, reason: .needsReauth("Run `codex login`"))),
+        ])
+        await store.refreshAll()
+        let meters = store.menuBarMeters
+        #expect(meters.count == 2)
+        #expect(!meters[0].summary.needsAttention)
+        #expect(meters[1].summary.providerID == .codex)
+        #expect(meters[1].summary.isNeutral)
+        #expect(meters[1].summary.needsAttention)
+        #expect(meters[1].fill == nil)
     }
 
     /// Store whose menu-bar fill source is pre-set, on an isolated defaults suite.

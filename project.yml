@@ -12,6 +12,9 @@ settings:
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: Apple Development
     ENABLE_USER_SCRIPT_SANDBOXING: NO
+    HEADROOM_APP_GROUP_IDENTIFIER: group.com.kylezantos.headroom
+    HEADROOM_SPARKLE_FEED_URL: ""
+    HEADROOM_SPARKLE_PUBLIC_ED_KEY: VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=
 targets:
   HeadroomCore:
     type: library.static
@@ -33,6 +36,8 @@ targets:
       - target: HeadroomCore
       - target: HeadroomWidgets
         embed: true
+      - framework: .xcode-derived/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kylezantos.headroom
@@ -45,9 +50,14 @@ targets:
         INFOPLIST_KEY_CFBundleName: Headroom
         INFOPLIST_KEY_CFBundleShortVersionString: 0.1.0
         INFOPLIST_KEY_CFBundleVersion: 1
+        INFOPLIST_KEY_HeadroomAppGroupIdentifier: "$(HEADROOM_APP_GROUP_IDENTIFIER)"
         INFOPLIST_KEY_LSMinimumSystemVersion: "26.0"
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: Personal use
+        INFOPLIST_KEY_SUAllowsAutomaticUpdates: NO
+        INFOPLIST_KEY_SUEnableAutomaticChecks: YES
+        INFOPLIST_KEY_SUFeedURL: "$(HEADROOM_SPARKLE_FEED_URL)"
+        INFOPLIST_KEY_SUPublicEDKey: "$(HEADROOM_SPARKLE_PUBLIC_ED_KEY)"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
   HeadroomWidgets:
     type: app-extension
@@ -66,5 +76,6 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Sources/HeadroomWidgets/Info.plist
+        INFOPLIST_KEY_HeadroomAppGroupIdentifier: "$(HEADROOM_APP_GROUP_IDENTIFIER)"
         CODE_SIGN_ENTITLEMENTS: Sources/HeadroomWidgets/HeadroomWidgets.entitlements
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"

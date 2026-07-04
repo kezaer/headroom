@@ -39,6 +39,13 @@ struct PreferencesTests {
         #expect(prefs.showMenuBarPercentage)
     }
 
+    @Test func menuBarFillSourceSupportsBothProviders() {
+        let prefs = Preferences(defaults: freshDefaults())
+        #expect(prefs.menuBarFillSource == .none)
+        prefs.menuBarFillSource = .both
+        #expect(prefs.menuBarFillSource == .both)
+    }
+
     @Test func widgetsEnabledDefaultsOnAndPersists() {
         let prefs = Preferences(defaults: freshDefaults())
         #expect(prefs.widgetsEnabled)
