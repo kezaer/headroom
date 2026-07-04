@@ -7,15 +7,17 @@ APP="Headroom.app"
 DIST_DIR="dist"
 WORK_DIR="${DIST_DIR}/release-work"
 APP_ZIP="${WORK_DIR}/Headroom-app-notary.zip"
+DEFAULT_SPARKLE_UPDATES_DIR="${DIST_DIR}/headroom.zantos.co"
+LATEST_DMG_NAME="Headroom.dmg"
 HEADROOM_DEVELOPER_ID_APPLICATION="${HEADROOM_DEVELOPER_ID_APPLICATION:-}"
 HEADROOM_NOTARY_PROFILE="${HEADROOM_NOTARY_PROFILE:-}"
 HEADROOM_APPLE_ID="${HEADROOM_APPLE_ID:-}"
 HEADROOM_TEAM_ID="${HEADROOM_TEAM_ID:-}"
 HEADROOM_APP_SPECIFIC_PASSWORD="${HEADROOM_APP_SPECIFIC_PASSWORD:-}"
 HEADROOM_APP_GROUP_IDENTIFIER="${HEADROOM_APP_GROUP_IDENTIFIER:-}"
-HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL:-}"
+HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL:-https://headroom.zantos.co/appcast.xml}"
 HEADROOM_SPARKLE_PUBLIC_ED_KEY="${HEADROOM_SPARKLE_PUBLIC_ED_KEY:-VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=}"
-HEADROOM_SPARKLE_UPDATES_DIR="${HEADROOM_SPARKLE_UPDATES_DIR:-}"
+HEADROOM_SPARKLE_UPDATES_DIR="${HEADROOM_SPARKLE_UPDATES_DIR:-${DEFAULT_SPARKLE_UPDATES_DIR}}"
 HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX="${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
 
 usage() {
@@ -34,11 +36,11 @@ Required:
 Optional:
   HEADROOM_DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)"
   HEADROOM_APP_GROUP_IDENTIFIER="TEAMID.com.kylezantos.headroom"
-  HEADROOM_SPARKLE_UPDATES_DIR="/path/to/website/downloads"
-  HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX="https://example.com/headroom/"
+  HEADROOM_SPARKLE_UPDATES_DIR="dist/headroom.zantos.co"
+  HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX="https://headroom.zantos.co/"
 
-Required for public releases with in-app update prompts:
-  HEADROOM_SPARKLE_FEED_URL="https://example.com/headroom/appcast.xml"
+Defaults for public releases with in-app update prompts:
+  HEADROOM_SPARKLE_FEED_URL="https://headroom.zantos.co/appcast.xml"
   HEADROOM_SPARKLE_PUBLIC_ED_KEY="<base64-public-key-from-Sparkle-generate_keys>"
 
 One-time notary profile setup:
@@ -69,6 +71,68 @@ find_sparkle_tool() {
     exit 69
   fi
   printf '%s\n' "${candidate}"
+}
+
+detach_dmg_mount() {
+  hdiutil detach "${DMG_MOUNT_DIR}" -force >/dev/null 2>&1 || true
+}
+
+create_drag_install_dmg() {
+  rm -f "${DMG_RW_PATH}" "${DMG_PATH}"
+  rm -rf "${DMG_MOUNT_DIR}"
+  mkdir -p "${DMG_MOUNT_DIR}"
+
+  echo "→ creating writable installer image"
+  hdiutil create \
+    -volname "Headroom" \
+    -srcfolder "${STAGING_DIR}" \
+    -fs HFS+ \
+    -format UDRW \
+    -ov \
+    "${DMG_RW_PATH}" >/dev/null
+
+  echo "→ styling DMG install window"
+  hdiutil attach "${DMG_RW_PATH}" \
+    -mountpoint "${DMG_MOUNT_DIR}" \
+    -readwrite \
+    -noverify \
+    -nobrowse >/dev/null
+  trap detach_dmg_mount RETURN
+
+  osascript <<'APPLESCRIPT'
+tell application "Finder"
+  tell disk "Headroom"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {200, 120, 760, 460}
+
+    set viewOptions to icon view options of container window
+    set arrangement of viewOptions to not arranged
+    set icon size of viewOptions to 96
+    set text size of viewOptions to 13
+
+    set position of item "Headroom.app" to {170, 165}
+    set position of item "Applications" to {390, 165}
+
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+APPLESCRIPT
+
+  sync
+  detach_dmg_mount
+  trap - RETURN
+
+  echo "→ compressing installer image"
+  hdiutil convert "${DMG_RW_PATH}" \
+    -format UDZO \
+    -imagekey zlib-level=9 \
+    -o "${DMG_PATH}" >/dev/null
+  rm -f "${DMG_RW_PATH}"
 }
 
 select_developer_id_application() {
@@ -142,6 +206,8 @@ VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Contents/Info.plist")"
 DMG_NAME="Headroom-${VERSION}-${BUILD}.dmg"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
+DMG_RW_PATH="${WORK_DIR}/Headroom-${VERSION}-${BUILD}-rw.dmg"
+DMG_MOUNT_DIR="${WORK_DIR}/dmg-mount"
 STAGING_DIR="${WORK_DIR}/dmg-root"
 
 rm -rf "${WORK_DIR}"
@@ -161,12 +227,7 @@ spctl -a -vvv -t open --context context:primary-signature "${APP}"
 echo "→ assembling DMG"
 ditto "${APP}" "${STAGING_DIR}/${APP}"
 ln -s /Applications "${STAGING_DIR}/Applications"
-hdiutil create \
-  -volname "Headroom" \
-  -srcfolder "${STAGING_DIR}" \
-  -format UDZO \
-  -ov \
-  "${DMG_PATH}"
+create_drag_install_dmg
 
 echo "→ signing DMG"
 codesign --force --timestamp --sign "${DEVELOPER_ID_APPLICATION}" "${DMG_PATH}"
@@ -187,13 +248,17 @@ SPARKLE_SIGN_UPDATE="$(find_sparkle_tool sign_update)"
 if [[ -n "${HEADROOM_SPARKLE_UPDATES_DIR}" ]]; then
   echo "→ updating Sparkle appcast"
   SPARKLE_GENERATE_APPCAST="$(find_sparkle_tool generate_appcast)"
+  LATEST_DMG_PATH="${HEADROOM_SPARKLE_UPDATES_DIR}/${LATEST_DMG_NAME}"
   mkdir -p "${HEADROOM_SPARKLE_UPDATES_DIR}"
+  rm -f "${LATEST_DMG_PATH}"
   ditto "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${DMG_NAME}"
   "${SPARKLE_GENERATE_APPCAST}" \
     --download-url-prefix "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" \
     "${HEADROOM_SPARKLE_UPDATES_DIR}"
+  ditto "${DMG_PATH}" "${LATEST_DMG_PATH}"
 fi
 
 echo "✓ Release artifact ready: ${DMG_PATH}"
-echo "  Upload this DMG to your website download link."
+echo "  Website assets: ${HEADROOM_SPARKLE_UPDATES_DIR}"
+echo "  Download link: https://headroom.zantos.co/${LATEST_DMG_NAME}"
 echo "  Sparkle signature: ${DMG_PATH}.sparkle-signature.txt"

@@ -194,16 +194,20 @@ VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=
 Then build the website DMG:
 
 ```bash
-HEADROOM_SPARKLE_FEED_URL="https://your-site.example/headroom/appcast.xml" \
 HEADROOM_NOTARY_PROFILE=headroom-notary ./Scripts/release-app.sh
 ```
 
-The script writes `dist/Headroom-<version>-<build>.dmg`, which is the file to upload to
-the website. It also writes `dist/Headroom-<version>-<build>.dmg.sparkle-signature.txt`
-for manual appcast work. If `HEADROOM_SPARKLE_UPDATES_DIR` points at a local website
-downloads folder, the script copies the DMG there and runs Sparkle's `generate_appcast`
-tool for that folder with a download URL prefix derived from `HEADROOM_SPARKLE_FEED_URL`
-(override with `HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX` if the DMG is hosted elsewhere).
+By default, the release app is stamped with the Sparkle feed URL
+`https://headroom.zantos.co/appcast.xml`, matching the public download page hosted at
+`https://headroom.zantos.co`. Override `HEADROOM_SPARKLE_FEED_URL` only if the appcast
+moves.
+
+The script writes `dist/Headroom-<version>-<build>.dmg` and signs
+`dist/Headroom-<version>-<build>.dmg.sparkle-signature.txt`. By default it also prepares
+the website payload in `dist/headroom.zantos.co/`: a versioned DMG for Sparkle appcast
+history, `appcast.xml`, and a stable `Headroom.dmg` for the download button at
+`https://headroom.zantos.co/Headroom.dmg`. The DMG opens as a drag installer with
+`Headroom.app` next to an `/Applications` alias.
 If multiple Developer ID Application certificates are installed, pin one:
 
 ```bash
@@ -221,6 +225,39 @@ Group id. Before publishing a new DMG, run a clean download-style smoke test: op
 DMG, drag Headroom to `/Applications`, launch it, verify the menu bar item appears,
 confirm Claude/Codex setup or live states, and check that widgets can be added and read
 the app's exported cache.
+
+## iOS distribution
+
+The iPhone companion app and iOS widgets are distributed through Apple's normal iOS
+channels, not through Sparkle, DMG packaging, or Developer ID notarization. Use TestFlight
+for beta builds while the desktop release is getting polished, then submit the same app
+record through App Store review for public distribution. Ad Hoc builds are only for
+registered-device testing and are not the update mechanism for users.
+
+Build a local App Store Connect export:
+
+```bash
+./Scripts/release-ios-testflight.sh
+```
+
+Upload the archive to App Store Connect for TestFlight processing:
+
+```bash
+HEADROOM_IOS_UPLOAD=1 ./Scripts/release-ios-testflight.sh
+```
+
+The upload path requires an App Store Connect app record for
+`com.kylezantos.headroom.ios` and either an authenticated Xcode account or App Store
+Connect API credentials. If upload fails with `Error Downloading App Information`, create
+or confirm the App Store Connect app record for that bundle ID first.
+
+```bash
+HEADROOM_ASC_KEY_PATH="/path/to/AuthKey_KEYID.p8" \
+HEADROOM_ASC_KEY_ID="KEYID" \
+HEADROOM_ASC_ISSUER_ID="ISSUER-ID" \
+HEADROOM_IOS_UPLOAD=1 \
+  ./Scripts/release-ios-testflight.sh
+```
 
 ## Status
 
