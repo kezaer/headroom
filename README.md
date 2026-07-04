@@ -4,8 +4,9 @@ A macOS menu bar app that shows how much of your AI-subscription usage remains �
 5-hour and weekly windows, when each resets, and a manually-entered monthly renewal
 date — for **Anthropic Claude** and **ChatGPT/Codex**, side by side. It can also show
 optional API dollar spend in a separate section for users who use metered OpenAI or
-Anthropic APIs, and it bundles macOS widgets for small, medium, and large glanceable
-desktop / Notification Center views.
+Anthropic APIs, bundles macOS widgets for small, medium, and large glanceable desktop /
+Notification Center views, and includes an iPhone companion app + widgets that read a
+redaction-safe snapshot synced from the Mac through iCloud Key-Value Store.
 
 ## How it gets the data (and why this way)
 
@@ -31,6 +32,9 @@ desktop / Notification Center views.
 swift build          # builds HeadroomCore + Headroom + HeadroomWidgets
 swift test
 ./Scripts/build-app.sh   # produces Headroom.app (menu bar / LSUIElement), then: open Headroom.app
+xcodebuild -project Headroom.xcodeproj -scheme HeadroomIOS \
+  -configuration Debug -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath .xcode-derived build
 ```
 
 Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe). The app bundle build also requires
@@ -52,6 +56,10 @@ Claude path works on your machine.
 - `Sources/HeadroomWidgets` — the WidgetKit extension. It reads only the redaction-safe
   App Group cache written by the app; it never spawns `claude`, reads credentials, or
   calls provider endpoints.
+- `Sources/HeadroomIOS` — the iPhone companion shell. It reads the synced snapshot only;
+  no subscription credentials or provider probes ship to iOS.
+- `Sources/HeadroomIOSWidgets` — the iPhone WidgetKit extension, backed by the same synced
+  snapshot contract as the companion app.
 
 ## Widgets
 
@@ -71,6 +79,40 @@ Group is unavailable, widgets show a setup state rather than reading provider cr
 directly. Local manual-signed builds also mirror the redaction-safe widget snapshot into
 the widget extension container as a development fallback while App Group provisioning is
 being finished.
+
+## iPhone companion
+
+Enable **Sync snapshot to iPhone** in Headroom Settings to publish the same widget-safe
+summary through iCloud Key-Value Store. The synced payload contains provider names,
+window labels, percentages, reset labels, freshness, and update time; it does not include
+Claude/Codex credentials, API keys, raw auth files, or provider endpoints. The iPhone app
+and iPhone widgets are read-only views over that snapshot.
+
+Local simulator smoke test:
+
+```bash
+xcodegen generate
+xcodebuild -project Headroom.xcodeproj -scheme HeadroomIOS \
+  -configuration Debug -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath .xcode-derived build
+xcrun simctl boot "iPhone 17" || true
+xcrun simctl install booted .xcode-derived/Build/Products/Debug-iphonesimulator/HeadroomIOS.app
+xcrun simctl launch booted com.kylezantos.headroom.ios
+```
+
+The simulator can verify build/install/launch, entitlements, and empty/setup states. Full
+Mac-to-iPhone sync requires both the Mac app and iPhone build to be signed with the same
+Apple team, iCloud Key-Value Store enabled for `com.kylezantos.headroom`, and the same
+iCloud account on both devices. After the Mac publishes a snapshot, open the iPhone app
+or add the Headroom iPhone widget to confirm the synced usage summary appears.
+
+`Scripts/build-app.sh debug` strips the iCloud KVS entitlement by default so a local
+manually assembled app can launch without a provisioning profile. To test real iCloud
+sync from that script, use a provisioned signing setup and opt in explicitly:
+
+```bash
+HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1 ./Scripts/build-app.sh debug
+```
 
 ## Robustness (the PTY scrape is inherently fragile, so it's contained)
 
@@ -183,5 +225,6 @@ the app's exported cache.
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
 real account and from a bare launch environment), Codex via its endpoint, optional
 OpenAI/Anthropic API spend rows, manual renewal dates, launch-at-login, the Tahoe popover,
-widget cache export, app icon, and the bundled widget extension. Remaining release polish
-is Developer ID notarization plus visual/VoiceOver smoke on the running app and widgets.
+widget cache export, app icon, the bundled macOS widget extension, and the iPhone
+companion/widget targets. Remaining release polish is Developer ID notarization plus
+visual/VoiceOver smoke on the running app and widgets.

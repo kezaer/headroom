@@ -12,6 +12,7 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let showMenuBarPercentage = "showMenuBarPercentage"
         static let menuBarFillSource = "menuBarFillSource"
         static let widgetsEnabled = "widgetsEnabled"
+        static let syncToIPhoneEnabled = "syncToIPhoneEnabled"
         static let apiSpendPeriod = "apiSpendPeriod"
         static func renewal(_ id: ProviderID) -> String { "renewalDate.\(id.raw)" }
         static func surfaceEnabled(_ surface: UsageSurface) -> String { "surfaceEnabled.\(surface.rawValue)" }
@@ -48,6 +49,11 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
             return defaults.bool(forKey: Key.widgetsEnabled)
         }
         nonmutating set { defaults.set(newValue, forKey: Key.widgetsEnabled) }
+    }
+
+    public var syncToIPhoneEnabled: Bool {
+        get { defaults.bool(forKey: Key.syncToIPhoneEnabled) }
+        nonmutating set { defaults.set(newValue, forKey: Key.syncToIPhoneEnabled) }
     }
 
     public var apiSpendPeriod: APISpendPeriod {

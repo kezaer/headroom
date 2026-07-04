@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var showMenuBarPercentage = false
     @State private var menuBarFillSource: MenuBarFillSource = .none
     @State private var widgetsEnabled = true
+    @State private var syncToIPhoneEnabled = false
     @State private var launchAtLogin = false
     @State private var renewalDates: [ProviderID: Date] = [:]
     @State private var apiSpendPeriod: APISpendPeriod = .currentMonth
@@ -65,10 +66,16 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            WidgetSettingsSection(widgetsEnabled: $widgetsEnabled)
-                .onChange(of: widgetsEnabled) { _, newValue in
-                    store.setWidgetsEnabled(newValue)
-                }
+            WidgetSettingsSection(
+                widgetsEnabled: $widgetsEnabled,
+                syncToIPhoneEnabled: $syncToIPhoneEnabled
+            )
+            .onChange(of: widgetsEnabled) { _, newValue in
+                store.setWidgetsEnabled(newValue)
+            }
+            .onChange(of: syncToIPhoneEnabled) { _, newValue in
+                store.setSyncToIPhoneEnabled(newValue)
+            }
 
             Divider()
 
@@ -168,6 +175,7 @@ struct SettingsView: View {
             showMenuBarPercentage = store.showMenuBarPercentage
             menuBarFillSource = store.menuBarFillSource
             widgetsEnabled = store.widgetsEnabled
+            syncToIPhoneEnabled = store.syncToIPhoneEnabled
             apiSpendPeriod = store.apiSpendPeriod
             launchAtLogin = launchControl.isEnabled
             for id in [ProviderID.claude, .codex] {

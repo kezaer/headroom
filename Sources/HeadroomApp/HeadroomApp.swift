@@ -189,7 +189,8 @@ enum AppComposition {
             providers: providers(credentials: credentials),
             apiSpendProviders: apiSpendProviders(credentials: credentials),
             preferences: preferences,
-            widgetExporter: widgetExporter()
+            widgetExporter: widgetExporter(),
+            phoneSyncExporter: phoneSyncExporter()
         )
     }
 
@@ -215,5 +216,9 @@ enum AppComposition {
         WidgetSnapshotExporter(cache: .appGroup()) {
             WidgetCenter.shared.reloadAllTimelines()
         }
+    }
+
+    static func phoneSyncExporter() -> any WidgetSnapshotExporting {
+        iCloudSnapshotPublisher(sync: iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore()))
     }
 }

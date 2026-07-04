@@ -347,6 +347,49 @@ struct UsageStoreTests {
         #expect(exporter.exports.last?.providers.isEmpty == true)
     }
 
+    @Test func phoneSyncDefaultsOffAndExportsOnlyWhenEnabled() async {
+        let suite = "headroom.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        let phoneExporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+                ])),
+            ],
+            preferences: preferences,
+            phoneSyncExporter: phoneExporter
+        )
+
+        await store.refreshAll()
+        #expect(!store.syncToIPhoneEnabled)
+        #expect(phoneExporter.exports.last?.status == .disabled)
+        #expect(phoneExporter.exports.last?.providers.isEmpty == true)
+
+        store.setSyncToIPhoneEnabled(true)
+        #expect(preferences.syncToIPhoneEnabled)
+        #expect(phoneExporter.exports.last?.providers.first?.weeklyWindow?.percentRemaining == 80)
+    }
+
+    @Test func phoneSyncFailureDoesNotFailRefreshOrMutateProviderFreshness() async {
+        let failingExporter = FailingWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                    UsageWindow(kind: .weekly, utilization: 10, resetsAt: reset),
+                ])),
+            ],
+            phoneSyncExporter: failingExporter
+        )
+
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .codex).freshness == .live)
+        #expect(failingExporter.exportCount == 1)
+    }
+
     @Test func apiSpendProvidersOnlyFetchWhenEnabled() async {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

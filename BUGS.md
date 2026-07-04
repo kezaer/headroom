@@ -33,3 +33,10 @@ official `claude` CLI's `/usage` panel instead.
   shape is baked in). Regenerate all sizes with `node Scripts/gen-app-icon.mjs` (master:
   `design/vessel-app-icon.svg`).
 - `MenuBarLabel` uses a fixed font size (menu bar height is OS-constrained).
+
+## Companion platforms
+
+- **watchOS companion is deferred.** It should probably reuse the iCloud snapshot contract,
+  but it needs separate watch targets, signing/provisioning, widget complications or a
+  Watch app surface, and real-device QA. Treat it as a follow-up rather than folding it
+  into the iPhone companion branch.
