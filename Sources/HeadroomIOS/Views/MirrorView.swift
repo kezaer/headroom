@@ -53,11 +53,12 @@ struct MirrorView: View {
     }
 
     private var navigationTitle: some View {
-        HStack(spacing: 8) {
-            HeadroomAppIconView(size: 28)
+        HStack(spacing: 7) {
+            HeadroomAppIconView(size: 26)
             Text("Headroom")
-                .font(.headline.weight(.semibold))
+                .font(.system(size: 17, weight: .semibold))
         }
+        .fixedSize()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Headroom")
     }

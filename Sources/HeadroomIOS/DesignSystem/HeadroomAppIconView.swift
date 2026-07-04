@@ -6,8 +6,6 @@ import UIKit
 struct HeadroomAppIconView: View {
     var size: CGFloat = 30
 
-    @Environment(\.colorScheme) private var scheme
-
     var body: some View {
         Group {
             #if canImport(UIKit)
@@ -24,11 +22,7 @@ struct HeadroomAppIconView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                .stroke(Color.white.opacity(scheme == .dark ? 0.18 : 0.55), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(scheme == .dark ? 0.20 : 0.10), radius: 8, y: 4)
+        .shadow(color: .black.opacity(0.10), radius: size * 0.16, y: size * 0.06)
         .accessibilityHidden(true)
     }
 

@@ -28,9 +28,9 @@ official `claude` CLI's `/usage` panel instead.
 ## Polish
 
 - ~~App icon — user to provide.~~ Done: Vessel `AppIcon.appiconset` (16–1024), wired via
-  `ASSETCATALOG_COMPILER_APPICON_NAME`. The art is clipped to a true **squircle** with a
-  transparent margin (macOS draws the PNG as-is — it does NOT auto-mask like iOS, so the
-  shape is baked in). Regenerate all sizes with `node Scripts/gen-app-icon.mjs` (master:
+  `ASSETCATALOG_COMPILER_APPICON_NAME`. The artwork is full-bleed square PNG output so iOS,
+  iPadOS, and macOS can apply their native icon shape without a second baked-in frame.
+  Regenerate all sizes with `node Scripts/gen-app-icon.mjs` (master:
   `design/vessel-app-icon.svg`).
 - `MenuBarLabel` uses a fixed font size (menu bar height is OS-constrained).
 
