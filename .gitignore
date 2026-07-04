@@ -11,6 +11,7 @@ DerivedData/
 /.xcode-derived-device/
 /.xcode-derived-ios/
 /.xcode-derived-mac-provisioned/
+/.xcode-derived-mac-signed/
 /.codex/
 /scratchpad
 /dist
