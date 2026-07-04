@@ -28,11 +28,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             // Custom header (the window uses a hidden title bar): the vessel logo anchors
             // the title, drawn just below the floating traffic lights.
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 VesselMark()
-                    .frame(width: 12, height: 17)
+                    .frame(width: 17, height: 30)
                 Text("Headroom Settings")
-                    .font(.headline)
+                    .font(.title2.weight(.semibold))
             }
             .padding(.bottom, 2)
 
@@ -263,30 +263,48 @@ private struct RenewalDateField: View {
     }
 }
 
-/// The Headroom identity mark drawn as a crisp vector: a capsule vessel filled from the
-/// bottom (the empty space on top *is* the headroom). Rendered directly so it stays sharp
-/// at title-bar size — the full app icon (a detailed rounded-square) turns to mud when
-/// shrunk to ~18pt.
+/// The Headroom identity mark drawn as a crisp vector — a miniature of the app icon: a
+/// capsule vessel filled from the bottom (the empty space on top *is* the headroom), with a
+/// green liquid gradient, a bright meniscus surface line, and a metallic rim. Rendered as a
+/// vector so it stays sharp at header size (the full app-icon PNG turns to mud that small).
+/// The `0.557` frame aspect ratio matches the app-icon capsule (330×592); anything squatter
+/// reads as a blob rather than the vessel.
 private struct VesselMark: View {
-    /// Static half-fill matching the app icon; the mark is decorative here, not live.
-    var fillFraction: CGFloat = 0.5
+    /// Static fill matching the app icon (`0.46`); the mark is decorative here, not live.
+    var fillFraction: CGFloat = 0.46
 
     var body: some View {
         GeometryReader { geo in
-            let lineWidth: CGFloat = 1.4
-            ZStack {
-                Capsule()
-                    .strokeBorder(Color.primary.opacity(0.55), lineWidth: lineWidth)
-                Capsule()
-                    .inset(by: lineWidth + 0.6)
-                    .fill(Color(red: 0.29, green: 0.80, blue: 0.48))
-                    .mask {
+            let w = geo.size.width, h = geo.size.height
+            let rim = max(1.3, w * 0.12)
+            ZStack(alignment: .bottom) {
+                // Full-size base so the ZStack fills the frame; without it the ZStack shrinks
+                // to the liquid's height and `.frame` centers it — the "floating pill" bug.
+                Color.clear
+                Rectangle()
+                    .fill(LinearGradient(
+                        colors: [Color(red: 0.58, green: 1.00, blue: 0.78),
+                                 Color(red: 0.29, green: 0.87, blue: 0.59),
+                                 Color(red: 0.12, green: 0.67, blue: 0.44)],
+                        startPoint: .top, endPoint: .bottom))
+                    .frame(height: h * fillFraction)
+                    .overlay(alignment: .top) {
+                        // Bright meniscus line at the liquid surface, like the icon's glow.
                         Rectangle()
-                            .frame(height: geo.size.height * fillFraction)
-                            .frame(maxHeight: .infinity, alignment: .bottom)
+                            .fill(Color(red: 0.92, green: 1.00, blue: 0.96))
+                            .frame(height: max(1, h * 0.035))
+                            .opacity(0.6)
                     }
             }
-            .frame(width: geo.size.width, height: geo.size.height)
+            .frame(width: w, height: h)
+            .clipShape(Capsule())
+            // Adaptive rim so it defines the capsule in both light and dark settings windows.
+            .overlay(
+                Capsule().strokeBorder(
+                    LinearGradient(colors: [Color.primary.opacity(0.72), Color.primary.opacity(0.42)],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: rim)
+            )
         }
     }
 }
