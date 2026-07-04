@@ -40,6 +40,19 @@ public struct MenuBarSummary: Sendable, Equatable {
     }
 }
 
+/// One compact status unit for the menu bar. Single-provider modes render one meter;
+/// `Both` renders one per enabled provider so Claude and Codex can be scanned together.
+public struct MenuBarMeter: Sendable, Equatable {
+    public let summary: MenuBarSummary
+    /// 0...1 fill for the vessel, or nil for the static decorative level.
+    public let fill: Double?
+
+    public init(summary: MenuBarSummary, fill: Double?) {
+        self.summary = summary
+        self.fill = fill
+    }
+}
+
 /// The observable view model the UI and menu bar label bind to (U6). `@MainActor`
 /// and `@Observable`: snapshots are published on the main actor; providers are
 /// fetched concurrently off-main (KTD10). Per-provider isolation — one provider's
@@ -139,6 +152,18 @@ public final class UsageStore {
               let weekly = weeklyWindow(for: id)
         else { return nil }
         return weekly.window.percentRemaining / 100
+    }
+
+    /// Render-ready menu bar meters. In `Both` mode each enabled provider gets its own
+    /// vessel/percentage pair; other modes keep the existing single compact summary.
+    public var menuBarMeters: [MenuBarMeter] {
+        guard menuBarFillSource == .both else {
+            return [MenuBarMeter(summary: menuBarSummary, fill: menuBarFill)]
+        }
+
+        let ids = [ProviderID.claude, .codex].filter { providerOrder.contains($0) }
+        let meters = ids.map { providerMenuBarMeter(for: $0) }
+        return meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
     }
 
     public var widgetsEnabled: Bool { preferences.widgetsEnabled }
@@ -284,6 +309,42 @@ public final class UsageStore {
         }
         return providerOrder.compactMap { weeklyWindow(for: $0) }
             .min { $0.window.percentRemaining < $1.window.percentRemaining }
+    }
+
+    private func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {
+        let needsAttention = providerNeedsAttention(id)
+        guard let weekly = weeklyWindow(for: id) else {
+            let name = displayNames[id] ?? id.raw
+            return MenuBarMeter(
+                summary: MenuBarSummary(
+                    text: "—",
+                    providerID: id,
+                    detail: "\(name) weekly",
+                    isNeutral: true,
+                    needsAttention: needsAttention
+                ),
+                fill: nil
+            )
+        }
+
+        let pct = Int(weekly.window.percentRemaining.rounded())
+        let name = displayNames[id] ?? id.raw
+        return MenuBarMeter(
+            summary: MenuBarSummary(
+                text: "\(pct)%",
+                providerID: id,
+                detail: "\(name) weekly",
+                isNeutral: false,
+                severity: weekly.window.severity,
+                needsAttention: needsAttention
+            ),
+            fill: weekly.window.percentRemaining / 100
+        )
+    }
+
+    private func providerNeedsAttention(_ id: ProviderID) -> Bool {
+        if case .stale(let reason) = snapshots[id]?.freshness { return reason.isPermanent }
+        return false
     }
 
     private func weeklyWindow(for id: ProviderID) -> (id: ProviderID, window: UsageWindow)? {

@@ -217,11 +217,12 @@ public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatabl
     case none
     case claude
     case codex
+    case both
 
     /// The provider whose weekly window sets the fill, or nil for the static glyph.
     public var providerID: ProviderID? {
         switch self {
-        case .none: return nil
+        case .none, .both: return nil
         case .claude: return .claude
         case .codex: return .codex
         }
@@ -232,6 +233,7 @@ public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatabl
         case .none: return "None"
         case .claude: return "Claude"
         case .codex: return "Codex"
+        case .both: return "Both"
         }
     }
 }

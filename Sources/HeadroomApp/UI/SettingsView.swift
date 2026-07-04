@@ -10,6 +10,7 @@ struct SettingsView: View {
     var preferences = Preferences()
     var credentialStore = CredentialStore()
     var launchControl: LaunchAtLoginControlling = LaunchAtLogin()
+    var onDone: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
@@ -59,7 +60,7 @@ struct SettingsView: View {
                 .onChange(of: menuBarFillSource) { _, newValue in
                     store.setMenuBarFillSource(newValue)
                 }
-                Text("Drains with the chosen provider's weekly usage; None keeps the level static.")
+                Text("Drains with weekly usage; Both shows Claude and Codex side by side.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -147,7 +148,7 @@ struct SettingsView: View {
 
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { onDone?() ?? dismiss() }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(.horizontal, 20)
@@ -273,16 +274,19 @@ private struct VesselMark: View {
     var body: some View {
         GeometryReader { geo in
             let lineWidth: CGFloat = 1.4
-            ZStack(alignment: .bottom) {
-                Rectangle()
+            ZStack {
+                Capsule()
+                    .strokeBorder(Color.primary.opacity(0.55), lineWidth: lineWidth)
+                Capsule()
+                    .inset(by: lineWidth + 0.6)
                     .fill(Color(red: 0.29, green: 0.80, blue: 0.48))
-                    .frame(height: geo.size.height * fillFraction)
+                    .mask {
+                        Rectangle()
+                            .frame(height: geo.size.height * fillFraction)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule().strokeBorder(Color.primary.opacity(0.55), lineWidth: lineWidth)
-            )
         }
     }
 }

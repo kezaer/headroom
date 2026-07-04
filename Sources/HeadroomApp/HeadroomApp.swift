@@ -78,90 +78,22 @@ enum Entry {
     }
 }
 
-/// Menu bar app (U1). `MenuBarExtra(.window)` gives a custom Liquid Glass popover
-/// (KTD9). No Dock icon in the shipped app — set `LSUIElement = YES` in the Xcode app
-/// target's Info.plist when finalizing the bundle (U1/KTD8).
+/// Menu bar app (U1). The menu bar shell is owned by `StatusItemController`
+/// (`NSStatusItem`) so AppKit can provide native status-item tooltip behavior. No Dock
+/// icon in the shipped app — `LSUIElement = YES` is stamped into the Xcode app target.
 struct HeadroomApp: App {
-    @State private var store: UsageStore
-    @StateObject private var softwareUpdates = SoftwareUpdateController()
-    @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     @MainActor
     init() {
         let store = AppComposition.store()
-        _store = State(initialValue: store)
-        AppDelegate.startUsageStore = { Task { await store.start() } }
+        AppDelegate.configure(store: store, softwareUpdates: SoftwareUpdateController())
     }
 
     var body: some Scene {
-        MenuBarExtra {
-            PopoverView(store: store) {
-                openSettings()
-            }
-                .task { await store.start() }
-        } label: {
-            MenuBarLabel(
-                summary: store.menuBarSummary,
-                showsPercentage: store.showMenuBarPercentage,
-                fill: store.menuBarFill
-            )
-            .task { await store.start() }
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
-
-        Window("Headroom Settings", id: "settings") {
-            SettingsView(store: store, softwareUpdates: softwareUpdates)
-        }
-        // Hidden title bar: the settings window draws its own header (logo + title) in
-        // content, so traffic lights float on a transparent strip. Avoids Tahoe wrapping a
-        // toolbar item in a Liquid Glass container. (Standard modern-macOS utility pattern.)
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultPosition(.center)
-    }
-
-    /// Open (or re-focus) the Settings window. An accessory / `LSUIElement` app is not
-    /// activated by `openWindow` alone, so the window would open *behind* the frontmost
-    /// app or never take keyboard focus — and clicking the gear a second time would look
-    /// like a no-op because the already-open window stays buried. Activating brings it
-    /// forward and makes it key on both first open and re-open. (`Done`/⌘W close it via
-    /// the view's `dismiss`; this method reopens cleanly afterward.)
-    private func openSettings() {
-        openWindow(id: "settings")
-        NSApp.activate(ignoringOtherApps: true)
-        // `.defaultPosition(.center)` (and SwiftUI's persisted frame) can land the window on
-        // whichever display it was last on — often the wrong one on a multi-monitor setup.
-        // A menu-bar app is invoked from wherever the user is looking, so re-home it onto the
-        // screen under the cursor. Deferred a runloop tick so the NSWindow exists.
-        DispatchQueue.main.async { Self.placeSettingsWindowOnActiveScreen() }
-    }
-
-    /// Center the Settings window on the active screen (the one under the cursor). If the
-    /// window is already showing on that screen, its current position is respected so a
-    /// user's manual placement isn't yanked back to center on every re-open.
-    private static func placeSettingsWindowOnActiveScreen() {
-        let mouse = NSEvent.mouseLocation
-        let activeScreen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        guard let activeScreen,
-              let window = NSApp.windows.first(where: { $0.title == "Headroom Settings" })
-        else { return }
-
-        if window.isVisible, activeScreen.frame.intersects(window.frame) { return }
-
-        // Force the layout pass so `.contentSize` has resized the window to its final width
-        // before we read it. At open the window is briefly wider than its content, and reading
-        // that transient frame centers ~50px off.
-        window.layoutIfNeeded()
-        let visible = activeScreen.visibleFrame
-        let size = window.frame.size
-        // Horizontally centered; nudged slightly above the vertical midpoint, matching the
-        // weighting AppKit's own `NSWindow.center()` uses.
-        let origin = NSPoint(
-            x: visible.midX - size.width / 2,
-            y: visible.midY - size.height / 2 + size.height * 0.05
-        )
-        window.setFrameOrigin(origin)
     }
 }
 
@@ -172,11 +104,23 @@ struct HeadroomApp: App {
 /// close properly" can be verified with `swift run Headroom`.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    static var startUsageStore: (() -> Void)?
+    private static var pendingStore: UsageStore?
+    private static var pendingSoftwareUpdates: SoftwareUpdateControlling?
+    private var statusItemController: StatusItemController?
+
+    static func configure(store: UsageStore, softwareUpdates: SoftwareUpdateControlling) {
+        pendingStore = store
+        pendingSoftwareUpdates = softwareUpdates
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        Self.startUsageStore?()
+        guard let store = Self.pendingStore,
+              let softwareUpdates = Self.pendingSoftwareUpdates
+        else { return }
+        let controller = StatusItemController(store: store, softwareUpdates: softwareUpdates)
+        statusItemController = controller
+        controller.start()
     }
 }
 
