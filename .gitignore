@@ -8,6 +8,10 @@ xcuserdata/
 DerivedData/
 /.xcode-derived/
 /.xcode-derived-signed/
+/.xcode-derived-device/
+/.xcode-derived-ios/
+/.xcode-derived-mac-provisioned/
+/.codex/
 /scratchpad
 /dist
 

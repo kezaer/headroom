@@ -2,111 +2,97 @@ import SwiftUI
 import WidgetKit
 
 struct IOSCompanionView: View {
+    @Binding var appearance: AppearanceSetting
     @State private var state: IOSWidgetSnapshotState = .waitingForMac
-    @State private var updatedAt: Date?
+    @State private var syncInfo: IOSCompanionSyncInfo?
+    @State private var now = Date()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Headroom")
-                .toolbar {
-                    Button("Refresh") { refresh() }
-                }
         }
         .onAppear { refresh() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refresh() }
+        }
+        .onOpenURL { _ in
+            refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSUbiquitousKeyValueStore.didChangeExternallyNotification)) { _ in
+            refresh()
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         switch state {
         case .content(let envelope):
-            List {
-                Section {
-                    ForEach(envelope.providers) { provider in
-                        providerRow(provider)
-                    }
-                } header: {
-                    Text(statusText(for: envelope))
-                }
-            }
+            MirrorView(
+                envelope: envelope,
+                syncInfo: syncInfo,
+                now: now,
+                appearance: $appearance,
+                onRefresh: refresh
+            )
         case .disabled:
-            IOSSyncStatusView(
+            StatusScreen(
                 title: "iPhone Sync Paused",
-                message: "Enable iPhone sync in Headroom Settings on your Mac."
+                message: "Turn Sync snapshot to iPhone back on in Headroom Settings on your Mac.",
+                onRefresh: refresh
             )
+            .navigationTitle("Headroom")
         case .setupNeeded:
-            IOSSyncStatusView(
+            StatusScreen(
                 title: "iCloud Not Available",
-                message: "Make sure iCloud is enabled for Headroom on this iPhone and your Mac."
+                message: "Make sure iCloud is enabled for Headroom on this iPhone and your Mac.",
+                onRefresh: refresh
             )
+            .navigationTitle("Headroom")
         case .waitingForMac:
-            IOSSyncStatusView(
+            StatusScreen(
                 title: "Waiting for Mac",
-                message: "Enable iPhone sync in Headroom on your Mac, then open this app again."
+                message: "Open Headroom on your Mac to start syncing your usage to this iPhone.",
+                isWaiting: true,
+                onRefresh: refresh
             )
+            .navigationTitle("Headroom")
         case .corrupt:
-            IOSSyncStatusView(
+            StatusScreen(
                 title: "Snapshot Unreadable",
-                message: "Open Headroom on your Mac to publish a fresh snapshot."
+                message: "Open Headroom on your Mac to publish a fresh snapshot.",
+                onRefresh: refresh
             )
+            .navigationTitle("Headroom")
         case .incompatibleSchema:
-            IOSSyncStatusView(
+            StatusScreen(
                 title: "Update Needed",
-                message: "Update Headroom on your Mac and iPhone so their snapshot formats match."
+                message: "Update Headroom on your Mac and iPhone so their snapshot formats match.",
+                onRefresh: refresh
             )
+            .navigationTitle("Headroom")
         }
-    }
-
-    private func providerRow(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(provider.displayName)
-                    .font(.headline)
-                Spacer()
-                freshnessLabel(provider.freshness)
-            }
-            ForEach(provider.subscriptionWindows) { window in
-                HStack {
-                    Text(window.label)
-                    Spacer()
-                    Text("\(Int(window.percentRemaining.rounded()))% left")
-                        .monospacedDigit()
-                }
-                .font(.subheadline)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func freshnessLabel(_ freshness: WidgetProviderFreshness) -> some View {
-        Group {
-            switch freshness {
-            case .pending:
-                Text("Pending")
-            case .live:
-                Text("Live")
-            case .stale(_, let needsAttention):
-                Text(needsAttention ? "Needs attention" : "Stale")
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-
-    private func statusText(for envelope: WidgetSnapshotEnvelope) -> String {
-        let generated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: updatedAt ?? .now)
-        return generated.map { "Published \($0)" } ?? "Latest Mac snapshot"
     }
 
     private func refresh() {
         let cache = WidgetSnapshotCache.appGroup()
         let sync = iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore())
         let read = sync.read()
+        let cacheRead = cache.read()
+        var resolvedCacheRead = cacheRead
         if case .snapshot(let envelope) = read {
-            try? cache.write(envelope.snapshot)
-            WidgetCenter.shared.reloadAllTimelines()
+            if cacheRead.envelope != envelope.snapshot {
+                try? cache.write(envelope.snapshot)
+                WidgetCenter.shared.reloadAllTimelines()
+                resolvedCacheRead = cache.read()
+            }
+            syncInfo = IOSCompanionSyncInfo(
+                publishedAt: envelope.publishedAt,
+                sourceID: envelope.sourceID,
+                sourcePlatform: envelope.sourcePlatform
+            )
         }
-        state = IOSWidgetSnapshotState.from(cacheRead: cache.read(), syncRead: read)
-        updatedAt = .now
+        state = IOSWidgetSnapshotState.from(cacheRead: resolvedCacheRead, syncRead: read)
+        now = Date()
     }
 }

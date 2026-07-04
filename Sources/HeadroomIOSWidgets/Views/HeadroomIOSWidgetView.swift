@@ -23,6 +23,7 @@ struct HeadroomIOSWidgetView: View {
             }
         }
         .containerBackground(.background, for: .widget)
+        .widgetURL(URL(string: "headroom://usage"))
     }
 
     @ViewBuilder
