@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		003475AF90FE48BDC8A0142D /* HeadroomWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44B488B5CC6B49C3A230DF0 /* HeadroomWidgetView.swift */; };
+		084D12BD03637F092BEC19F5 /* SoftwareUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D98CDEAF6EF0A499E6D0A8FA /* SoftwareUpdateController.swift */; };
 		0BC3C1ED6DB48000AD0A6982 /* ProviderCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E542DE434B4A2F1EA525110E /* ProviderCardView.swift */; };
 		10BDACB4C950DBCDA4603D43 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3E94962CE286BEB04CB86DC /* Preferences.swift */; };
 		1290F9171352D90CDC04EE99 /* APISpendSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BC8195F504F14F4E8C6F5BC /* APISpendSectionView.swift */; };
@@ -35,6 +36,7 @@
 		730A334D25EFB4F97AF1C1D0 /* HeadroomLargeWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3DED341B03E9DB7876BDD8B /* HeadroomLargeWidgetView.swift */; };
 		8B60C92EF3B9A4F66886E2F7 /* CredentialModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C12CBFA7FEC91C71F1F13E4A /* CredentialModels.swift */; };
 		93E3DBA60325FA9BA3B897F0 /* APISpendProviders.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4523C40238BDDB31A5B2AE5 /* APISpendProviders.swift */; };
+		94B616960A02334A94964B51 /* Sparkle.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD76D27342B5B3D9CA582449 /* Sparkle.xcframework */; };
 		9A2E1DD1FDAA631A97E25F20 /* Redaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAF324F891EEEAD03BABA4FC /* Redaction.swift */; };
 		9B0A49EAC79591A254CAF37D /* HeadroomWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9965B78C8766A7FA857A6F6D /* HeadroomWidgets.swift */; };
 		9D992181780CEEF21E07FEF0 /* ProviderStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 271BAABD34D394E2014676BC /* ProviderStyle.swift */; };
@@ -62,6 +64,7 @@
 		F774EA8D4BD1E7D73A49AF80 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38B4DB6BBC85EE182B8E5F23 /* CredentialStore.swift */; };
 		F817D60864F9BDA258A27083 /* libHeadroomCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 2741A92799D95F6286BABBBA /* libHeadroomCore.a */; };
 		FB691B1472F1760604B183E4 /* HeadroomWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 5B3D491D8D8B855C6182DF43 /* HeadroomWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		FF3FBC74B1AA0603DA851D0F /* Sparkle.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DD76D27342B5B3D9CA582449 /* Sparkle.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,6 +92,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		7448EBCA6CFC3009AC7741D6 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				FF3FBC74B1AA0603DA851D0F /* Sparkle.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A3184A64FD94C95DD80090CD /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -151,7 +165,9 @@
 		D0ABF0C454123B6AAF8D2492 /* HeadroomSmallWidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomSmallWidgetView.swift; sourceTree = "<group>"; };
 		D22153D751E176597A3E5214 /* WidgetSnapshotProjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProjector.swift; sourceTree = "<group>"; };
 		D3E94962CE286BEB04CB86DC /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
+		D98CDEAF6EF0A499E6D0A8FA /* SoftwareUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareUpdateController.swift; sourceTree = "<group>"; };
 		DAF324F891EEEAD03BABA4FC /* Redaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Redaction.swift; sourceTree = "<group>"; };
+		DD76D27342B5B3D9CA582449 /* Sparkle.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Sparkle.xcframework; path = ".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework"; sourceTree = "<group>"; };
 		DF2BA56351FD2FA2E4940F33 /* UsageBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageBarView.swift; sourceTree = "<group>"; };
 		E542DE434B4A2F1EA525110E /* ProviderCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderCardView.swift; sourceTree = "<group>"; };
 		F0B51A9D5A1F8B1C3217B253 /* HeadroomApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomApp.swift; sourceTree = "<group>"; };
@@ -166,6 +182,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E52D92A4898A1C304F22531E /* libHeadroomCore.a in Frameworks */,
+				94B616960A02334A94964B51 /* Sparkle.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -228,6 +245,14 @@
 			path = HeadroomCore;
 			sourceTree = "<group>";
 		};
+		47EFDE15FFD9EC8EEFBF15DF /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				DD76D27342B5B3D9CA582449 /* Sparkle.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		528535290D07A3E62C48991B /* Engine */ = {
 			isa = PBXGroup;
 			children = (
@@ -241,6 +266,7 @@
 			isa = PBXGroup;
 			children = (
 				88298CCE99522534826F865E /* Sources */,
+				47EFDE15FFD9EC8EEFBF15DF /* Frameworks */,
 				13629C64DC71E34FB562AF3F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -319,6 +345,7 @@
 			isa = PBXGroup;
 			children = (
 				F0B51A9D5A1F8B1C3217B253 /* HeadroomApp.swift */,
+				D98CDEAF6EF0A499E6D0A8FA /* SoftwareUpdateController.swift */,
 				95E565230752E3D2B2AC8D68 /* Resources */,
 				98DDAD119A0E8192CC848FCB /* UI */,
 			);
@@ -390,6 +417,7 @@
 				F5B60506CE511B37E1A6269B /* Resources */,
 				0598300E07FB9068601F7EA2 /* Frameworks */,
 				A3184A64FD94C95DD80090CD /* Embed Foundation Extensions */,
+				7448EBCA6CFC3009AC7741D6 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -544,6 +572,7 @@
 				AD3E4560009B235BD443F798 /* ProviderLogoView.swift in Sources */,
 				9D992181780CEEF21E07FEF0 /* ProviderStyle.swift in Sources */,
 				AC30D16374782EE1F93EFB99 /* SettingsView.swift in Sources */,
+				084D12BD03637F092BEC19F5 /* SoftwareUpdateController.swift in Sources */,
 				15EEFD226FCB5864E97EAA12 /* UsageBarView.swift in Sources */,
 				728126D0D3BBA60E8D4D9B89 /* VesselGlyph.swift in Sources */,
 				AC0331D17112DB32C3311741 /* WidgetSettingsSection.swift in Sources */,
@@ -599,6 +628,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/HeadroomWidgets/Info.plist;
+				INFOPLIST_KEY_HeadroomAppGroupIdentifier = "$(HEADROOM_APP_GROUP_IDENTIFIER)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
@@ -632,14 +662,23 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/HeadroomApp/HeadroomApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle\"",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Headroom;
 				INFOPLIST_KEY_CFBundleName = Headroom;
 				INFOPLIST_KEY_CFBundleShortVersionString = 0.1.0;
 				INFOPLIST_KEY_CFBundleVersion = 1;
+				INFOPLIST_KEY_HeadroomAppGroupIdentifier = "$(HEADROOM_APP_GROUP_IDENTIFIER)";
 				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Personal use";
+				INFOPLIST_KEY_SUAllowsAutomaticUpdates = NO;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "$(HEADROOM_SPARKLE_FEED_URL)";
+				INFOPLIST_KEY_SUPublicEDKey = "$(HEADROOM_SPARKLE_PUBLIC_ED_KEY)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
@@ -700,6 +739,9 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADROOM_APP_GROUP_IDENTIFIER = group.com.kylezantos.headroom;
+				HEADROOM_SPARKLE_FEED_URL = "";
+				HEADROOM_SPARKLE_PUBLIC_ED_KEY = "VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -719,14 +761,23 @@
 				CODE_SIGN_ENTITLEMENTS = Sources/HeadroomApp/HeadroomApp.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle\"",
+				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Headroom;
 				INFOPLIST_KEY_CFBundleName = Headroom;
 				INFOPLIST_KEY_CFBundleShortVersionString = 0.1.0;
 				INFOPLIST_KEY_CFBundleVersion = 1;
+				INFOPLIST_KEY_HeadroomAppGroupIdentifier = "$(HEADROOM_APP_GROUP_IDENTIFIER)";
 				INFOPLIST_KEY_LSMinimumSystemVersion = 26.0;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Personal use";
+				INFOPLIST_KEY_SUAllowsAutomaticUpdates = NO;
+				INFOPLIST_KEY_SUEnableAutomaticChecks = YES;
+				INFOPLIST_KEY_SUFeedURL = "$(HEADROOM_SPARKLE_FEED_URL)";
+				INFOPLIST_KEY_SUPublicEDKey = "$(HEADROOM_SPARKLE_PUBLIC_ED_KEY)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
@@ -808,6 +859,9 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADROOM_APP_GROUP_IDENTIFIER = group.com.kylezantos.headroom;
+				HEADROOM_SPARKLE_FEED_URL = "";
+				HEADROOM_SPARKLE_PUBLIC_ED_KEY = "VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -829,6 +883,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/HeadroomWidgets/Info.plist;
+				INFOPLIST_KEY_HeadroomAppGroupIdentifier = "$(HEADROOM_APP_GROUP_IDENTIFIER)";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (

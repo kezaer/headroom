@@ -18,7 +18,10 @@ public enum WidgetSnapshotCacheRead: Equatable, Sendable {
 /// UserDefaults remains an injectable compatibility seam for tests and non-sandboxed
 /// migration paths, but WidgetKit should not depend on cross-process suite defaults.
 public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thread-safe
-    public static let appGroupSuiteName = "group.com.kylezantos.headroom"
+    public static var appGroupSuiteName: String {
+        Bundle.main.object(forInfoDictionaryKey: "HeadroomAppGroupIdentifier") as? String
+            ?? "group.com.kylezantos.headroom"
+    }
 
     private static let key = "widgetSnapshotEnvelope"
     private static let fileName = "widget-snapshot.json"

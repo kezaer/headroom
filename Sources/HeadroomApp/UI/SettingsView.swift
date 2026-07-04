@@ -6,6 +6,7 @@ import HeadroomCore
 /// closes the menu bar popover behind it.
 struct SettingsView: View {
     let store: UsageStore
+    var softwareUpdates: SoftwareUpdateControlling = DisabledSoftwareUpdateController()
     var preferences = Preferences()
     var credentialStore = CredentialStore()
     var launchControl: LaunchAtLoginControlling = LaunchAtLogin()
@@ -138,6 +139,11 @@ struct SettingsView: View {
                 .onChange(of: launchAtLogin) { _, newValue in
                     try? launchControl.setEnabled(newValue)
                 }
+
+            Button("Check for Updates…") {
+                softwareUpdates.checkForUpdates()
+            }
+            .disabled(!softwareUpdates.canCheckForUpdates)
 
             HStack {
                 Spacer()

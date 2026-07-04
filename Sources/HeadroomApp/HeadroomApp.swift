@@ -83,6 +83,7 @@ enum Entry {
 /// target's Info.plist when finalizing the bundle (U1/KTD8).
 struct HeadroomApp: App {
     @State private var store: UsageStore
+    @StateObject private var softwareUpdates = SoftwareUpdateController()
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
@@ -110,7 +111,7 @@ struct HeadroomApp: App {
         .menuBarExtraStyle(.window)
 
         Window("Headroom Settings", id: "settings") {
-            SettingsView(store: store)
+            SettingsView(store: store, softwareUpdates: softwareUpdates)
         }
         // Hidden title bar: the settings window draws its own header (logo + title) in
         // content, so traffic lights float on a transparent strip. Avoids Tahoe wrapping a
