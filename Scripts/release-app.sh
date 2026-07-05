@@ -4,11 +4,19 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP="Headroom.app"
+WIDGET_APPEX="${APP}/Contents/PlugIns/HeadroomWidgets.appex"
 DIST_DIR="dist"
 WORK_DIR="${DIST_DIR}/release-work"
 APP_ZIP="${WORK_DIR}/Headroom-app-notary.zip"
+ARCHIVE_PATH="${WORK_DIR}/Headroom.xcarchive"
+EXPORT_DIR="${WORK_DIR}/export"
+EXPORT_OPTIONS_PLIST="${WORK_DIR}/ExportOptions-DeveloperID.plist"
 DEFAULT_SPARKLE_UPDATES_DIR="${DIST_DIR}/headroom.zantos.co"
 LATEST_DMG_NAME="Headroom.dmg"
+SPARKLE_VERSION="2.9.4"
+SPARKLE_ARTIFACT_ZIP=".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle-for-Swift-Package-Manager.zip"
+SPARKLE_ARTIFACT_DIR=".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle"
+SPARKLE_ARTIFACT_URL="https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip"
 HEADROOM_DEVELOPER_ID_APPLICATION="${HEADROOM_DEVELOPER_ID_APPLICATION:-}"
 HEADROOM_NOTARY_PROFILE="${HEADROOM_NOTARY_PROFILE:-}"
 HEADROOM_APPLE_ID="${HEADROOM_APPLE_ID:-}"
@@ -19,6 +27,8 @@ HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL:-https://headroom.zantos.
 HEADROOM_SPARKLE_PUBLIC_ED_KEY="${HEADROOM_SPARKLE_PUBLIC_ED_KEY:-VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=}"
 HEADROOM_SPARKLE_UPDATES_DIR="${HEADROOM_SPARKLE_UPDATES_DIR:-${DEFAULT_SPARKLE_UPDATES_DIR}}"
 HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX="${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
+HEADROOM_RELEASE_BUILD_ONLY="${HEADROOM_RELEASE_BUILD_ONLY:-0}"
+XCODE_DERIVED_DATA="${XCODE_DERIVED_DATA:-.xcode-derived-release}"
 
 usage() {
   cat >&2 <<'EOF'
@@ -35,9 +45,10 @@ Required:
 
 Optional:
   HEADROOM_DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)"
-  HEADROOM_APP_GROUP_IDENTIFIER="TEAMID.com.kylezantos.headroom"
+  HEADROOM_APP_GROUP_IDENTIFIER="group.com.kylezantos.headroom"
   HEADROOM_SPARKLE_UPDATES_DIR="dist/headroom.zantos.co"
   HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX="https://headroom.zantos.co/"
+  HEADROOM_RELEASE_BUILD_ONLY=1
 
 Defaults for public releases with in-app update prompts:
   HEADROOM_SPARKLE_FEED_URL="https://headroom.zantos.co/appcast.xml"
@@ -61,10 +72,23 @@ require_tool() {
   fi
 }
 
+prepare_sparkle_artifact() {
+  if [[ -d "${SPARKLE_ARTIFACT_DIR}/Sparkle.xcframework" ]]; then
+    return
+  fi
+
+  echo "→ fetching Sparkle ${SPARKLE_VERSION}"
+  mkdir -p "$(dirname "${SPARKLE_ARTIFACT_ZIP}")" "${SPARKLE_ARTIFACT_DIR}"
+  curl -L --fail --show-error --silent \
+    -o "${SPARKLE_ARTIFACT_ZIP}" \
+    "${SPARKLE_ARTIFACT_URL}"
+  ditto -x -k "${SPARKLE_ARTIFACT_ZIP}" "${SPARKLE_ARTIFACT_DIR}"
+}
+
 find_sparkle_tool() {
   local tool="$1"
   local candidate
-  candidate="$(find .xcode-derived/SourcePackages .build -path "*/bin/${tool}" -type f 2>/dev/null | head -n 1 || true)"
+  candidate="$(find .xcode-derived/SourcePackages "${XCODE_DERIVED_DATA}/SourcePackages" .build -path "*/bin/${tool}" -type f 2>/dev/null | head -n 1 || true)"
   if [[ -z "${candidate}" ]]; then
     echo "Missing Sparkle tool: ${tool}" >&2
     echo "Build once so SwiftPM resolves Sparkle, then rerun this script." >&2
@@ -135,6 +159,163 @@ APPLESCRIPT
   rm -f "${DMG_RW_PATH}"
 }
 
+set_plist_string() {
+  local plist="$1"
+  local key="$2"
+  local value="$3"
+
+  /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "${plist}" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :${key} string ${value}" "${plist}"
+}
+
+set_plist_bool() {
+  local plist="$1"
+  local key="$2"
+  local value="$3"
+
+  /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "${plist}" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :${key} bool ${value}" "${plist}"
+}
+
+stamp_exported_info() {
+  local app_info="${APP}/Contents/Info.plist"
+  local widget_info="${WIDGET_APPEX}/Contents/Info.plist"
+
+  echo "→ stamping release Info.plist values"
+  set_plist_string "${app_info}" HeadroomAppGroupIdentifier "${HEADROOM_APP_GROUP_IDENTIFIER}"
+  set_plist_string "${widget_info}" HeadroomAppGroupIdentifier "${HEADROOM_APP_GROUP_IDENTIFIER}"
+  set_plist_string "${app_info}" SUFeedURL "${HEADROOM_SPARKLE_FEED_URL}"
+  set_plist_string "${app_info}" SUPublicEDKey "${HEADROOM_SPARKLE_PUBLIC_ED_KEY}"
+  set_plist_bool "${app_info}" SUEnableAutomaticChecks true
+  set_plist_bool "${app_info}" SUAllowsAutomaticUpdates false
+}
+
+resign_exported_info_mutations() {
+  echo "→ re-signing exported app after Info.plist stamping"
+  codesign \
+    --force \
+    --sign "${DEVELOPER_ID_APPLICATION}" \
+    --timestamp \
+    --options runtime \
+    --preserve-metadata=identifier,entitlements,flags \
+    "${WIDGET_APPEX}"
+  codesign \
+    --force \
+    --sign "${DEVELOPER_ID_APPLICATION}" \
+    --timestamp \
+    --options runtime \
+    --preserve-metadata=identifier,entitlements,flags \
+    "${APP}"
+}
+
+verify_profile_kind() {
+  local profile="$1"
+  local profile_name
+
+  if [[ ! -f "${profile}" ]]; then
+    echo "Missing embedded provisioning profile: ${profile}" >&2
+    exit 65
+  fi
+
+  profile_name="$(/usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin <<< "$(security cms -D -i "${profile}")")"
+  case "${profile_name}" in
+    "Mac Team Direct Provisioning Profile:"*) ;;
+    *)
+      echo "Expected a Mac Team Direct provisioning profile, got: ${profile_name}" >&2
+      exit 65
+      ;;
+  esac
+}
+
+verify_release_entitlements() {
+  local entitlements="${WORK_DIR}/Headroom.entitlements.plist"
+  local expected_application_identifier="${DEVELOPER_ID_TEAM_ID}.com.kylezantos.headroom"
+  local expected_kvs_identifier="${DEVELOPER_ID_TEAM_ID}.com.kylezantos.headroom"
+
+  echo "→ verifying release entitlements"
+  codesign -d --entitlements :- "${APP}" > "${entitlements}" 2>/dev/null
+
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.application-identifier' "${entitlements}")" == "${expected_application_identifier}" ]] || {
+    echo "Unexpected application identifier in signed app." >&2
+    exit 65
+  }
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.team-identifier' "${entitlements}")" == "${DEVELOPER_ID_TEAM_ID}" ]] || {
+    echo "Unexpected developer team identifier in signed app." >&2
+    exit 65
+  }
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.ubiquity-kvstore-identifier' "${entitlements}")" == "${expected_kvs_identifier}" ]] || {
+    echo "Missing or unexpected iCloud KVS entitlement in signed app." >&2
+    exit 65
+  }
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "${entitlements}")" == "${HEADROOM_APP_GROUP_IDENTIFIER}" ]] || {
+    echo "Missing or unexpected App Group entitlement in signed app." >&2
+    exit 65
+  }
+
+  verify_profile_kind "${APP}/Contents/embedded.provisionprofile"
+  verify_profile_kind "${WIDGET_APPEX}/Contents/embedded.provisionprofile"
+}
+
+write_export_options_plist() {
+  cat > "${EXPORT_OPTIONS_PLIST}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>destination</key>
+  <string>export</string>
+  <key>method</key>
+  <string>developer-id</string>
+  <key>signingCertificate</key>
+  <string>Developer ID Application</string>
+  <key>signingStyle</key>
+  <string>automatic</string>
+  <key>teamID</key>
+  <string>${DEVELOPER_ID_TEAM_ID}</string>
+</dict>
+</plist>
+EOF
+}
+
+archive_and_export_developer_id_app() {
+  rm -rf "${ARCHIVE_PATH}" "${EXPORT_DIR}"
+  mkdir -p "${WORK_DIR}"
+  write_export_options_plist
+
+  echo "→ xcodegen generate"
+  xcodegen generate
+
+  echo "→ archiving app for Developer ID export"
+  xcodebuild \
+    -project Headroom.xcodeproj \
+    -scheme Headroom \
+    -configuration Release \
+    -destination 'generic/platform=macOS' \
+    -archivePath "${ARCHIVE_PATH}" \
+    -derivedDataPath "${XCODE_DERIVED_DATA}" \
+    -allowProvisioningUpdates \
+    HEADROOM_APP_GROUP_IDENTIFIER="${HEADROOM_APP_GROUP_IDENTIFIER}" \
+    HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL}" \
+    HEADROOM_SPARKLE_PUBLIC_ED_KEY="${HEADROOM_SPARKLE_PUBLIC_ED_KEY}" \
+    CODE_SIGN_STYLE=Automatic \
+    DEVELOPMENT_TEAM="${DEVELOPER_ID_TEAM_ID}" \
+    ENABLE_HARDENED_RUNTIME=YES \
+    archive
+
+  echo "→ exporting Developer ID signed app"
+  xcodebuild \
+    -exportArchive \
+    -archivePath "${ARCHIVE_PATH}" \
+    -exportPath "${EXPORT_DIR}" \
+    -exportOptionsPlist "${EXPORT_OPTIONS_PLIST}" \
+    -allowProvisioningUpdates
+
+  rm -rf "${APP}"
+  ditto "${EXPORT_DIR}/${APP}" "${APP}"
+  stamp_exported_info
+  resign_exported_info_mutations
+}
+
 select_developer_id_application() {
   if [[ -n "${HEADROOM_DEVELOPER_ID_APPLICATION}" ]]; then
     printf '%s\n' "${HEADROOM_DEVELOPER_ID_APPLICATION}"
@@ -146,9 +327,10 @@ select_developer_id_application() {
     | head -n 1
 }
 
-for tool in security codesign ditto hdiutil xcrun plutil; do
+for tool in security codesign curl ditto hdiutil xcrun plutil; do
   require_tool "${tool}"
 done
+require_tool xcodegen
 
 DEVELOPER_ID_APPLICATION="$(select_developer_id_application)"
 if [[ -z "${DEVELOPER_ID_APPLICATION}" ]]; then
@@ -165,7 +347,7 @@ if [[ -z "${DEVELOPER_ID_TEAM_ID}" ]]; then
   exit 65
 fi
 if [[ -z "${HEADROOM_APP_GROUP_IDENTIFIER}" ]]; then
-  HEADROOM_APP_GROUP_IDENTIFIER="${DEVELOPER_ID_TEAM_ID}.com.kylezantos.headroom"
+  HEADROOM_APP_GROUP_IDENTIFIER="group.com.kylezantos.headroom"
 fi
 if [[ -z "${HEADROOM_SPARKLE_FEED_URL}" || -z "${HEADROOM_SPARKLE_PUBLIC_ED_KEY}" ]]; then
   echo "Sparkle release configuration is required before building a public DMG." >&2
@@ -177,7 +359,9 @@ if [[ -z "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" ]]; then
 fi
 
 notary_args=()
-if [[ -n "${HEADROOM_NOTARY_PROFILE}" ]]; then
+if [[ "${HEADROOM_RELEASE_BUILD_ONLY}" == "1" ]]; then
+  notary_args=()
+elif [[ -n "${HEADROOM_NOTARY_PROFILE}" ]]; then
   notary_args=(--keychain-profile "${HEADROOM_NOTARY_PROFILE}")
 elif [[ -n "${HEADROOM_APPLE_ID}" && -n "${HEADROOM_TEAM_ID}" && -n "${HEADROOM_APP_SPECIFIC_PASSWORD}" ]]; then
   notary_args=(
@@ -191,16 +375,19 @@ else
 fi
 
 echo "→ building Developer ID signed app"
-HEADROOM_CODESIGN_IDENTITY="${DEVELOPER_ID_APPLICATION}" \
-HEADROOM_CODESIGN_OPTIONS="--timestamp --options runtime" \
-HEADROOM_APP_GROUP_IDENTIFIER="${HEADROOM_APP_GROUP_IDENTIFIER}" \
-HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1 \
-HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL}" \
-HEADROOM_SPARKLE_PUBLIC_ED_KEY="${HEADROOM_SPARKLE_PUBLIC_ED_KEY}" \
-  ./Scripts/build-app.sh release
+prepare_sparkle_artifact
+rm -rf "${WORK_DIR}"
+mkdir -p "${WORK_DIR}" "${DIST_DIR}"
+archive_and_export_developer_id_app
 
 echo "→ verifying signed app bundle"
 codesign --verify --deep --strict --verbose=2 "${APP}"
+verify_release_entitlements
+
+if [[ "${HEADROOM_RELEASE_BUILD_ONLY}" == "1" ]]; then
+  echo "✓ Developer ID app ready: ${APP}"
+  exit 0
+fi
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Contents/Info.plist")"
@@ -210,7 +397,6 @@ DMG_RW_PATH="${WORK_DIR}/Headroom-${VERSION}-${BUILD}-rw.dmg"
 DMG_MOUNT_DIR="${WORK_DIR}/dmg-mount"
 STAGING_DIR="${WORK_DIR}/dmg-root"
 
-rm -rf "${WORK_DIR}"
 mkdir -p "${WORK_DIR}" "${STAGING_DIR}" "${DIST_DIR}"
 
 echo "→ creating app notarization archive"

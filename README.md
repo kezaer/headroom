@@ -73,9 +73,10 @@ Enable or pause widget data in Headroom Settings with **Share data with widgets*
 remove, and resize widgets from macOS itself; Settings controls data export, not OS
 installation. Widget data sharing uses an App Group, so the app and extension need
 matching entitlements under a stable signing identity for persistent real-world use. Local
-development defaults to `group.com.kylezantos.headroom`; the release script stamps a
-Developer ID team-prefixed group such as `TEAMID.com.kylezantos.headroom`. If the App
-Group is unavailable, widgets show a setup state rather than reading provider credentials
+development and release builds both use the iOS-style App Group
+`group.com.kylezantos.headroom`; Xcode's Developer ID export embeds the Direct
+provisioning profiles that authorize that group for website distribution. If the App Group
+is unavailable, widgets show a setup state rather than reading provider credentials
 directly. Local manual-signed builds also mirror the redaction-safe widget snapshot into
 the widget extension container as a development fallback while App Group provisioning is
 being finished.
@@ -163,6 +164,10 @@ One-time requirements:
 
 - Active Apple Developer Program membership.
 - A **Developer ID Application** certificate installed in Keychain.
+- Xcode signing access for the Mac app and widget App IDs, including iCloud Key-Value
+  Store and App Groups. The release script uses Xcode's `developer-id` archive export so
+  the app contains `Mac Team Direct Provisioning Profile` files and profile-derived
+  entitlements.
 - Notary credentials stored in the local keychain, or supplied through environment
   variables.
 - A Sparkle EdDSA key pair, with the private key in your login Keychain and the public key
@@ -218,13 +223,13 @@ HEADROOM_NOTARY_PROFILE=headroom-notary \
 
 The host app intentionally remains non-sandboxed for 1.0 so it can spawn the official
 `claude` CLI and read Codex's local auth file. The widget extension remains sandboxed and
-uses only the App Group cache. By default, `Scripts/release-app.sh` derives the release
-App Group from the Developer ID certificate's Team ID (`TEAMID.com.kylezantos.headroom`);
-override `HEADROOM_APP_GROUP_IDENTIFIER` only if you intentionally use another macOS App
-Group id. Before publishing a new DMG, run a clean download-style smoke test: open the
-DMG, drag Headroom to `/Applications`, launch it, verify the menu bar item appears,
-confirm Claude/Codex setup or live states, and check that widgets can be added and read
-the app's exported cache.
+uses only the App Group cache. By default, `Scripts/release-app.sh` uses
+`group.com.kylezantos.headroom`, matching the app and widget entitlements managed in the
+Apple Developer account; override `HEADROOM_APP_GROUP_IDENTIFIER` only if you intentionally
+use another App Group id. Before publishing a new DMG, run a clean download-style smoke
+test: open the DMG, drag Headroom to `/Applications`, launch it, verify the menu bar item
+appears, confirm Claude/Codex setup or live states, and check that widgets can be added and
+read the app's exported cache.
 
 ## iOS distribution
 

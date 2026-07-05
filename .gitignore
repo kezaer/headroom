@@ -7,6 +7,8 @@ xcuserdata/
 .swiftpm/
 DerivedData/
 /.xcode-derived*/
+/.xcode-*-derived/
+/.xcode-managed-signing/
 /.codex/
 /scratchpad
 /dist
