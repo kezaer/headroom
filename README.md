@@ -210,9 +210,11 @@ moves.
 The script writes `dist/Headroom-<version>-<build>.dmg` and signs
 `dist/Headroom-<version>-<build>.dmg.sparkle-signature.txt`. By default it also prepares
 the website payload in `dist/headroom.zantos.co/`: a versioned DMG for Sparkle appcast
-history, `appcast.xml`, and a stable `Headroom.dmg` for the download button at
-`https://headroom.zantos.co/Headroom.dmg`. The DMG opens as a drag installer with
-`Headroom.app` next to an `/Applications` alias.
+history, `appcast.xml`, a stable `Headroom.dmg` for the download button at
+`https://headroom.zantos.co/Headroom.dmg`, SHA-256 sidecars for both DMG names, and
+`latest.json` for the public download page to read the current version, build, size,
+hash, and URLs. The DMG opens as a drag installer with `Headroom.app` next to an
+`/Applications` alias.
 If multiple Developer ID Application certificates are installed, pin one:
 
 ```bash

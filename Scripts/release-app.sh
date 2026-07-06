@@ -15,6 +15,7 @@ EXPORT_DIR="${WORK_DIR}/export"
 EXPORT_OPTIONS_PLIST="${WORK_DIR}/ExportOptions-DeveloperID.plist"
 DEFAULT_SPARKLE_UPDATES_DIR="${DIST_DIR}/headroom.zantos.co"
 LATEST_DMG_NAME="Headroom.dmg"
+LATEST_JSON_NAME="latest.json"
 SPARKLE_VERSION="2.9.4"
 SPARKLE_ARTIFACT_ZIP=".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle-for-Swift-Package-Manager.zip"
 SPARKLE_ARTIFACT_DIR=".xcode-derived/SourcePackages/artifacts/sparkle/Sparkle"
@@ -355,6 +356,38 @@ run_generate_appcast_with_timeout() {
   wait "${pid}"
 }
 
+write_sha256_file() {
+  local source_path="$1"
+  local output_path="$2"
+
+  shasum -a 256 "${source_path}" | awk '{print $1}' > "${output_path}"
+}
+
+write_latest_manifest() {
+  local manifest_path="${HEADROOM_SPARKLE_UPDATES_DIR}/${LATEST_JSON_NAME}"
+  local dmg_sha256
+  local dmg_length
+  local published_at
+
+  dmg_sha256="$(shasum -a 256 "${DMG_PATH}" | awk '{print $1}')"
+  dmg_length="$(stat -f '%z' "${DMG_PATH}")"
+  published_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  cat > "${manifest_path}" <<EOF
+{
+  "name": "Headroom",
+  "version": "${VERSION}",
+  "build": "${BUILD}",
+  "publishedAt": "${published_at}",
+  "downloadUrl": "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}${LATEST_DMG_NAME}",
+  "versionedDownloadUrl": "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}${DMG_NAME}",
+  "appcastUrl": "${HEADROOM_SPARKLE_FEED_URL}",
+  "sha256": "${dmg_sha256}",
+  "size": ${dmg_length}
+}
+EOF
+}
+
 write_export_options_plist() {
   cat > "${EXPORT_OPTIONS_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -542,9 +575,13 @@ if [[ -n "${HEADROOM_SPARKLE_UPDATES_DIR}" ]]; then
     write_minimal_appcast
   fi
   ditto "${DMG_PATH}" "${LATEST_DMG_PATH}"
+  write_sha256_file "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${DMG_NAME}.sha256"
+  write_sha256_file "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${LATEST_DMG_NAME}.sha256"
+  write_latest_manifest
 fi
 
 echo "✓ Release artifact ready: ${DMG_PATH}"
 echo "  Website assets: ${HEADROOM_SPARKLE_UPDATES_DIR}"
 echo "  Download link: https://headroom.zantos.co/${LATEST_DMG_NAME}"
+echo "  Latest manifest: ${HEADROOM_SPARKLE_UPDATES_DIR}/${LATEST_JSON_NAME}"
 echo "  Sparkle signature: ${DMG_PATH}.sparkle-signature.txt"
