@@ -157,8 +157,12 @@ on run argv
     delay 1
 
     set current view of container window of dmgFolder to icon view
-    set toolbar visible of container window of dmgFolder to false
-    set statusbar visible of container window of dmgFolder to false
+    try
+      set toolbar visible of container window of dmgFolder to false
+    end try
+    try
+      set statusbar visible of container window of dmgFolder to false
+    end try
     -- 680 x 440 background bitmap + 28px title bar = 468 tall
     set bounds of container window of dmgFolder to {180, 120, 860, 588}
 
