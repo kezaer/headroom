@@ -123,28 +123,32 @@ create_drag_install_dmg() {
     -nobrowse >/dev/null
   trap detach_dmg_mount RETURN
 
-  osascript <<'APPLESCRIPT'
-tell application "Finder"
-  tell disk "Headroom"
-    open
-    set current view of container window to icon view
-    set toolbar visible of container window to false
-    set statusbar visible of container window to false
-    set bounds of container window to {200, 120, 760, 460}
+  osascript - "$(cd "${DMG_MOUNT_DIR}" && pwd)" <<'APPLESCRIPT'
+on run argv
+  set mountPath to item 1 of argv
+  tell application "Finder"
+    set dmgFolder to POSIX file mountPath as alias
+    open dmgFolder
+    delay 1
 
-    set viewOptions to icon view options of container window
+    set current view of container window of dmgFolder to icon view
+    set toolbar visible of container window of dmgFolder to false
+    set statusbar visible of container window of dmgFolder to false
+    set bounds of container window of dmgFolder to {200, 120, 760, 460}
+
+    set viewOptions to icon view options of container window of dmgFolder
     set arrangement of viewOptions to not arranged
     set icon size of viewOptions to 96
     set text size of viewOptions to 13
 
-    set position of item "Headroom.app" to {170, 165}
-    set position of item "Applications" to {390, 165}
+    set position of item "Headroom.app" of dmgFolder to {170, 165}
+    set position of item "Applications" of dmgFolder to {390, 165}
 
-    update without registering applications
+    update dmgFolder without registering applications
     delay 1
-    close
+    close container window of dmgFolder
   end tell
-end tell
+end run
 APPLESCRIPT
 
   sync
@@ -254,6 +258,67 @@ verify_release_entitlements() {
 
   verify_profile_kind "${APP}/Contents/embedded.provisionprofile"
   verify_profile_kind "${WIDGET_APPEX}/Contents/embedded.provisionprofile"
+}
+
+write_minimal_appcast() {
+  local appcast_path="${HEADROOM_SPARKLE_UPDATES_DIR}/appcast.xml"
+  local signature_line
+  local ed_signature
+  local archive_length
+  local download_url="${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}${DMG_NAME}"
+  local pub_date
+
+  signature_line="$(cat "${DMG_PATH}.sparkle-signature.txt")"
+  ed_signature="$(printf '%s\n' "${signature_line}" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')"
+  archive_length="$(printf '%s\n' "${signature_line}" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
+  pub_date="$(LC_ALL=C date -R)"
+
+  if [[ -z "${ed_signature}" || -z "${archive_length}" ]]; then
+    echo "Could not parse Sparkle signature metadata from ${DMG_PATH}.sparkle-signature.txt" >&2
+    exit 65
+  fi
+
+  cat > "${appcast_path}" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Headroom Updates</title>
+    <link>${HEADROOM_SPARKLE_FEED_URL}</link>
+    <description>Headroom release feed</description>
+    <item>
+      <title>Headroom ${VERSION}</title>
+      <pubDate>${pub_date}</pubDate>
+      <sparkle:version>${BUILD}</sparkle:version>
+      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <enclosure url="${download_url}" sparkle:edSignature="${ed_signature}" length="${archive_length}" type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
+EOF
+}
+
+run_generate_appcast_with_timeout() {
+  local pid
+  local elapsed=0
+  local timeout_seconds=120
+
+  "${SPARKLE_GENERATE_APPCAST}" \
+    --download-url-prefix "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" \
+    "${HEADROOM_SPARKLE_UPDATES_DIR}" &
+  pid="$!"
+
+  while kill -0 "${pid}" 2>/dev/null; do
+    if (( elapsed >= timeout_seconds )); then
+      kill -TERM "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      return 124
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  wait "${pid}"
 }
 
 write_export_options_plist() {
@@ -438,9 +503,10 @@ if [[ -n "${HEADROOM_SPARKLE_UPDATES_DIR}" ]]; then
   mkdir -p "${HEADROOM_SPARKLE_UPDATES_DIR}"
   rm -f "${LATEST_DMG_PATH}"
   ditto "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${DMG_NAME}"
-  "${SPARKLE_GENERATE_APPCAST}" \
-    --download-url-prefix "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" \
-    "${HEADROOM_SPARKLE_UPDATES_DIR}"
+  if ! run_generate_appcast_with_timeout; then
+    echo "→ Sparkle generate_appcast timed out; writing minimal signed appcast"
+    write_minimal_appcast
+  fi
   ditto "${DMG_PATH}" "${LATEST_DMG_PATH}"
 fi
 
