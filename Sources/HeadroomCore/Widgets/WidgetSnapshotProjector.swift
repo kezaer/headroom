@@ -10,6 +10,8 @@ public enum WidgetSnapshotProjector {
         renewalDate: (ProviderID) -> Date?,
         widgetsEnabled: Bool,
         showsCodexSparkCounters: Bool = false,
+        apiSpendSnapshots: [ProviderID: APISpendSnapshot] = [:],
+        apiSpendProviderOrder: [ProviderID] = [],
         generatedAt: Date = .now
     ) -> WidgetSnapshotEnvelope {
         guard widgetsEnabled else { return .disabled(generatedAt: generatedAt) }
@@ -22,7 +24,15 @@ public enum WidgetSnapshotProjector {
                 showsCodexSparkCounters: showsCodexSparkCounters
             )
         }
-        return WidgetSnapshotEnvelope(generatedAt: generatedAt, status: .enabled, providers: providers)
+        let apiSpendProviders = apiSpendProviderOrder.compactMap { id in
+            apiSpendSnapshots[id].map(apiSpendSummary)
+        }
+        return WidgetSnapshotEnvelope(
+            generatedAt: generatedAt,
+            status: .enabled,
+            providers: providers,
+            apiSpendProviders: apiSpendProviders
+        )
     }
 
     private static func providerSummary(
@@ -51,6 +61,18 @@ public enum WidgetSnapshotProjector {
         case .stale(let reason):
             .stale(message: reason.message, needsAttention: reason.isPermanent)
         }
+    }
+
+    private static func apiSpendSummary(_ snapshot: APISpendSnapshot) -> WidgetAPISpendSummary {
+        WidgetAPISpendSummary(
+            id: snapshot.providerID.raw,
+            displayName: snapshot.displayName,
+            amount: snapshot.amount,
+            currency: snapshot.currency,
+            periodLabel: snapshot.periodLabel,
+            capturedAt: snapshot.capturedAt,
+            freshness: freshness(snapshot.freshness)
+        )
     }
 
     private static func windowSummary(

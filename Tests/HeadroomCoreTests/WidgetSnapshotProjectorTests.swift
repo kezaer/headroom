@@ -84,11 +84,97 @@ struct WidgetSnapshotProjectorTests {
             displayNames: [.claude: "Claude"],
             renewalDate: { _ in nil },
             widgetsEnabled: false,
+            apiSpendSnapshots: [
+                .codex: APISpendSnapshot(
+                    providerID: .codex,
+                    displayName: "OpenAI API",
+                    amount: 12.34,
+                    currency: "usd",
+                    periodLabel: "Current month",
+                    capturedAt: now,
+                    freshness: .live
+                ),
+            ],
+            apiSpendProviderOrder: [.codex],
             generatedAt: now
         )
 
         #expect(envelope.status == .disabled)
         #expect(envelope.providers.isEmpty)
+        #expect(envelope.apiSpendProviders.isEmpty)
+    }
+
+    @Test func enabledAPISpendProjectsInProviderOrder() {
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [:],
+            providerOrder: [],
+            displayNames: [:],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            apiSpendSnapshots: [
+                .codex: APISpendSnapshot(
+                    providerID: .codex,
+                    displayName: "OpenAI API",
+                    amount: 12.3,
+                    currency: "usd",
+                    periodLabel: "Current month",
+                    capturedAt: now,
+                    freshness: .live
+                ),
+                .claude: APISpendSnapshot(
+                    providerID: .claude,
+                    displayName: "Anthropic API",
+                    amount: 4,
+                    currency: "usd",
+                    periodLabel: "Current month",
+                    capturedAt: now.addingTimeInterval(-60),
+                    freshness: .live
+                ),
+            ],
+            apiSpendProviderOrder: [.claude, .codex],
+            generatedAt: now
+        )
+
+        #expect(envelope.apiSpendProviders.map(\.id) == ["claude", "codex"])
+        #expect(envelope.apiSpendProviders[0].displayName == "Anthropic API")
+        #expect(envelope.apiSpendProviders[0].amount == 4)
+        #expect(envelope.apiSpendProviders[0].currency == "usd")
+        #expect(envelope.apiSpendProviders[0].periodLabel == "Current month")
+        #expect(envelope.apiSpendProviders[0].capturedAt == now.addingTimeInterval(-60))
+        #expect(envelope.apiSpendProviders[0].freshness == .live)
+    }
+
+    @Test func staleAPISpendProjectsSafeFreshnessAndPriorAmount() {
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [:],
+            providerOrder: [],
+            displayNames: [:],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            apiSpendSnapshots: [
+                .codex: APISpendSnapshot(
+                    providerID: .codex,
+                    displayName: "OpenAI API",
+                    amount: 12.3,
+                    currency: "usd",
+                    periodLabel: "Last 30 days",
+                    capturedAt: now,
+                    freshness: .stale(.notLoggedIn("Add API key on Mac"))
+                ),
+            ],
+            apiSpendProviderOrder: [.codex],
+            generatedAt: now
+        )
+
+        let spend = envelope.apiSpendProviders[0]
+        #expect(spend.amount == 12.3)
+        #expect(spend.periodLabel == "Last 30 days")
+        guard case .stale(let message, let needsAttention) = spend.freshness else {
+            Issue.record("expected stale API spend")
+            return
+        }
+        #expect(message == "Add API key on Mac")
+        #expect(needsAttention)
     }
 
     @Test func nonSubscriptionAllowanceWindowsAreFilteredOutOfWidgets() {

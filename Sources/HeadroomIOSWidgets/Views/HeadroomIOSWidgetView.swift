@@ -74,24 +74,18 @@ struct HeadroomIOSWidgetView: View {
                 }
                 IOSWidgetAppIconMark(size: 18)
             }
-            if envelope.providers.count <= 1 {
-                ForEach(envelope.providers) { provider in
-                    providerColumn(provider)
-                }
+            if envelope.apiSpendProviders.isEmpty {
+                Spacer(minLength: 0)
+                mediumProviderColumns(envelope.providers)
+                Spacer(minLength: 0)
             } else {
-                HStack(alignment: .top, spacing: 10) {
-                    ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
-                        providerColumn(provider)
-                        if index < envelope.providers.count - 1 {
-                            Rectangle()
-                                .fill(IOSWidgetStyle.hairline(scheme: scheme))
-                                .frame(width: 1)
-                                .frame(maxHeight: .infinity)
-                        }
-                    }
-                }
+                mediumProviderColumns(envelope.providers)
+                Spacer(minLength: 6)
+                Rectangle()
+                    .fill(IOSWidgetStyle.hairline(scheme: scheme))
+                    .frame(height: 1)
+                iosAPISpendCompactRow(envelope.apiSpendProviders)
             }
-            Spacer(minLength: 0)
         }
         // KTD1: lean on WidgetKit's default content margins for the ~16pt effective
         // outer margin; keep only a minimal residual. Tune against the widget gallery.
@@ -108,6 +102,9 @@ struct HeadroomIOSWidgetView: View {
             }
             ForEach(envelope.providers) { provider in
                 largeProviderTile(provider)
+            }
+            if !envelope.apiSpendProviders.isEmpty {
+                iosAPISpendLargeSection(envelope.apiSpendProviders)
             }
             if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date) {
                 Text("from Mac · \(updated)")
@@ -167,6 +164,72 @@ struct HeadroomIOSWidgetView: View {
         .modifier(IOSWidgetTile())
     }
 
+    private func iosAPISpendCompactRow(_ summaries: [WidgetAPISpendSummary]) -> some View {
+        HStack(spacing: 6) {
+            ForEach(summaries) { summary in
+                HStack(spacing: 4) {
+                    providerIcon(summary.id, size: 11)
+                    Text(APISpendPresentation.amountText(summary) ?? "—")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(apiAmountColor(summary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .allowsTightening(true)
+                    if summary.freshness.needsAttention {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(IOSWidgetStyle.severityColor(for: .low))
+                    }
+                }
+                .layoutPriority(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func iosAPISpendLargeSection(_ summaries: [WidgetAPISpendSummary]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("API Spend")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                    .textCase(.uppercase)
+                Spacer(minLength: 8)
+                if let periodLabel = summaries.first?.periodLabel {
+                    Text(periodLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                        .lineLimit(1)
+                }
+            }
+            ForEach(summaries) { summary in
+                HStack(spacing: 7) {
+                    providerIcon(summary.id, size: 15)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(summary.displayName)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(IOSWidgetStyle.textAccent(for: summary.id, scheme: scheme))
+                            .lineLimit(1)
+                        if !apiSpendDetailText(summary).isEmpty {
+                            Text(apiSpendDetailText(summary))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                    Text(APISpendPresentation.amountText(summary) ?? "—")
+                        .font(.system(size: 13, weight: .bold).monospacedDigit())
+                        .foregroundStyle(apiAmountColor(summary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .allowsTightening(true)
+                }
+            }
+        }
+        .padding(.horizontal, largeTileInset)
+    }
+
     private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
@@ -195,6 +258,25 @@ struct HeadroomIOSWidgetView: View {
         }
     }
 
+    private func apiSpendDetailText(_ summary: WidgetAPISpendSummary) -> String {
+        switch summary.freshness {
+        case .pending, .stale:
+            return APISpendPresentation.statusText(
+                freshness: summary.freshness,
+                capturedAt: summary.capturedAt,
+                now: entry.date
+            ) ?? ""
+        case .live:
+            return ""
+        }
+    }
+
+    private func apiAmountColor(_ summary: WidgetAPISpendSummary) -> Color {
+        APISpendPresentation.amountText(summary) == nil || summary.freshness != .live
+            ? IOSWidgetStyle.secondaryText(scheme: scheme)
+            : .primary
+    }
+
     private func providerColumn(_ provider: WidgetProviderSummary) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
@@ -215,6 +297,27 @@ struct HeadroomIOSWidgetView: View {
             IOSWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", compact: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func mediumProviderColumns(_ providers: [WidgetProviderSummary]) -> some View {
+        if providers.count <= 1 {
+            ForEach(providers) { provider in
+                providerColumn(provider)
+            }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+                    providerColumn(provider)
+                    if index < providers.count - 1 {
+                        Rectangle()
+                            .fill(IOSWidgetStyle.hairline(scheme: scheme))
+                            .frame(width: 1)
+                            .frame(maxHeight: .infinity)
+                    }
+                }
+            }
+        }
     }
 
     private func window(_ kind: WidgetWindowKind, in provider: WidgetProviderSummary) -> WidgetWindowSummary? {

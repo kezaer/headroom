@@ -79,8 +79,8 @@ struct APISpendSectionView: View {
     }
 
     @ViewBuilder private func amountView(_ snapshot: APISpendSnapshot) -> some View {
-        if let amount = snapshot.amount, let currency = snapshot.currency {
-            Text(Self.format(amount: amount, currency: currency))
+        if let amount = APISpendPresentation.amountText(amount: snapshot.amount, currency: snapshot.currency) {
+            Text(amount)
                 .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(snapshot.freshness == .live ? .primary : .secondary)
         } else {
@@ -88,14 +88,5 @@ struct APISpendSectionView: View {
                 .buttonStyle(HoverButtonStyle(horizontalPadding: 7, verticalPadding: 3))
                 .font(.caption2)
         }
-    }
-
-    private static func format(amount: Double, currency: String) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = currency.uppercased()
-        formatter.maximumFractionDigits = 2
-        formatter.minimumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: amount)) ?? "\(currency.uppercased()) \(String(format: "%.2f", amount))"
     }
 }

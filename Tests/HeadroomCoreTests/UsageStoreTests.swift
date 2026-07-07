@@ -503,4 +503,60 @@ struct UsageStoreTests {
         #expect(spend.fetchCount == 1)
         #expect(store.apiSpendSnapshot(for: .codex).freshness == .live)
     }
+
+    @Test func apiSpendOnlyRefreshExportsWidgetAndPhoneSnapshots() async {
+        let suite = "headroom.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        preferences.syncToIPhoneEnabled = true
+        let widgetExporter = SpyWidgetExporter()
+        let phoneExporter = SpyWidgetExporter()
+        let spend = CountingSpendProvider(id: .codex, displayName: "OpenAI API", snapshot: APISpendSnapshot(
+            providerID: .codex,
+            displayName: "OpenAI API",
+            amount: 8.5,
+            currency: "usd",
+            periodLabel: APISpendPeriod.currentMonth.label,
+            capturedAt: Date(timeIntervalSince1970: 4_000),
+            freshness: .live
+        ))
+        let store = UsageStore(
+            providers: [],
+            apiSpendProviders: [spend],
+            preferences: preferences,
+            widgetExporter: widgetExporter,
+            phoneSyncExporter: phoneExporter
+        )
+
+        store.setSurfaceEnabled(true, for: .openAIAPI)
+        await store.refreshAPISpendOnly()
+
+        #expect(widgetExporter.exports.last?.apiSpendProviders.first?.displayName == "OpenAI API")
+        #expect(widgetExporter.exports.last?.apiSpendProviders.first?.amount == 8.5)
+        #expect(phoneExporter.exports.last?.apiSpendProviders.first?.amount == 8.5)
+    }
+
+    @Test func apiSpendSurfaceToggleReexportsRemovedSpend() async {
+        let suite = "headroom.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        let exporter = SpyWidgetExporter()
+        let spend = CountingSpendProvider(id: .codex, displayName: "OpenAI API")
+        let store = UsageStore(
+            providers: [],
+            apiSpendProviders: [spend],
+            preferences: preferences,
+            widgetExporter: exporter
+        )
+
+        store.setSurfaceEnabled(true, for: .openAIAPI)
+        await store.refreshAPISpendOnly()
+        #expect(exporter.exports.last?.apiSpendProviders.map(\.id) == ["codex"])
+
+        store.setSurfaceEnabled(false, for: .openAIAPI)
+
+        #expect(exporter.exports.last?.apiSpendProviders.isEmpty == true)
+    }
 }

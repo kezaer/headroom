@@ -15,6 +15,16 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(decoded == .snapshot(envelope))
     }
 
+    @Test func liveSnapshotWithAPISpendRoundTrips() throws {
+        let envelope = makeSyncedEnvelope(snapshot: liveSnapshotWithAPISpend)
+
+        let decoded = SyncedWidgetSnapshotCodec.decode(try SyncedWidgetSnapshotCodec.encode(envelope))
+
+        #expect(decoded == .snapshot(envelope))
+        #expect(decoded.envelope?.snapshot.apiSpendProviders.first?.displayName == "OpenAI API")
+        #expect(decoded.envelope?.snapshot.apiSpendProviders.first?.amount == 19.25)
+    }
+
     @Test func disabledSnapshotRoundTripsWithoutProviders() throws {
         let envelope = makeSyncedEnvelope(snapshot: .disabled(generatedAt: generatedAt))
 
@@ -92,6 +102,27 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(SyncedWidgetSnapshotCodec.decode(Data("not-json".utf8)) == .corrupt)
     }
 
+    @Test func legacyWidgetSnapshotWithoutAPISpendDecodesWithEmptySpendList() throws {
+        let legacyPayload = """
+        {
+          "schemaVersion": 1,
+          "publishedAt": 2100,
+          "sourceID": "test-mac",
+          "sourcePlatform": "macOS",
+          "snapshot": {
+            "schemaVersion": 1,
+            "generatedAt": 2000,
+            "status": "enabled",
+            "providers": []
+          }
+        }
+        """
+
+        let decoded = SyncedWidgetSnapshotCodec.decode(Data(legacyPayload.utf8))
+
+        #expect(decoded.envelope?.snapshot.apiSpendProviders == [])
+    }
+
     @Test func unsupportedSchemaReturnsIncompatible() throws {
         let envelope = makeSyncedEnvelope(schemaVersion: 999, snapshot: liveSnapshot)
 
@@ -109,6 +140,9 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(!payload.contains("/Users/"))
         #expect(!payload.contains("Claude Code-credentials"))
         #expect(!payload.contains("Authorization"))
+        #expect(!payload.contains("x-api-key"))
+        #expect(!payload.contains("api.openai.com"))
+        #expect(!payload.contains("api.anthropic.com"))
     }
 
     @Test func newestValidKeepsLocalWhenRemoteIsOlderOrInvalid() {
@@ -147,6 +181,25 @@ struct SyncedWidgetSnapshotModelsTests {
                         ),
                     ],
                     renewalDate: nil
+                ),
+            ]
+        )
+    }
+
+    private var liveSnapshotWithAPISpend: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: generatedAt,
+            status: .enabled,
+            providers: [],
+            apiSpendProviders: [
+                WidgetAPISpendSummary(
+                    id: "codex",
+                    displayName: "OpenAI API",
+                    amount: 19.25,
+                    currency: "usd",
+                    periodLabel: "Current month",
+                    capturedAt: generatedAt,
+                    freshness: .live
                 ),
             ]
         )
