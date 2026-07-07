@@ -11,11 +11,20 @@ struct APISpendMirrorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            Text("API Spend")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(HeadroomTheme.secondaryText(scheme))
-                .textCase(.uppercase)
-                .tracking(0.4)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("API Spend")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(HeadroomTheme.secondaryText(scheme))
+                    .textCase(.uppercase)
+                    .tracking(0.4)
+                Spacer(minLength: 8)
+                if let periodLabel = summaries.first?.periodLabel {
+                    Text(periodLabel)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
+                        .lineLimit(1)
+                }
+            }
 
             VStack(spacing: 0) {
                 ForEach(Array(summaries.enumerated()), id: \.element.id) { index, summary in
@@ -51,11 +60,7 @@ struct APISpendMirrorView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(summary.displayName)
-                        .font(.headline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(summary.periodLabel)
-                        .font(.caption)
-                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                 }
                 statusLine(summary)
@@ -95,8 +100,8 @@ struct APISpendMirrorView: View {
                 .minimumScaleFactor(0.76)
                 .allowsTightening(true)
         } else {
-            Text("Managed on Mac")
-                .font(.caption.weight(.medium))
+            Text("—")
+                .font(.title3.weight(.semibold).monospacedDigit())
                 .foregroundStyle(HeadroomTheme.secondaryText(scheme))
                 .lineLimit(1)
                 .multilineTextAlignment(.trailing)

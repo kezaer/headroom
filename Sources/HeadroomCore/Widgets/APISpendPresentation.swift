@@ -24,7 +24,9 @@ public enum APISpendPresentation {
         case .live:
             Countdown.updatedLabel(capturedAt: capturedAt, now: now).map { "Updated \($0)" }
         case .stale(_, let needsAttention):
-            needsAttention ? "Needs setup on Mac" : "Stale"
+            needsAttention
+                ? "Set up on Mac"
+                : (Countdown.updatedLabel(capturedAt: capturedAt, now: now).map { "Updated \($0)" } ?? "Not updated")
         }
     }
 

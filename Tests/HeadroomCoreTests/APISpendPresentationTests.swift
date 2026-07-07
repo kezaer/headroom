@@ -28,6 +28,16 @@ struct APISpendPresentationTests {
             freshness: WidgetProviderFreshness.stale(message: "Add API key", needsAttention: true),
             capturedAt: now,
             now: now
-        ) == "Needs setup on Mac")
+        ) == "Set up on Mac")
+        #expect(APISpendPresentation.statusText(
+            freshness: WidgetProviderFreshness.stale(message: "Temporary issue", needsAttention: false),
+            capturedAt: now.addingTimeInterval(-120),
+            now: now
+        ) == "Updated 2 min ago")
+        #expect(APISpendPresentation.statusText(
+            freshness: WidgetProviderFreshness.stale(message: "Temporary issue", needsAttention: false),
+            capturedAt: nil,
+            now: now
+        ) == "Not updated")
     }
 }
