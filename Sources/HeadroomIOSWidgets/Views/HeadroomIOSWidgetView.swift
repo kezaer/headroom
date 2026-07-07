@@ -91,6 +91,10 @@ struct HeadroomIOSWidgetView: View {
                     }
                 }
             }
+            if !envelope.apiSpendProviders.isEmpty {
+                iosAPISpendCompactRow(envelope.apiSpendProviders)
+                    .padding(.top, 1)
+            }
             Spacer(minLength: 0)
         }
         // KTD1: lean on WidgetKit's default content margins for the ~16pt effective
@@ -108,6 +112,9 @@ struct HeadroomIOSWidgetView: View {
             }
             ForEach(envelope.providers) { provider in
                 largeProviderTile(provider)
+            }
+            if !envelope.apiSpendProviders.isEmpty {
+                iosAPISpendLargeSection(envelope.apiSpendProviders)
             }
             if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date) {
                 Text("from Mac · \(updated)")
@@ -167,6 +174,65 @@ struct HeadroomIOSWidgetView: View {
         .modifier(IOSWidgetTile())
     }
 
+    private func iosAPISpendCompactRow(_ summaries: [WidgetAPISpendSummary]) -> some View {
+        HStack(spacing: 6) {
+            Text("API")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                .lineLimit(1)
+            ForEach(summaries) { summary in
+                HStack(spacing: 4) {
+                    providerIcon(summary.id, size: 11)
+                    Text(APISpendPresentation.amountText(summary) ?? "Setup")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(apiAmountColor(summary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .allowsTightening(true)
+                    if summary.freshness.needsAttention {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(IOSWidgetStyle.severityColor(for: .low))
+                    }
+                }
+                .layoutPriority(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func iosAPISpendLargeSection(_ summaries: [WidgetAPISpendSummary]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("API Spend")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                .textCase(.uppercase)
+            ForEach(summaries) { summary in
+                HStack(spacing: 7) {
+                    providerIcon(summary.id, size: 15)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(summary.displayName)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(IOSWidgetStyle.textAccent(for: summary.id, scheme: scheme))
+                            .lineLimit(1)
+                        Text(apiSpendDetailText(summary))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(IOSWidgetStyle.tertiaryText(scheme: scheme))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Text(APISpendPresentation.amountText(summary) ?? "Setup on Mac")
+                        .font(.system(size: 13, weight: .bold).monospacedDigit())
+                        .foregroundStyle(apiAmountColor(summary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .allowsTightening(true)
+                }
+            }
+        }
+        .padding(.horizontal, largeTileInset)
+    }
+
     private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
@@ -193,6 +259,23 @@ struct HeadroomIOSWidgetView: View {
                 dimmed: provider.weeklyWindow == nil
             )
         }
+    }
+
+    private func apiSpendDetailText(_ summary: WidgetAPISpendSummary) -> String {
+        if let status = APISpendPresentation.statusText(
+            freshness: summary.freshness,
+            capturedAt: summary.capturedAt,
+            now: entry.date
+        ) {
+            return "\(summary.periodLabel) · \(status)"
+        }
+        return summary.periodLabel
+    }
+
+    private func apiAmountColor(_ summary: WidgetAPISpendSummary) -> Color {
+        APISpendPresentation.amountText(summary) == nil || summary.freshness != .live
+            ? IOSWidgetStyle.secondaryText(scheme: scheme)
+            : .primary
     }
 
     private func providerColumn(_ provider: WidgetProviderSummary) -> some View {

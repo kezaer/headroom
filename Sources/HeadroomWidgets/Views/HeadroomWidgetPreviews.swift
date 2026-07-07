@@ -37,6 +37,26 @@ private enum HeadroomWidgetPreviewData {
                     ],
                     renewalDate: now.addingTimeInterval(2 * 24 * 60 * 60)
                 ),
+            ],
+            apiSpendProviders: [
+                WidgetAPISpendSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Anthropic API",
+                    amount: 14.82,
+                    currency: "usd",
+                    periodLabel: "Current month",
+                    capturedAt: now.addingTimeInterval(-6 * 60),
+                    freshness: .live
+                ),
+                WidgetAPISpendSummary(
+                    id: ProviderID.codex.raw,
+                    displayName: "OpenAI API",
+                    amount: 7.4,
+                    currency: "usd",
+                    periodLabel: "Current month",
+                    capturedAt: now.addingTimeInterval(-9 * 60),
+                    freshness: .live
+                ),
             ]
         ))
     )

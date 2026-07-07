@@ -23,6 +23,13 @@ struct MirrorView: View {
                             entranceDelay: reduceMotion ? 0 : Double(index) * 0.055
                         )
                     }
+                    if !envelope.apiSpendProviders.isEmpty {
+                        APISpendMirrorView(
+                            summaries: envelope.apiSpendProviders,
+                            now: context.date,
+                            entranceDelay: reduceMotion ? 0 : Double(envelope.providers.count) * 0.055
+                        )
+                    }
                 }
                 .padding(.horizontal, 18)
                 .padding(.top, 4)

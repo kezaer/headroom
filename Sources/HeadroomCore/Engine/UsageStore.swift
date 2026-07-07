@@ -217,10 +217,8 @@ public final class UsageStore {
         } else {
             enabledSurfaces.remove(surface)
         }
-        if surface.isSubscription {
-            exportWidgetSnapshot()
-            exportPhoneSyncSnapshot()
-        }
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
     }
 
     public var apiSpendPeriod: APISpendPeriod {
@@ -238,8 +236,10 @@ public final class UsageStore {
         if isRefreshing { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        await refreshSubscriptions()
-        await refreshAPISpend()
+        await refreshSubscriptions(exportAfter: false)
+        await refreshAPISpend(exportAfter: false)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
     }
 
     public func refreshAPISpendOnly() async {
@@ -249,7 +249,7 @@ public final class UsageStore {
         await refreshAPISpend()
     }
 
-    private func refreshSubscriptions() async {
+    private func refreshSubscriptions(exportAfter: Bool = true) async {
         let results = await withTaskGroup(of: (ProviderID, UsageSnapshot).self) { group in
             for provider in providers {
                 guard enabledSurfaces.contains(subscriptionSurface(for: provider.id)) else { continue }
@@ -260,11 +260,13 @@ public final class UsageStore {
             return acc
         }
         for (id, fresh) in results { merge(id: id, fresh: fresh) }
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
+        if exportAfter {
+            exportWidgetSnapshot()
+            exportPhoneSyncSnapshot()
+        }
     }
 
-    private func refreshAPISpend() async {
+    private func refreshAPISpend(exportAfter: Bool = true) async {
         let spendPeriod = preferences.apiSpendPeriod
         let spendResults = await withTaskGroup(of: (ProviderID, APISpendSnapshot).self) { group in
             for provider in apiSpendProviders {
@@ -276,6 +278,10 @@ public final class UsageStore {
             return acc
         }
         for (id, fresh) in spendResults { mergeSpend(id: id, fresh: fresh) }
+        if exportAfter {
+            exportWidgetSnapshot()
+            exportPhoneSyncSnapshot()
+        }
     }
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
@@ -343,6 +349,8 @@ public final class UsageStore {
             renewalDate: { [preferences] in preferences.renewalDate(for: $0) },
             widgetsEnabled: widgetsEnabled,
             showsCodexSparkCounters: preferences.showCodexSparkCountersInWidgets,
+            apiSpendSnapshots: apiSpendSnapshots,
+            apiSpendProviderOrder: apiSpendProviderOrder,
             generatedAt: generatedAt
         )
     }

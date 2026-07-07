@@ -25,6 +25,10 @@ struct HeadroomMediumWidgetView: View {
                     }
                 }
             }
+            if !envelope.apiSpendProviders.isEmpty {
+                WidgetAPISpendCompactRow(summaries: envelope.apiSpendProviders, now: now)
+                    .padding(.top, 1)
+            }
             Spacer(minLength: 0)
             if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: now) {
                 Text("from Mac · \(updated)")

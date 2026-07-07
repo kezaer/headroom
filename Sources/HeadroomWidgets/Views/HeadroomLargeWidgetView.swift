@@ -15,7 +15,14 @@ struct HeadroomLargeWidgetView: View {
                         .fill(WidgetProviderStyle.hairline(scheme: scheme))
                         .frame(height: 1)
                         .padding(.vertical, 15)
-                }
+                    }
+            }
+            if !envelope.apiSpendProviders.isEmpty {
+                Rectangle()
+                    .fill(WidgetProviderStyle.hairline(scheme: scheme))
+                    .frame(height: 1)
+                    .padding(.vertical, 13)
+                WidgetAPISpendSection(summaries: envelope.apiSpendProviders, now: now)
             }
             Spacer(minLength: 0)
             if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: now) {

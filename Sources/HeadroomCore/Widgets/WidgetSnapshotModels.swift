@@ -9,21 +9,41 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let status: WidgetExportStatus
     public let providers: [WidgetProviderSummary]
+    public let apiSpendProviders: [WidgetAPISpendSummary]
 
     public init(
         schemaVersion: Int = Self.schemaVersion,
         generatedAt: Date,
         status: WidgetExportStatus,
-        providers: [WidgetProviderSummary]
+        providers: [WidgetProviderSummary],
+        apiSpendProviders: [WidgetAPISpendSummary] = []
     ) {
         self.schemaVersion = schemaVersion
         self.generatedAt = generatedAt
         self.status = status
         self.providers = providers
+        self.apiSpendProviders = apiSpendProviders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case generatedAt
+        case status
+        case providers
+        case apiSpendProviders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        status = try container.decode(WidgetExportStatus.self, forKey: .status)
+        providers = try container.decode([WidgetProviderSummary].self, forKey: .providers)
+        apiSpendProviders = try container.decodeIfPresent([WidgetAPISpendSummary].self, forKey: .apiSpendProviders) ?? []
     }
 
     public static func disabled(generatedAt: Date) -> WidgetSnapshotEnvelope {
-        WidgetSnapshotEnvelope(generatedAt: generatedAt, status: .disabled, providers: [])
+        WidgetSnapshotEnvelope(generatedAt: generatedAt, status: .disabled, providers: [], apiSpendProviders: [])
     }
 
     /// Weekly provider-by-provider values for the smallest widget. This never creates
@@ -89,6 +109,34 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
                 return window.label.localizedCaseInsensitiveContains("weekly")
             }
         }
+    }
+}
+
+public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable {
+    public let id: String
+    public let displayName: String
+    public let amount: Double?
+    public let currency: String?
+    public let periodLabel: String
+    public let capturedAt: Date?
+    public let freshness: WidgetProviderFreshness
+
+    public init(
+        id: String,
+        displayName: String,
+        amount: Double?,
+        currency: String?,
+        periodLabel: String,
+        capturedAt: Date?,
+        freshness: WidgetProviderFreshness
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.amount = amount
+        self.currency = currency
+        self.periodLabel = periodLabel
+        self.capturedAt = capturedAt
+        self.freshness = freshness
     }
 }
 

@@ -34,7 +34,7 @@ struct SettingsSheetView: View {
                     }
 
                     Section("Managed on Mac") {
-                        Label("Refresh interval, API keys, provider selection, and renewal dates stay in Headroom on your Mac.", systemImage: "macbook")
+                        Label("Refresh interval, API keys, API spend period, provider selection, and renewal dates stay in Headroom on your Mac.", systemImage: "macbook")
                             .font(.footnote)
                             .foregroundStyle(HeadroomTheme.secondaryText(scheme))
                             .fixedSize(horizontal: false, vertical: true)
