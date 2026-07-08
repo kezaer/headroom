@@ -2,6 +2,11 @@
 
 Paste-ready fields for the `com.kylezantos.headroom.ios` 1.0 submission.
 
+## Submission log
+
+- 2026-07-08: Submitted iOS 1.0 build 12 to App Review. App Store Connect
+  status: **Waiting for Review**.
+
 ## Name (30 chars max)
 
 ```
