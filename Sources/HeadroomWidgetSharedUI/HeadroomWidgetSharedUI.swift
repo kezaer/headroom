@@ -159,7 +159,7 @@ public struct HeadroomWidgetUsageMeter: View {
                         .layoutPriority(-1)
                 }
                 Spacer(minLength: 2)
-                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(percentText)
                         .font(percentFont)
                         .foregroundStyle(window == nil ? HeadroomWidgetStyle.secondaryText(scheme: scheme) : .primary)

@@ -201,7 +201,7 @@ struct WidgetSnapshotProjectorTests {
                 .codex: .live(.codex, windows: [
                     UsageWindow(kind: .weekly, utilization: 25, resetsAt: reset),
                     UsageWindow(kind: .other("codex-spark 5h"), utilization: 40, resetsAt: reset),
-                    UsageWindow(kind: .other("codex-spark weekly"), utilization: 60, resetsAt: reset),
+                    UsageWindow(kind: .other("GPT-5.3-Codex-Spark weekly"), utilization: 93, resetsAt: reset),
                     UsageWindow(kind: .other("GPT-5.3"), utilization: 90, resetsAt: reset),
                 ], at: now),
             ],
@@ -216,10 +216,12 @@ struct WidgetSnapshotProjectorTests {
         #expect(envelope.providers[0].windows.map(\.kind) == [
             .weekly,
             .other("codex-spark 5h"),
-            .other("codex-spark weekly"),
+            .other("GPT-5.3-Codex-Spark weekly"),
         ])
         #expect(envelope.providers[0].extraCounterWindows.count == 2)
-        #expect(envelope.providers[0].weeklyDisplayWindows.map(\.label) == ["Weekly", "codex-spark weekly"])
+        #expect(envelope.providers[0].weeklyDisplayWindows.map(\.label) == ["Weekly", "GPT-5.3-Codex-Spark weekly"])
+        #expect(envelope.providers[0].limitingExtraWeeklyWindow?.compactLabel == "Spark")
+        #expect(envelope.providers[0].limitingExtraWeeklyWindow?.roundedPercentRemaining == 7)
     }
 
     @Test func sparkWindowSettingDoesNotExposeNonCodexWindows() {
@@ -244,8 +246,8 @@ struct WidgetSnapshotProjectorTests {
 
     @Test func claudeWeeklySubLimitsSurfaceInWidgets() {
         // Claude's model-specific weekly sub-limit ("Weekly (Fable)") rides with the
-        // weekly window into the widget — independent of the Codex spark setting — so the
-        // large widget and popover show the same picture.
+        // weekly window into the widget, independent of the Codex spark setting, so a
+        // more restrictive value can appear as compact large-widget header context.
         let envelope = WidgetSnapshotProjector.project(
             snapshots: [
                 .claude: .live(.claude, windows: [
@@ -267,6 +269,28 @@ struct WidgetSnapshotProjectorTests {
             .other("Weekly (Fable)"),
         ])
         #expect(envelope.providers[0].extraWeeklyWindows.map(\.label) == ["Weekly (Fable)"])
+        #expect(envelope.providers[0].limitingExtraWeeklyWindow?.compactLabel == "Fable")
+        #expect(envelope.providers[0].limitingExtraWeeklyWindow?.roundedPercentRemaining == 38)
+    }
+
+    @Test func matchingWeeklySubLimitDoesNotAddWidgetHeaderStatus() {
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [
+                .claude: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 8, resetsAt: reset),
+                    UsageWindow(kind: .fiveHour, utilization: 48, resetsAt: reset),
+                    UsageWindow(kind: .other("Weekly (Fable)"), utilization: 8, resetsAt: reset),
+                ], at: now),
+            ],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        #expect(envelope.providers[0].extraWeeklyWindows.count == 1)
+        #expect(envelope.providers[0].limitingExtraWeeklyWindow == nil)
     }
 
     @Test func unknownProviderRoundTrips() throws {

@@ -218,11 +218,7 @@ struct HeadroomIOSWidgetView: View {
     // title or app-icon mark (R3).
     private func large(_ envelope: WidgetSnapshotEnvelope) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Tighter inter-card + section spacing than the macOS twin: the iPhone large
-            // tile's content area is ~15–20pt shorter (larger WidgetKit content margins),
-            // so mirroring the macOS spacing plus a third Claude meter overflowed the footer.
-            // Verified fitting on iPhone 16 Pro Max via the render harness.
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(envelope.providers) { provider in
                     largeProviderSection(provider)
                         .headroomWidgetLargeProviderCard()
@@ -242,8 +238,6 @@ struct HeadroomIOSWidgetView: View {
                     .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    // Guaranteed breathing room above the footer: the Spacer collapses to
-                    // zero once the cards fill the tile.
                     .padding(.top, 8)
             }
         }
@@ -253,16 +247,10 @@ struct HeadroomIOSWidgetView: View {
     }
 
     private func largeProviderSection(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             largeSectionHeader(provider)
             HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, prominent: true)
             HeadroomWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
-            // Model-specific weekly sub-limits (Claude's "Weekly (Fable)") follow the two
-            // primary windows. Rendered compact — a secondary sub-limit, and the shorter
-            // iPhone large tile can't fit a third prominent meter without clipping the footer.
-            ForEach(provider.extraWeeklyWindows) { window in
-                HeadroomWidgetUsageMeter(window: window, fallbackLabel: window.label, now: entry.date, showsResetInline: true, compact: true)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -275,16 +263,14 @@ struct HeadroomIOSWidgetView: View {
                 .foregroundStyle(HeadroomWidgetStyle.textAccent(for: provider.id, scheme: scheme))
                 .widgetAccentable()
                 .lineLimit(1)
-            if let planLabel = provider.planLabel {
-                Text(planLabel)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(HeadroomWidgetStyle.secondaryText(scheme: scheme))
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(HeadroomWidgetStyle.barTrack(scheme: scheme), in: Capsule())
-            }
             Spacer(minLength: 4)
+            if let extraWindow = provider.limitingExtraWeeklyWindow {
+                Text("\(extraWindow.compactLabel) \(extraWindow.roundedPercentRemaining)%")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(extraLimitColor(extraWindow))
+                    .lineLimit(1)
+                    .accessibilityLabel("\(extraWindow.compactLabel) limit, \(extraWindow.roundedPercentRemaining) percent left")
+            }
             if provider.freshness.needsAttention {
                 Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
                     .labelStyle(.iconOnly)
@@ -298,6 +284,15 @@ struct HeadroomIOSWidgetView: View {
 
     private func window(_ kind: WidgetWindowKind, in provider: WidgetProviderSummary) -> WidgetWindowSummary? {
         provider.subscriptionWindows.first { $0.kind == kind }
+    }
+
+    private func extraLimitColor(_ window: WidgetWindowSummary) -> Color {
+        switch window.severity {
+        case .healthy:
+            HeadroomWidgetStyle.secondaryText(scheme: scheme)
+        case .low, .critical:
+            HeadroomWidgetStyle.severityColor(for: window.severity, scheme: scheme)
+        }
     }
 
     private func percent(_ window: WidgetWindowSummary?) -> String {

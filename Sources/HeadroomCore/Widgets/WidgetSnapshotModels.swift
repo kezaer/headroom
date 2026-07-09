@@ -111,15 +111,30 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
         }
     }
 
-    /// The model-specific weekly sub-limits shown as extra meters beside the primary
-    /// weekly window — Claude's "Weekly (Fable)" (and Codex's spark weekly counter when
-    /// enabled). Excludes the primary weekly and 5-hour windows; the projector has
-    /// already decided which `.other` windows survive to the widget.
+    /// Model-specific weekly sub-limits retained for compact large-widget context,
+    /// including Claude's "Weekly (Fable)" and Codex's optional Spark weekly counter.
+    /// Excludes the primary weekly and 5-hour windows; the projector has already decided
+    /// which `.other` windows survive to the widget.
     public var extraWeeklyWindows: [WidgetWindowSummary] {
         windows.filter { window in
             guard case .other = window.kind else { return false }
             return window.label.localizedCaseInsensitiveContains("weekly")
         }
+    }
+
+    /// The most restrictive model-specific weekly limit, when it communicates a
+    /// different whole-number value than the provider's primary weekly limit.
+    /// Large widgets use this as compact header context instead of adding another meter.
+    public var limitingExtraWeeklyWindow: WidgetWindowSummary? {
+        guard let extraWindow = extraWeeklyWindows.min(by: {
+            $0.percentRemaining < $1.percentRemaining
+        }) else {
+            return nil
+        }
+        guard let weeklyWindow else { return extraWindow }
+        return extraWindow.roundedPercentRemaining < weeklyWindow.roundedPercentRemaining
+            ? extraWindow
+            : nil
     }
 }
 
@@ -188,6 +203,25 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         self.resetsAt = resetsAt
         self.resetLabel = resetLabel
         self.severity = severity
+    }
+
+    public var roundedPercentRemaining: Int {
+        Int(percentRemaining.rounded())
+    }
+
+    /// Shortens model-specific labels for constrained widget headers. For example,
+    /// "Weekly (Fable)" becomes "Fable" and Codex Spark weekly labels become "Spark".
+    public var compactLabel: String {
+        if label.localizedCaseInsensitiveContains("spark"),
+           label.localizedCaseInsensitiveContains("weekly") {
+            return "Spark"
+        }
+        let prefix = "Weekly ("
+        guard label.hasPrefix(prefix), label.hasSuffix(")") else { return label }
+        let contentStart = label.index(label.startIndex, offsetBy: prefix.count)
+        let contentEnd = label.index(before: label.endIndex)
+        guard contentStart < contentEnd else { return label }
+        return String(label[contentStart..<contentEnd])
     }
 }
 
