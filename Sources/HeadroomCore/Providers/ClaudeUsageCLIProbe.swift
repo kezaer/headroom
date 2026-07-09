@@ -37,7 +37,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         claudePath: String? = ClaudeUsageCLIProbe.resolveClaudePath(),
         workingDirectory: String = FileManager.default.currentDirectoryPath,
         bootTimeout: TimeInterval = 30,
-        panelTimeout: TimeInterval = 20
+        panelTimeout: TimeInterval = 26
     ) {
         self.claudePath = claudePath
         self.workingDirectory = workingDirectory
@@ -195,7 +195,13 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         _ = "\r".withCString { write(master, $0, strlen($0)) }
         usleep(250_000)
         _ = "\r".withCString { write(master, $0, strlen($0)) }
-        drain(master: master, maxSeconds: panel, quiet: 2.5, into: &buffer) // the panel
+        // Longer quiet window than boot: the panel renders the primary limits first, then
+        // pauses to compute the model-specific weekly sub-limits ("Current week (Fable)")
+        // before painting the settled panel. On a cold start (e.g. right after an app
+        // update) that pause can exceed a short quiet window, so a 2.5s drain concluded
+        // before the sub-limit line rendered — the parser needs the clean line, so Fable
+        // went missing until the next poll. 4s bridges that settle pause.
+        drain(master: master, maxSeconds: panel, quiet: 4.0, into: &buffer) // the panel
         teardown()
 
         return String(data: buffer, encoding: .utf8) ?? String(decoding: buffer, as: UTF8.self)

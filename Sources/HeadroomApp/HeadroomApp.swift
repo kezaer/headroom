@@ -173,7 +173,7 @@ struct HeadroomApp: App {
             }
                 .preferredColorScheme(appearancePreference.colorScheme)
                 .onChange(of: appearancePreference) { _, newValue in
-                    NSApp.appearance = newValue.nsAppearance
+                    newValue.applyToProcess()
                 }
                 .task { await store.start() }
         } label: {
@@ -264,6 +264,20 @@ extension AppearancePreference {
         case .system: nil
         case .light: NSAppearance(named: .aqua)
         case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+
+    /// Apply this theme to the process AND every open window. Setting only
+    /// `NSApp.appearance` isn't enough: SwiftUI's `preferredColorScheme` pins each open
+    /// window's own `appearance`, and switching to `.system` (nil) does NOT release that
+    /// pin. A Light→System flip then leaves the popover/settings windows stuck on the
+    /// light appearance even though the OS is dark. Writing `appearance` on each window
+    /// (nil for System) clears the pin so they follow the process/OS again.
+    @MainActor
+    func applyToProcess() {
+        NSApp.appearance = nsAppearance
+        for window in NSApp.windows {
+            window.appearance = nsAppearance
         }
     }
 }
