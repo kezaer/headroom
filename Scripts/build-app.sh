@@ -29,12 +29,13 @@ HEADROOM_CODESIGN_OPTIONS="${HEADROOM_CODESIGN_OPTIONS:---timestamp=none}"
 HEADROOM_APP_GROUP_IDENTIFIER="${HEADROOM_APP_GROUP_IDENTIFIER:-group.com.kylezantos.headroom}"
 HEADROOM_ENABLE_ICLOUD_ENTITLEMENT="${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT:-0}"
 HEADROOM_TEAM_IDENTIFIER="${HEADROOM_TEAM_IDENTIFIER:-}"
-# Path to a macOS development provisioning profile that authorizes the iCloud
-# Key-Value store capability for com.kylezantos.headroom. REQUIRED alongside
-# HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1: the ubiquity-kvstore entitlement is
-# restricted, so without an embedded profile the OS SIGKILLs the app at launch
-# (exit 137). Get one from Xcode's managed signing or developer.apple.com.
+# Paths to the separate macOS provisioning profiles for the host and widget
+# bundle IDs. REQUIRED alongside HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1: restricted
+# entitlements must be authorized for each executable independently. Reusing the
+# host profile for the widget makes WidgetKit registration succeed but amfid
+# rejects the extension at launch with "No matching profile found".
 HEADROOM_PROVISIONING_PROFILE="${HEADROOM_PROVISIONING_PROFILE:-}"
+HEADROOM_WIDGET_PROVISIONING_PROFILE="${HEADROOM_WIDGET_PROVISIONING_PROFILE:-}"
 HEADROOM_SPARKLE_FEED_URL="${HEADROOM_SPARKLE_FEED_URL:-}"
 HEADROOM_SPARKLE_PUBLIC_ED_KEY="${HEADROOM_SPARKLE_PUBLIC_ED_KEY:-VkSwNYbBn5WJUbqYFyhewIFZt4DIfCwiWmTNiGGDorM=}"
 read -r -a CODESIGN_OPTIONS <<< "${HEADROOM_CODESIGN_OPTIONS}"
@@ -114,6 +115,10 @@ prepare_entitlements() {
     fi
     /usr/libexec/PlistBuddy -c "Set :com.apple.developer.ubiquity-kvstore-identifier ${team_identifier}.com.kylezantos.headroom" "${APP_ENTITLEMENTS}"
     /usr/libexec/PlistBuddy -c "Set :com.apple.developer.ubiquity-kvstore-identifier ${team_identifier}.com.kylezantos.headroom" "${WIDGET_ENTITLEMENTS}"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string ${team_identifier}.com.kylezantos.headroom" "${APP_ENTITLEMENTS}"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string ${team_identifier}.com.kylezantos.headroom.widgets" "${WIDGET_ENTITLEMENTS}"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string ${team_identifier}" "${APP_ENTITLEMENTS}"
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string ${team_identifier}" "${WIDGET_ENTITLEMENTS}"
   else
     # Delete BOTH restricted iCloud keys. `icloud-container-identifiers` counts as a
     # restricted entitlement even as an empty array — leaving it in an ad-hoc
@@ -150,25 +155,104 @@ stamp_sparkle_info() {
     || /usr/libexec/PlistBuddy -c "Add :SUAllowsAutomaticUpdates bool false" "${plist}"
 }
 
-embed_provisioning_profile() {
-  # Only relevant when the restricted iCloud KVS entitlement is on. A local codesign
-  # can't grant it on its own; the app needs an embedded provisioning profile.
+profile_value() {
+  local profile="$1"
+  local key="$2"
+  local decoded
+  decoded="$(security cms -D -i "${profile}" 2>/dev/null)" || return 1
+  /usr/libexec/PlistBuddy -c "Print :${key}" /dev/stdin <<< "${decoded}" 2>/dev/null
+}
+
+validate_provisioning_profile() {
+  local variable_name="$1"
+  local profile="$2"
+  local expected_bundle_identifier="$3"
+  local team_identifier="$4"
+  local expected_application_identifier="${team_identifier}.${expected_bundle_identifier}"
+
+  if [[ -z "${profile}" ]]; then
+    echo "${variable_name} is required when HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1." >&2
+    exit 66
+  fi
+  if [[ ! -f "${profile}" ]]; then
+    echo "${variable_name} not found: ${profile}" >&2
+    exit 66
+  fi
+
+  local application_identifier
+  application_identifier="$(profile_value "${profile}" "Entitlements:com.apple.application-identifier")" || {
+    echo "Couldn't decode ${variable_name}: ${profile}" >&2
+    exit 66
+  }
+  if [[ "${application_identifier}" != "${expected_application_identifier}" ]]; then
+    echo "${variable_name} authorizes ${application_identifier}, expected ${expected_application_identifier}." >&2
+    exit 66
+  fi
+
+  local profile_name
+  profile_name="$(profile_value "${profile}" "Name")" || {
+    echo "Couldn't read the name from ${variable_name}: ${profile}" >&2
+    exit 66
+  }
+  case "${CODESIGN_IDENTITY}" in
+    "Apple Development:"*)
+      if [[ "${profile_name}" != "Mac Team Provisioning Profile:"* ]]; then
+        echo "${variable_name} is not an Apple Development profile: ${profile_name}" >&2
+        exit 66
+      fi
+      ;;
+    "Developer ID Application:"*)
+      if [[ "${profile_name}" != "Mac Team Direct Provisioning Profile:"* ]]; then
+        echo "${variable_name} is not a Developer ID profile: ${profile_name}" >&2
+        exit 66
+      fi
+      ;;
+  esac
+}
+
+validate_provisioning_profiles() {
   if [[ "${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT}" != "1" ]]; then
     return
   fi
-  if [[ -n "${HEADROOM_PROVISIONING_PROFILE}" ]]; then
-    if [[ ! -f "${HEADROOM_PROVISIONING_PROFILE}" ]]; then
-      echo "HEADROOM_PROVISIONING_PROFILE not found: ${HEADROOM_PROVISIONING_PROFILE}" >&2
-      exit 66
-    fi
-    echo "→ embedding provisioning profile: ${HEADROOM_PROVISIONING_PROFILE}"
-    cp "${HEADROOM_PROVISIONING_PROFILE}" "${APP}/Contents/embedded.provisionprofile"
-  else
-    echo "⚠️  iCloud KVS entitlement is ON but no HEADROOM_PROVISIONING_PROFILE was provided." >&2
-    echo "    The ubiquity-kvstore entitlement is restricted, so macOS will SIGKILL this app" >&2
-    echo "    at launch (exit 137) without an embedded profile. Either set" >&2
-    echo "    HEADROOM_PROVISIONING_PROFILE=/path/to/*.provisionprofile, or build/run the app" >&2
-    echo "    from Xcode (managed signing embeds the profile automatically)." >&2
+
+  local team_identifier
+  team_identifier="$(derive_team_identifier)"
+  validate_provisioning_profile \
+    "HEADROOM_PROVISIONING_PROFILE" \
+    "${HEADROOM_PROVISIONING_PROFILE}" \
+    "com.kylezantos.headroom" \
+    "${team_identifier}"
+  validate_provisioning_profile \
+    "HEADROOM_WIDGET_PROVISIONING_PROFILE" \
+    "${HEADROOM_WIDGET_PROVISIONING_PROFILE}" \
+    "com.kylezantos.headroom.widgets" \
+    "${team_identifier}"
+}
+
+embed_provisioning_profiles() {
+  # Only relevant when the restricted iCloud KVS entitlement is on. A local
+  # codesign cannot grant it; both executables need their matching profile.
+  if [[ "${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT}" != "1" ]]; then
+    return
+  fi
+
+  echo "→ embedding host provisioning profile: ${HEADROOM_PROVISIONING_PROFILE}"
+  cp "${HEADROOM_PROVISIONING_PROFILE}" "${APP}/Contents/embedded.provisionprofile"
+  echo "→ embedding widget provisioning profile: ${HEADROOM_WIDGET_PROVISIONING_PROFILE}"
+  cp "${HEADROOM_WIDGET_PROVISIONING_PROFILE}" "${WIDGET_APPEX}/Contents/embedded.provisionprofile"
+}
+
+verify_signed_identifier() {
+  local signed_path="$1"
+  local expected_application_identifier="$2"
+  local entitlements_path="$3"
+
+  codesign -d --entitlements :- "${signed_path}" > "${entitlements_path}" 2>/dev/null
+  local application_identifier
+  application_identifier="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.application-identifier' "${entitlements_path}" 2>/dev/null || true)"
+  if [[ "${application_identifier}" != "${expected_application_identifier}" ]]; then
+    echo "Unexpected signed application identifier for ${signed_path}: ${application_identifier:-missing}" >&2
+    exit 67
   fi
 }
 
@@ -179,6 +263,12 @@ if ! command -v xcodegen >/dev/null 2>&1; then
 fi
 
 CODESIGN_IDENTITY="$(select_codesign_identity)"
+if [[ "${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT}" == "1" && "${CODESIGN_IDENTITY}" == "-" ]]; then
+  echo "HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1 requires an Apple codesigning identity." >&2
+  echo "Set HEADROOM_CODESIGN_IDENTITY to Apple Development or Developer ID Application." >&2
+  exit 65
+fi
+validate_provisioning_profiles
 prepare_sparkle_artifact
 
 echo "→ xcodegen generate"
@@ -209,7 +299,7 @@ ditto "${BUILT_APP}" "${APP}"
 prepare_entitlements
 stamp_app_group_info
 stamp_sparkle_info
-embed_provisioning_profile
+embed_provisioning_profiles
 
 # Interrupted codesign runs can leave temporary files inside the bundle. Remove them
 # before sealing, or codesign treats the temp file as a malformed nested component.
@@ -235,6 +325,17 @@ done < <(find "${APP}/Contents/Frameworks" -maxdepth 1 -type d -name '*.framewor
 sign_path "${WIDGET_APPEX}" --entitlements "${WIDGET_ENTITLEMENTS}"
 sign_path "${APP}" --entitlements "${APP_ENTITLEMENTS}"
 codesign --verify --deep --strict --verbose=2 "${APP}"
+
+if [[ "${HEADROOM_ENABLE_ICLOUD_ENTITLEMENT}" == "1" ]]; then
+  verify_signed_identifier \
+    "${APP}" \
+    "$(derive_team_identifier).com.kylezantos.headroom" \
+    "${SIGNING_DIR}/SignedHeadroomApp.entitlements"
+  verify_signed_identifier \
+    "${WIDGET_APPEX}" \
+    "$(derive_team_identifier).com.kylezantos.headroom.widgets" \
+    "${SIGNING_DIR}/SignedHeadroomWidgets.entitlements"
+fi
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
 if [[ -x "${LSREGISTER}" ]]; then
