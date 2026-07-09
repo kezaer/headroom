@@ -144,6 +144,9 @@ enum Entry {
 struct HeadroomApp: App {
     @State private var store: UsageStore
     @State private var appearancePreference: AppearancePreference
+    /// Live mirror of the OS light/dark setting, so `.system` resolves to a concrete scheme
+    /// (see `resolvedScheme`). Updated by the interface-theme observer on the menu bar label.
+    @State private var systemIsDark: Bool
     @StateObject private var softwareUpdates = SoftwareUpdateController()
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -156,6 +159,7 @@ struct HeadroomApp: App {
         self.preferences = preferences
         _store = State(initialValue: store)
         _appearancePreference = State(initialValue: preferences.appearancePreference)
+        _systemIsDark = State(initialValue: SystemAppearance.isDark())
         AppDelegate.startUsageStore = { Task { await store.start() } }
         // SwiftUI's `preferredColorScheme` doesn't reach the `MenuBarExtra(.window)`
         // popover panel or the Settings window's AppKit chrome — both are NSWindows whose
@@ -166,12 +170,26 @@ struct HeadroomApp: App {
         AppDelegate.startupAppearance = preferences.appearancePreference.nsAppearance
     }
 
+    /// Concrete color scheme for the SwiftUI content. Deliberately never nil for `.system`:
+    /// `preferredColorScheme(nil)` does NOT revert the content scheme after it was pinned to
+    /// an explicit value, so a Light→System flip left the cards stuck light even though the
+    /// window chrome (driven by `applyToProcess`) went dark. Resolving `.system` to the live
+    /// OS scheme sidesteps that; `systemIsDark` is kept current by the interface-theme
+    /// observer below so System mode still tracks the OS.
+    private var resolvedScheme: ColorScheme {
+        switch appearancePreference {
+        case .light: .light
+        case .dark: .dark
+        case .system: systemIsDark ? .dark : .light
+        }
+    }
+
     var body: some Scene {
         MenuBarExtra {
             PopoverView(store: store) {
                 openSettings()
             }
-                .preferredColorScheme(appearancePreference.colorScheme)
+                .preferredColorScheme(resolvedScheme)
                 .onChange(of: appearancePreference) { _, newValue in
                     newValue.applyToProcess()
                 }
@@ -181,8 +199,21 @@ struct HeadroomApp: App {
                 meters: store.menuBarMeters,
                 showsPercentage: store.showMenuBarPercentage
             )
-            .preferredColorScheme(appearancePreference.colorScheme)
+            .preferredColorScheme(resolvedScheme)
             .task { await store.start() }
+            // Track OS light/dark flips so `.system` content re-resolves live (chrome
+            // follows the OS on its own via `NSApp.appearance == nil`). Attached to the
+            // always-present label, not the on-demand popover, so it never misses a change.
+            .onReceive(DistributedNotificationCenter.default().publisher(
+                for: Notification.Name("AppleInterfaceThemeChangedNotification")
+            )) { _ in
+                systemIsDark = SystemAppearance.isDark()
+            }
+            // Re-read the OS truth on any theme switch so a Light→System flip resolves
+            // against the live setting, not a possibly-stale mirror.
+            .onChange(of: appearancePreference) { _, _ in
+                systemIsDark = SystemAppearance.isDark()
+            }
         }
         .menuBarExtraStyle(.window)
 
@@ -193,7 +224,7 @@ struct HeadroomApp: App {
                 softwareUpdates: softwareUpdates,
                 preferences: preferences
             )
-            .preferredColorScheme(appearancePreference.colorScheme)
+            .preferredColorScheme(resolvedScheme)
         }
         // Hidden title bar: the settings window draws its own header (logo + title) in
         // content, so traffic lights float on a transparent strip. Avoids Tahoe wrapping a
@@ -279,6 +310,16 @@ extension AppearancePreference {
         for window in NSApp.windows {
             window.appearance = nsAppearance
         }
+    }
+}
+
+enum SystemAppearance {
+    /// The OS light/dark setting, read from the global preference so it stays correct even
+    /// while the app pins `NSApp.appearance` to an explicit theme (a pinned `effectiveAppearance`
+    /// would report the override, not the OS). `AppleInterfaceStyle` is "Dark" in dark mode and
+    /// absent in light — including under the auto/scheduled setting, which toggles this key.
+    @MainActor static func isDark() -> Bool {
+        UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
     }
 }
 
