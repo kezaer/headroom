@@ -1,10 +1,11 @@
 #!/bin/bash
-# Render the Headroom DMG installer background from dmg-background.html into
+# Render the legacy Headroom DMG background reference from dmg-background.html into
 # dmg-background.png (@1x, 680x440) and dmg-background@2x.png (@2x, 1360x880).
 #
 # Uses headless Google Chrome so the committed PNGs exactly match the approved
 # "Instrument" design (real TX-02 type + vessel app icon). The release script
-# (Scripts/release-app.sh) consumes the committed PNGs and never runs a browser.
+# Scripts/release-app.sh intentionally does not consume these images because Finder
+# forces black labels for custom backgrounds and cannot resize the bitmap with a window.
 set -euo pipefail
 cd "$(dirname "$0")"
 

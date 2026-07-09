@@ -5,8 +5,6 @@ cd "$(dirname "$0")/.."
 
 APP="Headroom.app"
 WIDGET_APPEX="${APP}/Contents/PlugIns/HeadroomWidgets.appex"
-DMG_BACKGROUND_1X="Assets/Release/dmg-background.png"
-DMG_BACKGROUND_2X="Assets/Release/dmg-background@2x.png"
 DIST_DIR="dist"
 WORK_DIR="${DIST_DIR}/release-work"
 APP_ZIP="${WORK_DIR}/Headroom-app-notary.zip"
@@ -109,22 +107,6 @@ create_drag_install_dmg() {
   rm -rf "${DMG_MOUNT_DIR}"
   mkdir -p "${DMG_MOUNT_DIR}"
 
-  echo "→ staging installer window background"
-  local background_ready=0
-  if [[ -f "${DMG_BACKGROUND_1X}" ]]; then
-    mkdir -p "${STAGING_DIR}/.background"
-    if [[ -f "${DMG_BACKGROUND_2X}" ]] && command -v tiffutil >/dev/null 2>&1; then
-      # Combine @1x + @2x into one HiDPI TIFF so Retina Finder renders it crisp.
-      tiffutil -cathidpicheck "${DMG_BACKGROUND_1X}" "${DMG_BACKGROUND_2X}" \
-        -out "${STAGING_DIR}/.background/background.tiff" >/dev/null
-    else
-      cp "${DMG_BACKGROUND_1X}" "${STAGING_DIR}/.background/background.tiff"
-    fi
-    background_ready=1
-  else
-    echo "  ! ${DMG_BACKGROUND_1X} not found — building without a custom background" >&2
-  fi
-
   echo "→ creating writable installer image"
   hdiutil create \
     -volname "Headroom Installer" \
@@ -142,10 +124,9 @@ create_drag_install_dmg() {
     -nobrowse >/dev/null
   trap detach_dmg_mount RETURN
 
-  osascript - "$(cd "${DMG_MOUNT_DIR}" && pwd)" "${background_ready}" <<'APPLESCRIPT'
+  osascript - "$(cd "${DMG_MOUNT_DIR}" && pwd)" <<'APPLESCRIPT'
 on run argv
   set mountPath to item 1 of argv
-  set backgroundReady to item 2 of argv
   tell application "Finder"
     activate
     set dmgFolder to POSIX file mountPath as alias
@@ -159,17 +140,18 @@ on run argv
     try
       set statusbar visible of container window of dmgFolder to false
     end try
-    -- 680 x 440 background bitmap + 28px title bar = 468 tall
+    -- 680 x 440 content area + 28px title bar = 468 tall
     set bounds of container window of dmgFolder to {180, 120, 860, 588}
 
     set viewOptions to icon view options of container window of dmgFolder
     set arrangement of viewOptions to not arranged
     set icon size of viewOptions to 128
     set text size of viewOptions to 13
+    set label position of viewOptions to bottom
 
-    if backgroundReady is "1" then
-      set background picture of viewOptions to (POSIX file (mountPath & "/.background/background.tiff") as alias)
-    end if
+    -- A custom Finder background is always treated as light appearance, forcing black
+    -- labels even in Dark Mode. Leave the background at its native default so Finder
+    -- supplies a resize-safe canvas and accessible label colors for the user's appearance.
 
     set position of item "Headroom.app" of dmgFolder to {196, 176}
     set position of item "Applications" of dmgFolder to {484, 176}
@@ -195,8 +177,7 @@ on run argv
   end tell
 
   tell application "Finder"
-    -- Re-assert the frame after the chrome collapse so the saved window size matches
-    -- the 680x440 background exactly.
+    -- Re-assert the frame after the chrome collapse so the saved content area is 680x440.
     set bounds of container window of dmgFolder to {180, 120, 860, 588}
     update dmgFolder without registering applications
     delay 1
@@ -579,6 +560,7 @@ spctl -a -vvv -t open --context context:primary-signature "${APP}"
 
 echo "→ assembling DMG"
 ditto "${APP}" "${STAGING_DIR}/${APP}"
+# The root-targeted symlink is the conventional, portable Finder drag-install target.
 ln -s /Applications "${STAGING_DIR}/Applications"
 create_drag_install_dmg
 
