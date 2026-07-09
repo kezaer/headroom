@@ -202,8 +202,9 @@ struct SettingsView: View {
                 .onChange(of: appearancePreference) { _, newValue in
                     preferences.appearancePreference = newValue
                     // Repaint the AppKit windows (this Settings window + the popover panel);
-                    // `preferredColorScheme` alone doesn't reach their chrome. (See HeadroomApp.)
-                    NSApp.appearance = newValue.nsAppearance
+                    // `preferredColorScheme` alone doesn't reach their chrome, and switching
+                    // to System doesn't release the per-window appearance pin. (See HeadroomApp.)
+                    newValue.applyToProcess()
                 }
             }
         }
