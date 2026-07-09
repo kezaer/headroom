@@ -132,6 +132,7 @@ on run argv
     set dmgFolder to POSIX file mountPath as alias
     open dmgFolder
     delay 1
+    set dmgWindowName to name of container window of dmgFolder
 
     set current view of container window of dmgFolder to icon view
     try
@@ -181,7 +182,7 @@ on run argv
     set bounds of container window of dmgFolder to {180, 120, 860, 588}
     update dmgFolder without registering applications
     delay 1
-    close container window of dmgFolder
+    close window dmgWindowName
   end tell
 end run
 APPLESCRIPT
