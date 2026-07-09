@@ -388,6 +388,7 @@ public struct HeadroomWidgetAPISpendSection: View {
 
 private struct HeadroomWidgetLargeProviderCardModifier: ViewModifier {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.widgetRenderingMode) private var renderingMode
 
     func body(content: Content) -> some View {
         content
@@ -396,7 +397,23 @@ private struct HeadroomWidgetLargeProviderCardModifier: ViewModifier {
             .background(cardShape)
     }
 
+    @ViewBuilder
     private var cardShape: some View {
+        if renderingMode == .fullColor {
+            fullColorCard
+        } else {
+            // The macOS desktop de-emphasized (vibrant) pass maps the widget's luminance
+            // onto a monochrome material, so an opaque tile fill plus soft shadows blow
+            // out into a glowing white block with a halo. Drop the fill and shadows there
+            // and keep only a hairline ring, matching how the medium widget reads in the
+            // same state — separated surfaces, no glow. (Mirrors the containerBackground
+            // gate in HeadroomWidgetView.)
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(HeadroomWidgetStyle.cardRing(scheme: scheme), lineWidth: 1)
+        }
+    }
+
+    private var fullColorCard: some View {
         RoundedRectangle(cornerRadius: 13, style: .continuous)
             .fill(HeadroomWidgetStyle.cardFill(scheme: scheme))
             .overlay {

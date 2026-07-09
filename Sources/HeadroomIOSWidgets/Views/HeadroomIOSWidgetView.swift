@@ -69,49 +69,34 @@ struct HeadroomIOSWidgetView: View {
 
     // MARK: - Small
 
-    // Mirrors `HeadroomSmallWidgetView`: a "Weekly left" header over one line per
-    // weekly-style window. Quota-only and footer-free so the small family stays glanceable
-    // and can fit three weekly lines (R3).
+    // Mirrors `HeadroomSmallWidgetView`: a "Weekly left" header over one line per provider
+    // (the overall weekly window). Quota-only and footer-free so the small family stays
+    // glanceable. Model-specific sub-limits (Claude's "Weekly (Fable)") are detail for the
+    // large family and the popover; at this size a third line reads as a phantom provider.
     private func small(_ envelope: WidgetSnapshotEnvelope) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Weekly left")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(HeadroomWidgetStyle.secondaryText(scheme: scheme))
             ForEach(envelope.providers) { provider in
-                let windows = provider.weeklyDisplayWindows
-                if windows.isEmpty {
-                    providerWeeklyLine(provider)
-                        .frame(maxHeight: .infinity, alignment: .center)
-                } else {
-                    ForEach(windows) { window in
-                        smallWeeklyWindowLine(provider, window)
-                            .frame(maxHeight: .infinity, alignment: .center)
-                    }
-                }
+                providerWeeklyLine(provider)
+                    .frame(maxHeight: .infinity, alignment: .center)
             }
         }
         // KTD1: system content margins carry the effective outer margin; keep only
-        // a minimal residual so the small family has room for three weekly lines.
+        // a minimal residual so the meters have room to breathe.
         .padding(.horizontal, 2)
         .padding(.vertical, 5)
     }
 
-    private func smallLineTitle(_ provider: WidgetProviderSummary, _ window: WidgetWindowSummary) -> String {
-        switch window.kind {
-        case .weekly:
-            return provider.displayName
-        case .fiveHour:
-            return window.label
-        case .other:
-            return window.label.replacingOccurrences(of: " weekly", with: "", options: .caseInsensitive)
-        }
-    }
-
-    private func smallWeeklyWindowLine(_ provider: WidgetProviderSummary, _ window: WidgetWindowSummary) -> some View {
+    // One prominent weekly line per provider — brand mark + name + percent + bar for the
+    // provider's overall weekly window (mirrors macOS `WidgetProviderWeeklyLine`). Dims
+    // when that window is missing rather than dropping the row.
+    private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 HeadroomWidgetProviderIcon(providerID: provider.id, size: 16)
-                Text(smallLineTitle(provider, window))
+                Text(provider.displayName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(HeadroomWidgetStyle.textAccent(for: provider.id, scheme: scheme))
                     .widgetAccentable()
@@ -120,44 +105,14 @@ struct HeadroomIOSWidgetView: View {
                     .allowsTightening(true)
                     .layoutPriority(1)
                 Spacer(minLength: 2)
-                Text("\(Int(window.percentRemaining.rounded()))%")
-                    .font(.title3.bold().monospacedDigit())
-                    .widgetAccentable()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                    .allowsTightening(true)
-                    .frame(width: 42, alignment: .trailing)
-            }
-            HeadroomWidgetUsageBar(
-                percentRemaining: window.percentRemaining,
-                severity: window.severity
-            )
-        }
-    }
-
-    // Fallback for a provider with no weekly-style window: a compact line that dims when
-    // the window is missing (mirrors macOS `WidgetProviderWeeklyLine`).
-    private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
-                HeadroomWidgetProviderIcon(providerID: provider.id, size: 12)
-                Text(provider.displayName)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(HeadroomWidgetStyle.textAccent(for: provider.id, scheme: scheme))
-                    .widgetAccentable()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .allowsTightening(true)
-                    .layoutPriority(1)
-                Spacer(minLength: 2)
                 Text(percent(provider.weeklyWindow))
-                    .font(.subheadline.bold().monospacedDigit())
+                    .font(.title3.bold().monospacedDigit())
                     .foregroundStyle(provider.weeklyWindow == nil ? HeadroomWidgetStyle.secondaryText(scheme: scheme) : .primary)
                     .widgetAccentable()
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                     .allowsTightening(true)
-                    .frame(width: 36, alignment: .trailing)
+                    .frame(width: 42, alignment: .trailing)
             }
             HeadroomWidgetUsageBar(
                 percentRemaining: provider.weeklyWindow?.percentRemaining ?? 0,

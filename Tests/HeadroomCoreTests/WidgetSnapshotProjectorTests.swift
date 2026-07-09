@@ -223,10 +223,12 @@ struct WidgetSnapshotProjectorTests {
     }
 
     @Test func sparkWindowSettingDoesNotExposeNonCodexWindows() {
+        // The spark counter setting is Codex-only: a Claude spark-labeled window that is
+        // not a weekly sub-limit must not leak in on its back.
         let envelope = WidgetSnapshotProjector.project(
             snapshots: [
                 .claude: .live(.claude, windows: [
-                    UsageWindow(kind: .other("claude spark weekly"), utilization: 10, resetsAt: reset),
+                    UsageWindow(kind: .other("claude spark 5h"), utilization: 10, resetsAt: reset),
                 ], at: now),
             ],
             providerOrder: [.claude],
@@ -238,6 +240,33 @@ struct WidgetSnapshotProjectorTests {
         )
 
         #expect(envelope.providers[0].windows.isEmpty)
+    }
+
+    @Test func claudeWeeklySubLimitsSurfaceInWidgets() {
+        // Claude's model-specific weekly sub-limit ("Weekly (Fable)") rides with the
+        // weekly window into the widget — independent of the Codex spark setting — so the
+        // large widget and popover show the same picture.
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [
+                .claude: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+                    UsageWindow(kind: .fiveHour, utilization: 5, resetsAt: reset),
+                    UsageWindow(kind: .other("Weekly (Fable)"), utilization: 62, resetsAt: reset),
+                ], at: now),
+            ],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        #expect(envelope.providers[0].windows.map(\.kind) == [
+            .weekly,
+            .fiveHour,
+            .other("Weekly (Fable)"),
+        ])
+        #expect(envelope.providers[0].extraWeeklyWindows.map(\.label) == ["Weekly (Fable)"])
     }
 
     @Test func unknownProviderRoundTrips() throws {

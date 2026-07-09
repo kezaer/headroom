@@ -97,10 +97,18 @@ public enum WidgetSnapshotProjector {
         showsCodexSparkCounters: Bool
     ) -> WidgetWindowKind? {
         switch kind {
-        case .fiveHour: .fiveHour
-        case .weekly: .weekly
+        case .fiveHour:
+            return .fiveHour
+        case .weekly:
+            return .weekly
         case .other(let label):
-            providerID == .codex && showsCodexSparkCounters && kind.isCodexSparkCounter ? .other(label) : nil
+            if providerID == .codex {
+                return (showsCodexSparkCounters && kind.isCodexSparkCounter) ? .other(label) : nil
+            }
+            // Claude reports model-specific weekly sub-limits (e.g. "Weekly (Fable)") as
+            // extra `.other` windows; surface them like the weekly window they belong to
+            // so the widget shows the same picture the popover already does.
+            return label.localizedCaseInsensitiveContains("weekly") ? .other(label) : nil
         }
     }
 
