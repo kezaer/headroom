@@ -110,6 +110,17 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
             }
         }
     }
+
+    /// The model-specific weekly sub-limits shown as extra meters beside the primary
+    /// weekly window — Claude's "Weekly (Fable)" (and Codex's spark weekly counter when
+    /// enabled). Excludes the primary weekly and 5-hour windows; the projector has
+    /// already decided which `.other` windows survive to the widget.
+    public var extraWeeklyWindows: [WidgetWindowSummary] {
+        windows.filter { window in
+            guard case .other = window.kind else { return false }
+            return window.label.localizedCaseInsensitiveContains("weekly")
+        }
+    }
 }
 
 public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable {

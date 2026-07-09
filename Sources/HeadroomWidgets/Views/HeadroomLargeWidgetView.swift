@@ -28,6 +28,10 @@ struct HeadroomLargeWidgetView: View {
                     .foregroundStyle(WidgetProviderStyle.tertiaryText(scheme: scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    // Guaranteed breathing room above the footer: the Spacer collapses to
+                    // zero once the cards fill the tile, which otherwise leaves the
+                    // timestamp butted against the bottom card.
+                    .padding(.top, 10)
             }
         }
         .padding(.horizontal, 8)
@@ -47,6 +51,11 @@ private struct LargeProviderSection: View {
             header
             WidgetUsageMeter(window: window(.weekly), fallbackLabel: "Weekly", now: now, showsResetInline: true, prominent: true)
             WidgetUsageMeter(window: window(.fiveHour), fallbackLabel: "5-hour", now: now, showsResetInline: true, prominent: true)
+            // Model-specific weekly sub-limits (Claude's "Weekly (Fable)") follow the two
+            // primary windows, matching the popover's weekly → 5h → sub-limit order.
+            ForEach(provider.extraWeeklyWindows) { window in
+                WidgetUsageMeter(window: window, fallbackLabel: window.label, now: now, showsResetInline: true, prominent: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

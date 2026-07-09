@@ -69,6 +69,20 @@ official `claude` CLI's `/usage` panel instead.
   widgets together — do it as one deliberate pass, not a widget-only patch. Found during the
   2026-07-08 widget contrast audit; text tokens were fixed in that pass, bars deferred.
 
+## iOS large widget — Fable weekly sub-limit + footer spacing (parity with macOS)
+
+- The macOS large widget now shows Claude's model-specific weekly sub-limit ("Weekly (Fable)")
+  as a third meter after weekly/5h, and its "from Mac ·" footer got a guaranteed 10pt gap
+  above it (the `Spacer` collapses once the cards fill the tile). The iOS large widget
+  (`HeadroomIOSWidgetView.largeProviderSection` / `large(...)`) is a structural mirror but was
+  **not** updated in the same pass — it still renders only weekly + 5h and has the tight
+  footer. The synced envelope already carries the Fable window, so this is a view-only change:
+  mirror the macOS `ForEach(provider.extraWeeklyWindows)` meter and the footer `.padding(.top, 10)`.
+  Held back only because the iPhone large tile is ~30pt shorter than the macOS one and this
+  session had no way to render the iOS widget to confirm the third meter fits without
+  overflow — verify on a simulator/device before shipping. (iOS **small** was already brought
+  to parity: one prominent weekly line per provider, no phantom "Weekly (Fable)" line.)
+
 ## Companion platforms
 
 - **watchOS companion is deferred.** It should probably reuse the iCloud snapshot contract,
