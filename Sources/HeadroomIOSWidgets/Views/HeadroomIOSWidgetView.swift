@@ -218,7 +218,11 @@ struct HeadroomIOSWidgetView: View {
     // title or app-icon mark (R3).
     private func large(_ envelope: WidgetSnapshotEnvelope) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
+            // Tighter inter-card + section spacing than the macOS twin: the iPhone large
+            // tile's content area is ~15–20pt shorter (larger WidgetKit content margins),
+            // so mirroring the macOS spacing plus a third Claude meter overflowed the footer.
+            // Verified fitting on iPhone 16 Pro Max via the render harness.
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(envelope.providers) { provider in
                     largeProviderSection(provider)
                         .headroomWidgetLargeProviderCard()
@@ -238,6 +242,9 @@ struct HeadroomIOSWidgetView: View {
                     .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
+                    // Guaranteed breathing room above the footer: the Spacer collapses to
+                    // zero once the cards fill the tile.
+                    .padding(.top, 8)
             }
         }
         .padding(.horizontal, 8)
@@ -246,10 +253,16 @@ struct HeadroomIOSWidgetView: View {
     }
 
     private func largeProviderSection(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             largeSectionHeader(provider)
             HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, prominent: true)
             HeadroomWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
+            // Model-specific weekly sub-limits (Claude's "Weekly (Fable)") follow the two
+            // primary windows. Rendered compact — a secondary sub-limit, and the shorter
+            // iPhone large tile can't fit a third prominent meter without clipping the footer.
+            ForEach(provider.extraWeeklyWindows) { window in
+                HeadroomWidgetUsageMeter(window: window, fallbackLabel: window.label, now: entry.date, showsResetInline: true, compact: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
