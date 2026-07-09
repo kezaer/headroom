@@ -6,6 +6,8 @@ Paste-ready fields for the `com.kylezantos.headroom.ios` 1.0 submission.
 
 - 2026-07-08: Submitted iOS 1.0 build 12 to App Review. App Store Connect
   status: **Waiting for Review**.
+- 2026-07-09: Uploaded iOS 1.0 build 13 to App Store Connect for processing.
+  App Review resubmission still needs build 13 selected after processing completes.
 
 ## Name (30 chars max)
 
