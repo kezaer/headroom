@@ -8,7 +8,7 @@ struct HeadroomLargeWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(envelope.providers) { provider in
                     LargeProviderSection(provider: provider, now: now)
                         .largeProviderCard()
@@ -28,9 +28,6 @@ struct HeadroomLargeWidgetView: View {
                     .foregroundStyle(WidgetProviderStyle.tertiaryText(scheme: scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    // Guaranteed breathing room above the footer: the Spacer collapses to
-                    // zero once the cards fill the tile, which otherwise leaves the
-                    // timestamp butted against the bottom card.
                     .padding(.top, 8)
             }
         }
@@ -47,16 +44,10 @@ private struct LargeProviderSection: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             header
             WidgetUsageMeter(window: window(.weekly), fallbackLabel: "Weekly", now: now, showsResetInline: true, prominent: true)
             WidgetUsageMeter(window: window(.fiveHour), fallbackLabel: "5-hour", now: now, showsResetInline: true, prominent: true)
-            // Model-specific weekly sub-limits (Claude's "Weekly (Fable)") follow the two
-            // primary windows. They are secondary detail, so keep them compact to preserve
-            // the footer inside WidgetKit's fixed large-family content height.
-            ForEach(provider.extraWeeklyWindows) { window in
-                WidgetUsageMeter(window: window, fallbackLabel: window.label, now: now, showsResetInline: true, compact: true)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -69,16 +60,14 @@ private struct LargeProviderSection: View {
                 .foregroundStyle(WidgetProviderStyle.textAccent(for: provider.id, scheme: scheme))
                 .widgetAccentable()
                 .lineLimit(1)
-            if let planLabel = provider.planLabel {
-                Text(planLabel)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(WidgetProviderStyle.secondaryText(scheme: scheme))
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(WidgetProviderStyle.barTrack(scheme: scheme), in: Capsule())
-            }
             Spacer(minLength: 4)
+            if let extraWindow = provider.limitingExtraWeeklyWindow {
+                Text("\(extraWindow.compactLabel) \(extraWindow.roundedPercentRemaining)%")
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(extraLimitColor(extraWindow))
+                    .lineLimit(1)
+                    .accessibilityLabel("\(extraWindow.compactLabel) limit, \(extraWindow.roundedPercentRemaining) percent left")
+            }
             if provider.freshness.needsAttention {
                 Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
                     .labelStyle(.iconOnly)
@@ -90,5 +79,14 @@ private struct LargeProviderSection: View {
 
     private func window(_ kind: WidgetWindowKind) -> WidgetWindowSummary? {
         provider.subscriptionWindows.first { $0.kind == kind }
+    }
+
+    private func extraLimitColor(_ window: WidgetWindowSummary) -> Color {
+        switch window.severity {
+        case .healthy:
+            WidgetProviderStyle.secondaryText(scheme: scheme)
+        case .low, .critical:
+            WidgetProviderStyle.severityColor(for: window.severity, scheme: scheme)
+        }
     }
 }

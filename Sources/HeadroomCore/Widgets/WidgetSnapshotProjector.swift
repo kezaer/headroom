@@ -106,8 +106,8 @@ public enum WidgetSnapshotProjector {
                 return (showsCodexSparkCounters && kind.isCodexSparkCounter) ? .other(label) : nil
             }
             // Claude reports model-specific weekly sub-limits (e.g. "Weekly (Fable)") as
-            // extra `.other` windows; surface them like the weekly window they belong to
-            // so the widget shows the same picture the popover already does.
+            // extra `.other` windows. Retain them so a more restrictive sub-limit can
+            // appear as compact context in the large-widget header.
             return label.localizedCaseInsensitiveContains("weekly") ? .other(label) : nil
         }
     }
