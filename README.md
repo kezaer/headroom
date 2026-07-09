@@ -226,8 +226,8 @@ the website payload in `dist/headroom.zantos.co/`: a versioned DMG for Sparkle a
 history, `appcast.xml`, a stable `Headroom.dmg` for the download button at
 `https://headroom.zantos.co/Headroom.dmg`, SHA-256 sidecars for both DMG names, and
 `latest.json` for the public download page to read the current version, build, size,
-hash, and URLs. The DMG opens as a drag installer with `Headroom.app` next to an
-`/Applications` alias.
+hash, and URLs. The DMG opens as a native, appearance-adaptive drag installer with
+`Headroom.app` next to the conventional `/Applications` symlink.
 If multiple Developer ID Application certificates are installed, pin one:
 
 ```bash
