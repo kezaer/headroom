@@ -8,7 +8,7 @@ struct HeadroomLargeWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(envelope.providers) { provider in
                     LargeProviderSection(provider: provider, now: now)
                         .largeProviderCard()
@@ -31,7 +31,7 @@ struct HeadroomLargeWidgetView: View {
                     // Guaranteed breathing room above the footer: the Spacer collapses to
                     // zero once the cards fill the tile, which otherwise leaves the
                     // timestamp butted against the bottom card.
-                    .padding(.top, 10)
+                    .padding(.top, 8)
             }
         }
         .padding(.horizontal, 8)
@@ -47,14 +47,15 @@ private struct LargeProviderSection: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 8) {
             header
             WidgetUsageMeter(window: window(.weekly), fallbackLabel: "Weekly", now: now, showsResetInline: true, prominent: true)
             WidgetUsageMeter(window: window(.fiveHour), fallbackLabel: "5-hour", now: now, showsResetInline: true, prominent: true)
             // Model-specific weekly sub-limits (Claude's "Weekly (Fable)") follow the two
-            // primary windows, matching the popover's weekly → 5h → sub-limit order.
+            // primary windows. They are secondary detail, so keep them compact to preserve
+            // the footer inside WidgetKit's fixed large-family content height.
             ForEach(provider.extraWeeklyWindows) { window in
-                WidgetUsageMeter(window: window, fallbackLabel: window.label, now: now, showsResetInline: true, prominent: true)
+                WidgetUsageMeter(window: window, fallbackLabel: window.label, now: now, showsResetInline: true, compact: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
