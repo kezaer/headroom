@@ -19,7 +19,10 @@ redaction-safe snapshot synced from the Mac through iCloud Key-Value Store.
   figures are "approximate, based on local sessions on this machine," but it carries the
   official reset windows.
 - **Codex/ChatGPT** — reads `~/.codex/auth.json` and calls the `wham/usage` endpoint
-  (the same data Codex's `/status` shows).
+  (the same data Codex's `/status` shows). If that local session is missing or expires,
+  Headroom shows a guided **Connect/Reconnect Codex** action that opens Terminal and runs
+  the official `codex login` flow. Sign-in stays in the Codex CLI and browser; Headroom
+  never receives passwords, browser callbacks, or tokens from the flow.
 
 > **First launch:** macOS asks "Headroom would like to access data from other apps" —
 > that's Headroom reading the Codex CLI's local `auth.json` (and driving the `claude`
@@ -49,7 +52,8 @@ advertised as supported. Intel slices may be present in generic Xcode artifacts,
 runtime support is not currently validated or advertised. The app bundle build also requires
 `xcodegen` because macOS widget discovery expects a real Xcode app-extension target:
 `brew install xcodegen`. Claude usage requires the `claude` CLI installed and logged in.
-Codex subscription usage requires `~/.codex/auth.json`. API spend rows require the
+Codex subscription usage requires the Codex CLI; Headroom can open `codex login` when its
+CLI-managed `~/.codex/auth.json` session is absent or rejected. API spend rows require the
 relevant OpenAI/Anthropic admin keys entered in Settings. Diagnostic:
 `swift run Headroom --probe-claude` prints the live parsed windows so you can confirm the
 Claude path works on your machine.
@@ -141,7 +145,10 @@ HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1 ./Scripts/build-app.sh debug
 - "Quiet-period" capture that survives the panel's several re-renders; the settled
   (last) value for each window wins.
 - Login-shell PATH resolution, so a Finder-launched app (bare environment) still finds a
-  node/nvm/homebrew `claude` — verified against a stripped environment.
+  node/nvm/homebrew `claude` or `codex` — verified against a stripped environment.
+- Codex connect/reconnect delegates to the official `codex login` command in Terminal,
+  retries the normal usage fetch, and keeps last-known usage dimmed while reauthentication
+  is in progress. Headroom does not write or refresh the Codex auth file itself.
 - Graceful degrade: CLI missing → "install Claude Code"; not logged in → "run `claude`";
   transient read failure → keeps last-known data and retries next cycle.
 - Reset times are shown **verbatim** from the panel ("Resets Jul 9 at 10am"), so the app

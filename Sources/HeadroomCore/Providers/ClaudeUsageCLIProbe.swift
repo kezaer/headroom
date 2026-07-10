@@ -69,48 +69,20 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     /// Resolve `claude` via the user's login shell so a Finder-launched app (bare PATH)
     /// still finds an nvm/homebrew install. Falls back to common locations.
     public static func resolveClaudePath() -> String? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let probe = Process()
-        probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lc", "command -v claude"]
-        let pipe = Pipe()
-        probe.standardOutput = pipe
-        probe.standardError = Pipe()
-        do {
-            try probe.run()
-            probe.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let out, !out.isEmpty, FileManager.default.isExecutableFile(atPath: out) { return out }
-        } catch {}
-        for candidate in [
-            "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
-            "\(NSHomeDirectory())/.local/bin/claude",
-        ] where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        return nil
+        CLIExecutableResolver.resolve(
+            named: "claude",
+            fallbackPaths: [
+                "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+                "\(NSHomeDirectory())/.local/bin/claude",
+            ]
+        )
     }
 
     /// The user's real PATH via a login shell, so a Finder-launched app (bare PATH)
     /// still resolves node/nvm the way the terminal does. Falls back to a sane default.
     private static func loginPath() -> String {
         let fallback = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let probe = Process()
-        probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lc", "printf %s \"$PATH\""]
-        let pipe = Pipe()
-        probe.standardOutput = pipe
-        probe.standardError = Pipe()
-        do {
-            try probe.run()
-            probe.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let out, !out.isEmpty { return "\(out):\(fallback)" }
-        } catch {}
-        return fallback
+        return CLIExecutableResolver.resolveLoginPath(fallback: fallback)
     }
 
     // MARK: pty mechanics

@@ -34,7 +34,7 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
     `Freshness` (`.pending`/`.live`/`.stale`), `UsageProvider` protocol, `Countdown`.
   - `Providers/` — `ClaudeProvider` (via `ClaudeUsageSource`), `ClaudeUsageCLIProbe`
     (openpty + posix_spawn), `ClaudeUsageParser`, `CodexProvider` (+ `UsageHTTPClient`,
-    DTOs), `RedirectBlocker`.
+    DTOs), `CodexConnection`, shared login-shell `CLIExecutableResolver`, `RedirectBlocker`.
   - `Credentials/` — `CredentialStore` (Codex-only), `CodexAuthReader`, `Redaction`.
   - `Engine/` — `PollingEngine`, `UsageStore` (`@MainActor @Observable`).
   - `Settings/` — `Preferences` (UserDefaults), `LaunchAtLogin` (SMAppService).
@@ -56,7 +56,9 @@ swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windo
 
 Building requires Xcode 26 / Swift 6.3. The app targets macOS 15+ on Apple silicon; a real
 macOS 15 Apple-silicon runtime smoke is required before advertising Sequoia support. Claude
-requires the `claude` CLI logged in; Codex requires `~/.codex/auth.json`.
+requires the `claude` CLI logged in; Codex requires its CLI-managed `~/.codex/auth.json`.
+When Codex auth is missing or rejected, the app delegates recovery to official `codex login`
+in Terminal and never owns the browser callback, token refresh, or auth-file writes.
 
 ## Conventions
 
@@ -83,6 +85,11 @@ requires the `claude` CLI logged in; Codex requires `~/.codex/auth.json`.
 - **PTY probe robustness is intentional** — hard deadlines, guaranteed process-group kill,
   quiet-period capture across re-renders, login-shell PATH resolution (works from a bare
   Finder-launch env), off-main-actor. Preserve these when editing `ClaudeUsageCLIProbe`.
+- **Codex setup must remain a CLI handoff.** Keep `CodexCLI.loginCommand`, provider recovery
+  copy, Terminal execution, and clipboard fallback on `codex login`. Resolve the executable
+  through `CLIExecutableResolver` so Finder launches still support Homebrew/NVM/asdf/mise
+  installs; never place auth-file contents, provider responses, or caught errors in the
+  generated script.
 - **ANSI stripping uses ICU escapes (`\x1B`), not Swift's `\u{1B}`** — the latter silently
   fails inside `.regularExpression`.
 - Each Claude poll spawns a full `claude` session (~20–30s). Fine at the 5-min default; don't

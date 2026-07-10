@@ -2,7 +2,7 @@ import Foundation
 
 /// Codex/ChatGPT usage provider (U5). Reads `~/.codex/auth.json` via `CredentialStore`
 /// and calls the `wham/usage` endpoint. Does not attempt OpenAI's refresh — on 401 it
-/// degrades to "run codex" (KTD3). Never throws (KTD7 isolation).
+/// degrades to the official CLI login handoff (KTD3). Never throws (KTD7 isolation).
 public struct CodexProvider: UsageProvider {
     public let id = ProviderID.codex
     public let displayName = "Codex"
@@ -36,7 +36,7 @@ public struct CodexProvider: UsageProvider {
                 case 200:
                     return decode(result.body)
                 case 401:
-                    return stale(.needsReauth("Session expired — run `codex` to refresh"))
+                    return stale(.needsReauth("Session expired — run `\(CodexCLI.loginCommand)` to reconnect"))
                 default:
                     return stale(UsageWindowBuilder.genericFailure(for: result.status))
                 }

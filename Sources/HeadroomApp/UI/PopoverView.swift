@@ -140,7 +140,7 @@ struct PopoverView: View {
         inkCenterAboveBaseline(titleFont) - inkCenterAboveBaseline(font)
     }
 
-    /// Single status for the whole popover. During Claude's first-run setup it narrates
+    /// Single status for the whole popover. During a guided provider setup it narrates
     /// the stage; otherwise it's "Updated N min ago" from the *oldest* live snapshot so
     /// it never claims data is fresher than the least-fresh provider. Stale providers
     /// are excluded (their own stale pill carries that story); nil on first run when
@@ -148,6 +148,9 @@ struct PopoverView: View {
     private func headerStatus(now: Date) -> String? {
         if claudeNeedsTrustSetup {
             return ClaudeSetupSession.openedSetupAt != nil ? "Watching for approval…" : "Set up Claude to begin"
+        }
+        if codexNeedsConnection {
+            return CodexSetupSession.openedSetupAt != nil ? "Watching for Codex sign-in…" : "Connect Codex to begin"
         }
         let liveCaptures = store.providerOrder.compactMap { id -> Date? in
             guard case .live = store.snapshot(for: id).freshness else { return nil }
@@ -161,6 +164,11 @@ struct PopoverView: View {
         guard store.providerOrder.contains(.claude),
               case .stale(let reason) = store.appDisplaySnapshot(for: .claude).freshness else { return false }
         return reason.isPermanent && reason.message == ClaudeUsageWorkspace.trustRequiredMessage
+    }
+
+    private var codexNeedsConnection: Bool {
+        guard store.providerOrder.contains(.codex) else { return false }
+        return store.appDisplaySnapshot(for: .codex).codexConnectionAction != nil
     }
 
     /// Left slot shows a live "Refreshing…" state while a cycle is in flight (UI-02) —
