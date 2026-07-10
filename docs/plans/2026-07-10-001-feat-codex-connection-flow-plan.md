@@ -1,7 +1,7 @@
 ---
 title: "feat: Add guided Codex connection recovery"
 type: feat
-status: active
+status: completed
 date: 2026-07-10
 deepened: 2026-07-10
 ---
