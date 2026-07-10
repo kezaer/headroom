@@ -54,8 +54,9 @@ swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windo
 ./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
 ```
 
-Building requires Xcode 26 / Swift 6.3. The shipped app supports macOS 15+ on Apple silicon.
-Claude requires the `claude` CLI logged in; Codex requires `~/.codex/auth.json`.
+Building requires Xcode 26 / Swift 6.3. The app targets macOS 15+ on Apple silicon; a real
+macOS 15 Apple-silicon runtime smoke is required before advertising Sequoia support. Claude
+requires the `claude` CLI logged in; Codex requires `~/.codex/auth.json`.
 
 ## Conventions
 

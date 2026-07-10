@@ -42,10 +42,11 @@ xcodebuild -project Headroom.xcodeproj -scheme HeadroomIOS \
   -derivedDataPath .xcode-derived build
 ```
 
-Building requires Xcode 26 / Swift 6.3. The shipped Mac app supports macOS 15 Sequoia
-and later on Apple silicon: Tahoe uses Liquid Glass, while Sequoia uses a native material
-popover surface. Intel slices may be present in generic Xcode artifacts, but Intel runtime
-support is not currently validated or advertised. The app bundle build also requires
+Building requires Xcode 26 / Swift 6.3. The Mac app targets macOS 15 Sequoia and later on
+Apple silicon: Tahoe uses Liquid Glass, while Sequoia uses a native material popover
+surface. A macOS 15 Apple-silicon runtime smoke remains the release gate before this is
+advertised as supported. Intel slices may be present in generic Xcode artifacts, but Intel
+runtime support is not currently validated or advertised. The app bundle build also requires
 `xcodegen` because macOS widget discovery expects a real Xcode app-extension target:
 `brew install xcodegen`. Claude usage requires the `claude` CLI installed and logged in.
 Codex subscription usage requires `~/.codex/auth.json`. API spend rows require the
