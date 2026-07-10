@@ -33,7 +33,7 @@ public enum CodexCLI {
         """
 
         guard let executablePath else {
-            return introduction + """
+            return introduction + "\n" + """
             echo "Codex CLI was not found. Install or update Codex, then run: \(loginCommand)"
             echo
             echo "Press any key to close this window."
@@ -43,7 +43,7 @@ public enum CodexCLI {
         }
 
         let executable = shellQuoted(executablePath)
-        return introduction + """
+        return introduction + "\n" + """
         if [[ ! -x \(executable) ]]; then
           echo "The Codex CLI moved or is no longer executable. Reopen Headroom and try again."
           echo

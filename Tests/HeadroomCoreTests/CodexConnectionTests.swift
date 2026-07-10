@@ -129,6 +129,29 @@ struct CodexConnectionTests {
         #expect(!script.contains("backend-api"))
     }
 
+    @Test func generatedLoginScriptsParseAsZsh() throws {
+        for executablePath in ["/opt/homebrew/bin/codex", nil] as [String?] {
+            let process = Process()
+            let standardInput = Pipe()
+            let standardError = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-n"]
+            process.standardInput = standardInput
+            process.standardError = standardError
+
+            try process.run()
+            standardInput.fileHandleForWriting.write(Data(CodexCLI.loginScript(executablePath: executablePath).utf8))
+            try standardInput.fileHandleForWriting.close()
+            process.waitUntilExit()
+
+            let error = String(
+                decoding: standardError.fileHandleForReading.readDataToEndOfFile(),
+                as: UTF8.self
+            )
+            #expect(process.terminationStatus == 0, "Generated login script failed zsh syntax validation: \(error)")
+        }
+    }
+
     @Test func missingExecutableScriptFailsClearlyWithoutGuessingACommand() {
         let script = CodexCLI.loginScript(executablePath: nil)
 
