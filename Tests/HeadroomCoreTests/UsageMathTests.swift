@@ -18,6 +18,30 @@ struct UsageMathTests {
         #expect(UsageWindow(kind: .weekly, utilization: 130, resetsAt: .now).percentRemaining == 0)
     }
 
+    @Test func percentageModeFlipsValueTermAndFraction() {
+        let window = UsageWindow(kind: .weekly, utilization: 73.4, resetsAt: .now)
+
+        #expect(approx(UsagePercentageMode.remaining.percentage(for: window), 26.6))
+        #expect(UsagePercentageMode.remaining.roundedPercentage(for: window) == 27)
+        #expect(UsagePercentageMode.remaining.fraction(for: window) == window.percentRemaining / 100)
+        #expect(UsagePercentageMode.remaining.term == "left")
+
+        #expect(UsagePercentageMode.used.percentage(for: window) == 73.4)
+        #expect(UsagePercentageMode.used.roundedPercentage(for: window) == 73)
+        #expect(approx(UsagePercentageMode.used.fraction(for: window), 0.734))
+        #expect(UsagePercentageMode.used.term == "used")
+    }
+
+    @Test func percentageModeClampsProviderValuesToDisplayBounds() {
+        let under = UsageWindow(kind: .weekly, utilization: -20, resetsAt: .now)
+        let over = UsageWindow(kind: .weekly, utilization: 130, resetsAt: .now)
+
+        #expect(UsagePercentageMode.used.percentage(for: under) == 0)
+        #expect(UsagePercentageMode.used.fraction(for: over) == 1)
+        #expect(UsagePercentageMode.remaining.percentage(for: over) == 0)
+        #expect(UsagePercentageMode.remaining.fraction(for: under) == 1)
+    }
+
     @Test func countdownFormatsAcrossRanges() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         #expect(Countdown.string(to: now.addingTimeInterval(4 * 3600 + 59 * 60), now: now) == "4h 59m")
@@ -29,6 +53,31 @@ struct UsageMathTests {
         let now = Date(timeIntervalSince1970: 1_000_000)
         // A past reset renders "resets now", not a negative value.
         #expect(Countdown.string(to: now.addingTimeInterval(-500), now: now) == "resets now")
+    }
+
+    @Test func resetTextNormalizesProviderLabelsToRelativeDuration() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let reset = now.addingTimeInterval(3 * 24 * 3600 + 4 * 3600)
+        let claude = UsageWindow(
+            kind: .weekly,
+            utilization: 20,
+            resetsAt: reset,
+            resetLabel: "Resets Jul 13 at 10am"
+        )
+        let codex = UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset)
+
+        #expect(Countdown.resetText(for: claude, now: now) == "Resets in 3d 4h")
+        #expect(Countdown.resetText(for: codex, now: now) == "Resets in 3d 4h")
+        #expect(Countdown.resetText(for: claude, now: now) == Countdown.resetText(for: codex, now: now))
+    }
+
+    @Test func resetTextHandlesShortAndElapsedWindows() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let soon = UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: now.addingTimeInterval(4 * 3600 + 59 * 60))
+        let elapsed = UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: now.addingTimeInterval(-1))
+
+        #expect(Countdown.resetText(for: soon, now: now) == "Resets in 4h 59m")
+        #expect(Countdown.resetText(for: elapsed, now: now) == "Resets now")
     }
 
     @Test func otherWindowKindRoundTripsLabel() {

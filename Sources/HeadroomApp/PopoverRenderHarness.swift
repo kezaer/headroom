@@ -16,19 +16,38 @@ enum PopoverRenderHarness {
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
         Task { @MainActor in
+            var failedPaths: [String] = []
             for state in State.allCases {
-                for dark in [false, true] {
-                    let name = "popover-\(state.rawValue)-\(dark ? "dark" : "light").png"
-                    await render(state: state, dark: dark, to: outDir.appendingPathComponent(name))
-                    print("✓ \(outDir.appendingPathComponent(name).path)")
+                let modes: [UsagePercentageMode] = state == .connected ? UsagePercentageMode.allCases : [.remaining]
+                for mode in modes {
+                    for dark in [false, true] {
+                        let modeSuffix = mode == .used ? "-used" : ""
+                        let name = "popover-\(state.rawValue)\(modeSuffix)-\(dark ? "dark" : "light").png"
+                        let url = outDir.appendingPathComponent(name)
+                        if await render(state: state, percentageMode: mode, dark: dark, to: url) {
+                            print("✓ \(url.path)")
+                        } else {
+                            failedPaths.append(url.path)
+                        }
+                    }
                 }
             }
-            for dark in [false, true] {
-                let name = "settings-\(dark ? "dark" : "light").png"
-                await renderSettings(dark: dark, to: outDir.appendingPathComponent(name))
-                print("✓ \(outDir.appendingPathComponent(name).path)")
+            for mode in UsagePercentageMode.allCases {
+                for dark in [false, true] {
+                    let modeSuffix = mode == .used ? "-used" : ""
+                    let name = "settings\(modeSuffix)-\(dark ? "dark" : "light").png"
+                    let url = outDir.appendingPathComponent(name)
+                    if await renderSettings(percentageMode: mode, dark: dark, to: url) {
+                        print("✓ \(url.path)")
+                    } else {
+                        failedPaths.append(url.path)
+                    }
+                }
             }
-            exit(0)
+            for path in failedPaths {
+                FileHandle.standardError.write(Data("✗ Failed to render \(path)\n".utf8))
+            }
+            exit(failedPaths.isEmpty ? 0 : 1)
         }
         app.run()
     }
@@ -37,7 +56,7 @@ enum PopoverRenderHarness {
         case connect, waiting, connected
     }
 
-    private static func render(state: State, dark: Bool, to url: URL) async {
+    private static func render(state: State, percentageMode: UsagePercentageMode, dark: Bool, to url: URL) async -> Bool {
         // App-wide appearance, not just window-level: SwiftUI's semantic styles
         // (.primary/.secondary/.quaternary) resolve against the app's effective
         // appearance in this offscreen path, so a window-only override leaves
@@ -46,12 +65,13 @@ enum PopoverRenderHarness {
         // Session flag drives the Connect → Waiting → Connected chip flow.
         ClaudeSetupSession.openedSetupAt = (state == .connect) ? nil : Date()
 
+        let preferences = renderPreferences(mode: percentageMode)
         let store = UsageStore(
             providers: [
                 DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: claudeSnapshot(for: state)),
                 DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
             ],
-            preferences: Preferences(defaults: UserDefaults(suiteName: "co.zantos.headroom.render") ?? .standard)
+            preferences: preferences
         )
         store.refreshNow()
         // Demo providers resolve instantly; give the cycle + entrance animation a beat.
@@ -97,18 +117,9 @@ enum PopoverRenderHarness {
         // the real OS-selected surface) via `screencapture -l`. The offscreen `cacheDisplay` path
         // resolves semantic text colors against the wrong appearance, so it's only the
         // fallback when screen capture is unavailable (no Screen Recording permission).
-        let captured = captureWindow(number: window.windowNumber, to: url)
-        if !captured,
-           let view = window.contentView,
-           let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-            (window.appearance ?? NSAppearance(named: .aqua))?.performAsCurrentDrawingAppearance {
-                view.cacheDisplay(in: view.bounds, to: rep)
-            }
-            if let data = rep.representation(using: .png, properties: [:]) {
-                try? data.write(to: url)
-            }
-        }
+        let captured = capture(window: window, to: url)
         window.orderOut(nil)
+        return captured
     }
 
     private static func captureWindow(number: Int, to url: URL) -> Bool {
@@ -133,16 +144,21 @@ enum PopoverRenderHarness {
     /// Settings window, demo store, fixed 460×1240 — verifies the shared type hierarchy
     /// (22pt title / 15pt tile heads / 13pt controls / 11pt fine print) and the
     /// all-tiles material system across both windows.
-    private static func renderSettings(dark: Bool, to url: URL) async {
+    private static func renderSettings(percentageMode: UsagePercentageMode, dark: Bool, to url: URL) async -> Bool {
         NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let preferences = renderPreferences(mode: percentageMode)
         let store = UsageStore(
             providers: [
                 DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
                 DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
             ],
-            preferences: Preferences(defaults: UserDefaults(suiteName: "co.zantos.headroom.render") ?? .standard)
+            preferences: preferences
         )
-        let root = SettingsView(store: store, appearancePreference: .constant(dark ? .dark : .light))
+        let root = SettingsView(
+            store: store,
+            appearancePreference: .constant(dark ? .dark : .light),
+            preferences: preferences
+        )
             .frame(width: 460, height: 1240)
             .environment(\.colorScheme, dark ? .dark : .light)
 
@@ -155,8 +171,35 @@ enum PopoverRenderHarness {
         window.orderFrontRegardless()
         window.displayIfNeeded()
         try? await Task.sleep(for: .milliseconds(500))
-        _ = captureWindow(number: window.windowNumber, to: url)
+        let captured = capture(window: window, to: url)
         window.orderOut(nil)
+        return captured
+    }
+
+    private static func capture(window: NSWindow, to url: URL) -> Bool {
+        if captureWindow(number: window.windowNumber, to: url) { return true }
+        guard let view = window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        else { return false }
+        (window.appearance ?? NSAppearance(named: .aqua))?.performAsCurrentDrawingAppearance {
+            view.cacheDisplay(in: view.bounds, to: rep)
+        }
+        guard let data = rep.representation(using: .png, properties: [:]), data.count > 10_000 else { return false }
+        do {
+            try data.write(to: url)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func renderPreferences(mode: UsagePercentageMode) -> Preferences {
+        let suite = "co.zantos.headroom.render.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite) ?? .standard
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        preferences.usagePercentageMode = mode
+        return preferences
     }
 
     private static func claudeSnapshot(for state: State) -> UsageSnapshot {

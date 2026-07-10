@@ -26,6 +26,7 @@ struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
     @State private var showMenuBarPercentage = false
+    @State private var usagePercentageMode: UsagePercentageMode = .remaining
     @State private var menuBarFillSource: MenuBarFillSource = .none
     @State private var menuBarWindowSource: MenuBarWindowSource = .weekly
     @State private var widgetsEnabled = true
@@ -221,7 +222,7 @@ struct SettingsView: View {
     /// (live data ticks don't need choreography). Includes `colorScheme` so switching theme
     /// re-bakes the specimen.
     private var menuBarPreviewKey: String {
-        "\(store.showMenuBarPercentage)-\(store.menuBarFillSource.rawValue)-\(store.menuBarWindowSource.rawValue)-\(colorScheme)"
+        "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.rawValue)-\(store.menuBarWindowSource.rawValue)-\(colorScheme)"
     }
 
     private var menuBarTile: some View {
@@ -290,7 +291,7 @@ struct SettingsView: View {
                         store.setMenuBarFillSource(newValue)
                     }
                 }
-                SettingsHelpText(text: "The vessel empties as this window is used. Both shows Claude and Codex side by side.")
+                SettingsHelpText(text: "The vessel follows the selected percentage mode. Both shows Claude and Codex side by side.")
             }
         }
     }
@@ -316,6 +317,22 @@ struct SettingsView: View {
 
     private var subscriptionTile: some View {
         settingsTile("Subscription Usage") {
+            VStack(alignment: .leading, spacing: 4) {
+                responsiveControlRow(label: "Percentages") {
+                    Picker("Percentages", selection: $usagePercentageMode) {
+                        ForEach(UsagePercentageMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: Self.segmentedMaxWidth)
+                    .onChange(of: usagePercentageMode) { _, newValue in
+                        store.setUsagePercentageMode(newValue)
+                    }
+                }
+                SettingsHelpText(text: "Changes the numbers, words, and meter direction in the app and menu bar.")
+            }
             surfaceSwitchRow(.claudeSubscription)
             surfaceSwitchRow(.codexSubscription)
             Toggle("Show Codex Spark counters in app", isOn: $showCodexSparkCountersInApp)
@@ -572,6 +589,7 @@ struct SettingsView: View {
         intervalMinutes = saved
         appearancePreference = preferences.appearancePreference
         showMenuBarPercentage = store.showMenuBarPercentage
+        usagePercentageMode = store.usagePercentageMode
         menuBarFillSource = store.menuBarFillSource
         menuBarWindowSource = store.menuBarWindowSource
         widgetsEnabled = store.widgetsEnabled

@@ -1,25 +1,26 @@
 import SwiftUI
 import HeadroomCore
 
-/// One labeled usage bar showing percent remaining + reset countdown (U7, UI-01/04).
+/// One labeled usage bar showing the selected percentage + reset countdown (U7, UI-01/04).
 /// The fill color follows the window's static severity band (green → amber → red) so
-/// "how much is left" reads before any number does; the percentage is promoted and
-/// labeled "left" to kill the used-vs-remaining ambiguity. The bar carries an
-/// `accessibilityValue` so VoiceOver reads the remaining percent — a custom bar is
+/// urgency reads before any number does; the percentage and fill switch together while
+/// the adjacent term removes used-vs-left ambiguity. The bar carries an
+/// `accessibilityValue` so VoiceOver reads the selected percentage — a custom bar is
 /// invisible to VoiceOver otherwise (design review). `dimmed` renders the stale
 /// treatment: the fill desaturates but the number stays fully legible, because a stale
 /// last-known value is exactly what the user opened the app to see. The countdown ticks
 /// per-minute via the caller's TimelineView `now`, so it never reads frozen.
 struct UsageBarView: View {
     let window: UsageWindow
+    let percentageMode: UsagePercentageMode
     let now: Date
     var dimmed: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
-    private var pct: Int { Int(window.percentRemaining.rounded()) }
-    private var fraction: Double { min(1, max(0, window.percentRemaining / 100)) }
+    private var pct: Int { percentageMode.roundedPercentage(for: window) }
+    private var fraction: Double { percentageMode.fraction(for: window) }
     private var severity: UsageSeverity { window.severity }
 
     /// One spring drives the fill width, its color band, and the rolling percentage so the
@@ -34,14 +35,8 @@ struct UsageBarView: View {
         dimmed ? Color.secondary.opacity(0.55) : ProviderStyle.severityColor(for: severity, scheme: scheme)
     }
 
-    /// Prefer the provider's verbatim reset text (Claude) over a computed countdown
-    /// (Codex). Capitalized "Resets in …" so the computed Codex text matches Claude's
-    /// verbatim "Resets …" casing in the same window, and the past-reset edge reads as
-    /// "Resets now" instead of the nonsensical "resets in resets now".
     private var resetText: String {
-        if let label = window.resetLabel { return label }
-        if window.resetsAt <= now { return "Resets now" }
-        return "Resets in \(Countdown.string(to: window.resetsAt, now: now))"
+        Countdown.resetText(for: window, now: now)
     }
 
     /// Standard windows carry the reset inline beside the label (2 lines total); the
@@ -90,7 +85,7 @@ struct UsageBarView: View {
                     .foregroundStyle(.primary)
                     .contentTransition(.numericText())
                     .animation(valueAnimation, value: pct)
-                Text("left")
+                Text(percentageMode.term)
                     .font(.system(size: 11))
                     .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
             }
@@ -116,7 +111,7 @@ struct UsageBarView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label) usage")
-        .accessibilityValue("\(pct) percent remaining, \(resetText)")
+        .accessibilityValue("\(pct) percent \(percentageMode.term), \(resetText)")
         .animation(valueAnimation, value: severity)
     }
 

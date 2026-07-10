@@ -11,6 +11,7 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let interval = "pollIntervalMinutes"
         static let appearancePreference = "appearancePreference"
         static let showMenuBarPercentage = "showMenuBarPercentage"
+        static let usagePercentageMode = "usagePercentageMode"
         static let menuBarFillSource = "menuBarFillSource"
         static let menuBarWindowSource = "menuBarWindowSource"
         static let widgetsEnabled = "widgetsEnabled"
@@ -45,6 +46,16 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
     public var showMenuBarPercentage: Bool {
         get { defaults.bool(forKey: Key.showMenuBarPercentage) }
         nonmutating set { defaults.set(newValue, forKey: Key.showMenuBarPercentage) }
+    }
+
+    public var usagePercentageMode: UsagePercentageMode {
+        get {
+            guard let raw = defaults.string(forKey: Key.usagePercentageMode),
+                  let mode = UsagePercentageMode(rawValue: raw)
+            else { return .remaining }
+            return mode
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.usagePercentageMode) }
     }
 
     public var menuBarFillSource: MenuBarFillSource {

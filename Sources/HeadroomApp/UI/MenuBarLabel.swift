@@ -3,7 +3,7 @@ import AppKit
 import HeadroomCore
 
 /// The always-visible menu bar content (R5, UI-03): the compact vessel glyph, with the
-/// weekly remaining percent optionally shown beside it. The glyph is tinted by weekly
+/// selected weekly percentage optionally shown beside it. The glyph is tinted by weekly
 /// *severity* (healthy → amber → red), not by brand color, so the menu bar means "how
 /// close is my weekly allotment to running out" at a glance; a small warning dot appears
 /// when a provider needs re-auth, so a dead provider isn't silently invisible. Static
@@ -131,7 +131,8 @@ enum MenuBarLabelRenderer {
         guard let detail = summary.detail else {
             return summary.needsAttention ? "AI usage — a provider needs sign-in" : "AI usage"
         }
-        let base = summary.isNeutral ? detail : "\(detail), \(summary.text) remaining"
+        let term = (summary.percentageMode ?? .remaining).term
+        let base = summary.isNeutral ? detail : "\(detail), \(summary.text) \(term)"
         return summary.needsAttention ? "\(base), needs sign-in" : base
     }
 
