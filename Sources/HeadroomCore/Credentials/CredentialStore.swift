@@ -21,7 +21,7 @@ public actor CredentialStore {
         do {
             return .success(try codexReader.readCodexCredential().accessToken)
         } catch CredentialError.notLoggedIn {
-            return .failure(.notLoggedIn("Codex isn't logged in — run `codex`"))
+            return .failure(.notLoggedIn("Codex isn't logged in — run `\(CodexCLI.loginCommand)`"))
         } catch {
             return .failure(.notLoggedIn("Codex credential unreadable"))
         }

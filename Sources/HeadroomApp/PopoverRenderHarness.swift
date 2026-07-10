@@ -35,6 +35,8 @@ enum PopoverRenderHarness {
 
     enum State: String, CaseIterable {
         case connect, waiting, connected
+        case codexConnect, codexReconnect, codexWaiting, codexConnected
+        case dualWaiting
     }
 
     private static func render(state: State, dark: Bool, to url: URL) async {
@@ -43,13 +45,20 @@ enum PopoverRenderHarness {
         // appearance in this offscreen path, so a window-only override leaves
         // light-mode ink in dark renders.
         NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        // Session flag drives the Connect → Waiting → Connected chip flow.
-        ClaudeSetupSession.openedSetupAt = (state == .connect) ? nil : Date()
+        // Provider-scoped flags drive each Connect → Waiting → Connected flow.
+        ClaudeSetupSession.openedSetupAt = switch state {
+        case .waiting, .connected, .dualWaiting: Date()
+        default: nil
+        }
+        CodexSetupSession.openedSetupAt = switch state {
+        case .codexWaiting, .codexConnected, .dualWaiting: Date()
+        default: nil
+        }
 
         let store = UsageStore(
             providers: [
                 DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: claudeSnapshot(for: state)),
-                DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
+                DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: codexSnapshot(for: state)),
             ],
             preferences: Preferences(defaults: UserDefaults(suiteName: "co.zantos.headroom.render") ?? .standard)
         )
@@ -161,7 +170,7 @@ enum PopoverRenderHarness {
 
     private static func claudeSnapshot(for state: State) -> UsageSnapshot {
         switch state {
-        case .connect, .waiting:
+        case .connect, .waiting, .dualWaiting:
             return UsageSnapshot(
                 providerID: .claude,
                 windows: [],
@@ -169,8 +178,28 @@ enum PopoverRenderHarness {
                 capturedAt: Date(),
                 freshness: .stale(.needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
             )
-        case .connected:
+        case .connected, .codexConnect, .codexReconnect, .codexWaiting, .codexConnected:
             return DemoFixture.claudeSnapshot
+        }
+    }
+
+    private static func codexSnapshot(for state: State) -> UsageSnapshot {
+        switch state {
+        case .codexConnect:
+            return .stale(
+                for: .codex,
+                reason: .notLoggedIn("Codex isn't logged in — run `\(CodexCLI.loginCommand)`")
+            )
+        case .codexReconnect, .codexWaiting, .dualWaiting:
+            return UsageSnapshot(
+                providerID: .codex,
+                windows: DemoFixture.codexSnapshot.windows,
+                planLabel: DemoFixture.codexSnapshot.planLabel,
+                capturedAt: DemoFixture.codexSnapshot.capturedAt,
+                freshness: .stale(.needsReauth("Session expired — run `\(CodexCLI.loginCommand)` to reconnect"))
+            )
+        case .codexConnected, .connect, .waiting, .connected:
+            return DemoFixture.codexSnapshot
         }
     }
 }

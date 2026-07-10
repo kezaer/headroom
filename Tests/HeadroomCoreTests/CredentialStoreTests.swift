@@ -34,7 +34,7 @@ struct CredentialStoreTests {
         let store = CredentialStore(codexReader: MockCodexReader(credential: nil))
         let result = await store.codexAccessToken()
         guard case .failure(let reason) = result else { Issue.record("expected failure"); return }
-        #expect(reason.isPermanent)
+        #expect(reason == .notLoggedIn("Codex isn't logged in — run `codex login`"))
     }
 
     @Test func redactionHidesTokens() {

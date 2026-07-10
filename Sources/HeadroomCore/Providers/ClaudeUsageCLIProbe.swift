@@ -69,27 +69,13 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     /// Resolve `claude` via the user's login shell so a Finder-launched app (bare PATH)
     /// still finds an nvm/homebrew install. Falls back to common locations.
     public static func resolveClaudePath() -> String? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let probe = Process()
-        probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lc", "command -v claude"]
-        let pipe = Pipe()
-        probe.standardOutput = pipe
-        probe.standardError = Pipe()
-        do {
-            try probe.run()
-            probe.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let out, !out.isEmpty, FileManager.default.isExecutableFile(atPath: out) { return out }
-        } catch {}
-        for candidate in [
-            "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
-            "\(NSHomeDirectory())/.local/bin/claude",
-        ] where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        return nil
+        CLIExecutableResolver.resolve(
+            named: "claude",
+            fallbackPaths: [
+                "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
+                "\(NSHomeDirectory())/.local/bin/claude",
+            ]
+        )
     }
 
     /// The user's real PATH via a login shell, so a Finder-launched app (bare PATH)
@@ -99,7 +85,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lc", "printf %s \"$PATH\""]
+        probe.arguments = ["-lic", "printf %s \"$PATH\""]
         let pipe = Pipe()
         probe.standardOutput = pipe
         probe.standardError = Pipe()

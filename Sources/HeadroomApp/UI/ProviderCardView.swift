@@ -5,8 +5,8 @@ import HeadroomCore
 /// One provider's card (U7). Renders the explicit states off `snapshot.freshness`:
 /// `.pending` first-run skeleton, `.live`, transient stale (last data kept, marked with
 /// a "Stale" pill), permanent needs-reauth (actionable command), and — for Claude's
-/// trust-required first run — the guided Connect/Waiting onboarding cards
-/// (`ClaudeSetupViews`, transferred from the HTML mockup Jul 2026).
+/// trust-required first run and Codex credential recovery — guided Connect/Waiting
+/// cards that hand control to each provider's official CLI.
 ///
 /// Type + spacing were tuned in the mockup: 16pt bold card titles, 14pt vertical rhythm
 /// between rows, 20pt card padding. Plan pills and the "Plan renews" row were removed
@@ -40,6 +40,23 @@ struct ProviderCardView: View {
                         onOpenSetup: { ClaudeSetupSession.openSetup(onRetry: onRetrySetup) }
                     )
                 }
+            } else if let action = snapshot.codexConnectionAction {
+                VStack(alignment: .leading, spacing: 13) {
+                    if CodexSetupSession.openedSetupAt != nil {
+                        CodexWaitingCard(
+                            onCheckNow: onRetrySetup,
+                            onReopen: { CodexSetupSession.openSetup(onRetry: onRetrySetup) }
+                        )
+                    } else {
+                        CodexConnectCard(
+                            action: action,
+                            onOpenSetup: { CodexSetupSession.openSetup(onRetry: onRetrySetup) }
+                        )
+                    }
+                    if action == .reconnect, !snapshot.windows.isEmpty {
+                        bars(dimmed: true)
+                    }
+                }
             } else {
                 VStack(alignment: .leading, spacing: 9) {
                     header
@@ -60,20 +77,35 @@ struct ProviderCardView: View {
         .onChange(of: snapshot.freshness) { evaluateConnectedPayoff() }
     }
 
-    /// The guided-setup payoff: when Claude goes live after the user opened setup, stop
-    /// the pending auto-retries (each spawns a 20–30s CLI cycle — without this the
-    /// footer reads "Refreshing…" for minutes after success) and show the "Connected"
-    /// chip briefly. One-shot: the session flag clears with the dismissal.
+    /// The guided-setup payoff: when either provider goes live after its Terminal handoff,
+    /// stop only that provider's retries and show the "Connected" chip briefly.
     private func evaluateConnectedPayoff() {
-        guard providerID == .claude, case .live = snapshot.freshness,
-              ClaudeSetupSession.openedSetupAt != nil else { return }
-        ClaudeSetupSession.cancelRetries()
+        guard case .live = snapshot.freshness else { return }
+        let setupOpenedAt: Date
+        switch providerID {
+        case .claude:
+            guard let openedAt = ClaudeSetupSession.openedSetupAt else { return }
+            setupOpenedAt = openedAt
+            ClaudeSetupSession.cancelRetries()
+        case .codex:
+            guard let openedAt = CodexSetupSession.openedSetupAt else { return }
+            setupOpenedAt = openedAt
+            CodexSetupSession.cancelRetries()
+        default:
+            return
+        }
         guard !showsConnectedChip else { return }
         withAnimation(reduceMotion ? nil : HeadroomMotion.valueSpring) { showsConnectedChip = true }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
             withAnimation(reduceMotion ? nil : HeadroomMotion.settle) { showsConnectedChip = false }
-            ClaudeSetupSession.openedSetupAt = nil
+            switch providerID {
+            case .claude where ClaudeSetupSession.openedSetupAt == setupOpenedAt:
+                ClaudeSetupSession.openedSetupAt = nil
+            case .codex where CodexSetupSession.openedSetupAt == setupOpenedAt:
+                CodexSetupSession.openedSetupAt = nil
+            default: break
+            }
         }
     }
 
@@ -181,8 +213,8 @@ struct ProviderCardView: View {
         }
     }
 
-    /// Permanent failure the user can fix (UI-05) that is *not* the guided Claude setup
-    /// (that one renders the Connect/Waiting cards): message + compact copyable command.
+    /// Permanent failure the user can fix (UI-05) that is not one of the guided setup
+    /// states: message + compact copyable command.
     @ViewBuilder private func actionable(_ reason: FailureReason) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(reason.message, systemImage: "exclamationmark.triangle.fill")
@@ -234,7 +266,7 @@ struct ProviderCardView: View {
     private func recoveryCommand(for reason: FailureReason) -> String? {
         switch providerID {
         case .claude: return "claude"
-        case .codex: return "codex login"
+        case .codex: return CodexCLI.loginCommand
         default: return nil
         }
     }
