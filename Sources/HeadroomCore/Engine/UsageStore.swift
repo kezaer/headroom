@@ -7,6 +7,7 @@ public struct MenuBarSummary: Sendable, Equatable {
     public let text: String            // e.g. "12%"
     public let providerID: ProviderID? // which provider the number is about
     public let detail: String?         // e.g. "Claude 5h"
+    public let percentageMode: UsagePercentageMode?
     public let isNeutral: Bool         // true when no live data yet
     /// Health of the shown window — tints the glyph by urgency, not brand (UI-03).
     public let severity: UsageSeverity
@@ -19,6 +20,7 @@ public struct MenuBarSummary: Sendable, Equatable {
         providerID: ProviderID?,
         detail: String?,
         isNeutral: Bool,
+        percentageMode: UsagePercentageMode? = nil,
         severity: UsageSeverity = .healthy,
         needsAttention: Bool = false
     ) {
@@ -26,6 +28,7 @@ public struct MenuBarSummary: Sendable, Equatable {
         self.providerID = providerID
         self.detail = detail
         self.isNeutral = isNeutral
+        self.percentageMode = percentageMode
         self.severity = severity
         self.needsAttention = needsAttention
     }
@@ -36,7 +39,8 @@ public struct MenuBarSummary: Sendable, Equatable {
     /// (no-live-data) case still surface a needs-reauth provider.
     func withAttention(_ flag: Bool) -> MenuBarSummary {
         MenuBarSummary(text: text, providerID: providerID, detail: detail,
-                       isNeutral: isNeutral, severity: severity, needsAttention: flag)
+                       isNeutral: isNeutral, percentageMode: percentageMode,
+                       severity: severity, needsAttention: flag)
     }
 }
 
@@ -63,6 +67,7 @@ public final class UsageStore {
     public private(set) var snapshots: [ProviderID: UsageSnapshot]
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
+    public private(set) var usagePercentageMode: UsagePercentageMode
     public private(set) var menuBarFillSource: MenuBarFillSource
     public private(set) var menuBarWindowSource: MenuBarWindowSource
     public private(set) var showCodexSparkCountersInApp: Bool
@@ -104,6 +109,7 @@ public final class UsageStore {
             ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
         })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
+        self.usagePercentageMode = preferences.usagePercentageMode
         self.menuBarFillSource = preferences.menuBarFillSource
         self.menuBarWindowSource = preferences.menuBarWindowSource
         self.showCodexSparkCountersInApp = preferences.showCodexSparkCountersInApp
@@ -154,6 +160,11 @@ public final class UsageStore {
         showMenuBarPercentage = enabled
     }
 
+    public func setUsagePercentageMode(_ mode: UsagePercentageMode) {
+        preferences.usagePercentageMode = mode
+        usagePercentageMode = mode
+    }
+
     public func setMenuBarFillSource(_ source: MenuBarFillSource) {
         preferences.menuBarFillSource = source
         menuBarFillSource = source
@@ -177,7 +188,8 @@ public final class UsageStore {
     }
 
     /// How full to draw the menu-bar vessel, 0…1: the selected provider's chosen
-    /// menu-bar window `percentRemaining` (weekly or 5-hour, per Settings). Reads
+    /// menu-bar window percentage in the selected display mode (weekly or 5-hour,
+    /// per Settings). Reads
     /// from the last-known windows regardless of
     /// freshness, so a transient failure doesn't make the pill jump. Nil when the
     /// source is `.none` or that provider has no weekly window yet — the label then
@@ -186,7 +198,7 @@ public final class UsageStore {
         guard let id = menuBarFillSource.providerID,
               let weekly = menuBarWindow(for: id)
         else { return nil }
-        return weekly.window.percentRemaining / 100
+        return usagePercentageMode.fraction(for: weekly.window)
     }
 
     /// Render-ready menu bar meters. In `Both` mode each enabled provider gets its own
@@ -399,7 +411,7 @@ public final class UsageStore {
         )
     }
 
-    /// The menu bar summary: remaining allotment in the user's chosen window (weekly or
+    /// The menu bar summary: selected percentage presentation in the user's chosen window
     /// 5-hour), tagged with provider identity. If Settings chooses a fill source, the
     /// number and severity follow that provider's window so the text, vessel fill, and
     /// color all mean the same thing. If no source is chosen, the text/tint use the
@@ -414,13 +426,14 @@ public final class UsageStore {
         }
         let best = menuBarBestWindow()
         guard let best else { return MenuBarSummary.neutral.withAttention(needsAttention) }
-        let pct = Int(best.window.percentRemaining.rounded())
+        let pct = usagePercentageMode.roundedPercentage(for: best.window)
         let name = displayNames[best.id] ?? best.id.raw
         return MenuBarSummary(
             text: "\(pct)%",
             providerID: best.id,
             detail: "\(name) \(menuBarWindowSource.shortLabel)",
             isNeutral: false,
+            percentageMode: usagePercentageMode,
             severity: best.window.severity,
             needsAttention: needsAttention
         )
@@ -450,7 +463,7 @@ public final class UsageStore {
             )
         }
 
-        let pct = Int(weekly.window.percentRemaining.rounded())
+        let pct = usagePercentageMode.roundedPercentage(for: weekly.window)
         let name = displayNames[id] ?? id.raw
         return MenuBarMeter(
             summary: MenuBarSummary(
@@ -458,10 +471,11 @@ public final class UsageStore {
                 providerID: id,
                 detail: "\(name) \(menuBarWindowSource.shortLabel)",
                 isNeutral: false,
+                percentageMode: usagePercentageMode,
                 severity: weekly.window.severity,
                 needsAttention: needsAttention
             ),
-            fill: weekly.window.percentRemaining / 100
+            fill: usagePercentageMode.fraction(for: weekly.window)
         )
     }
 

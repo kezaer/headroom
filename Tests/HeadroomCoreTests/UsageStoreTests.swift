@@ -192,6 +192,35 @@ struct UsageStoreTests {
         #expect(preferences.showMenuBarPercentage)
     }
 
+    @Test func percentageModePersistsAndRecomputesMenuBarPresentation() async {
+        let preferences = freshPreferences()
+        preferences.menuBarFillSource = .claude
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 73, resetsAt: reset),
+                ])),
+            ],
+            preferences: preferences
+        )
+        await store.refreshAll()
+
+        #expect(store.usagePercentageMode == .remaining)
+        #expect(store.menuBarSummary.text == "27%")
+        #expect(store.menuBarSummary.percentageMode == .remaining)
+        #expect(store.menuBarFill == 0.27)
+        let severity = store.menuBarSummary.severity
+
+        store.setUsagePercentageMode(.used)
+
+        #expect(store.usagePercentageMode == .used)
+        #expect(preferences.usagePercentageMode == .used)
+        #expect(store.menuBarSummary.text == "73%")
+        #expect(store.menuBarSummary.percentageMode == .used)
+        #expect(store.menuBarFill == 0.73)
+        #expect(store.menuBarSummary.severity == severity)
+    }
+
     @Test func menuBarFillTracksSelectedProviderWeekly() async {
         let store = makeStore(source: .claude, providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
@@ -279,6 +308,28 @@ struct UsageStoreTests {
         #expect(meters[1].summary.text == "12%")
         #expect(meters[1].summary.severity == .critical)
         #expect(meters[1].fill == 0.12)
+    }
+
+    @Test func usedModeAppliesToBothProviderMenuBarMeters() async {
+        let preferences = freshPreferences()
+        preferences.menuBarFillSource = .both
+        preferences.usagePercentageMode = .used
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 35, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 88, resetsAt: reset),
+            ])),
+        ], preferences: preferences)
+
+        await store.refreshAll()
+
+        let meters = store.menuBarMeters
+        #expect(meters.map(\.summary.text) == ["35%", "88%"])
+        #expect(meters.map(\.summary.percentageMode) == [.used, .used])
+        #expect(meters.map(\.fill) == [0.35, 0.88])
+        #expect(meters.map(\.summary.severity) == [.healthy, .critical])
     }
 
     @Test func menuBarMetersInBothModeKeepProviderSpecificAttention() async {

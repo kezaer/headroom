@@ -20,6 +20,7 @@ struct ProviderCardView: View {
     let providerID: ProviderID
     let displayName: String
     let snapshot: UsageSnapshot
+    let percentageMode: UsagePercentageMode
     let now: Date
     let onRetrySetup: () -> Void
 
@@ -152,7 +153,7 @@ struct ProviderCardView: View {
         } else {
             VStack(spacing: 9) {
                 ForEach(Array(snapshot.windows.enumerated()), id: \.offset) { _, window in
-                    UsageBarView(window: window, now: now, dimmed: dimmed)
+                    UsageBarView(window: window, percentageMode: percentageMode, now: now, dimmed: dimmed)
                 }
             }
         }

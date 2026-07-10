@@ -26,6 +26,40 @@ public enum WindowKind: Sendable, Equatable, Hashable {
     }
 }
 
+/// How subscription percentages are presented to the user. Provider snapshots keep
+/// canonical utilization; this mode derives the complementary display without mutating
+/// fetched data or the remaining-based severity thresholds.
+public enum UsagePercentageMode: String, CaseIterable, Identifiable, Sendable {
+    case remaining
+    case used
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .remaining: return "Left"
+        case .used: return "Used"
+        }
+    }
+
+    public var term: String { label.lowercased() }
+
+    public func percentage(for window: UsageWindow) -> Double {
+        switch self {
+        case .remaining: return window.percentRemaining
+        case .used: return window.percentUsed
+        }
+    }
+
+    public func roundedPercentage(for window: UsageWindow) -> Int {
+        Int(percentage(for: window).rounded())
+    }
+
+    public func fraction(for window: UsageWindow) -> Double {
+        percentage(for: window) / 100
+    }
+}
+
 /// One usage window: how much has been consumed and when it resets.
 ///
 /// `resetsAt` is always the server-provided reset time — never a client-side guess
@@ -51,6 +85,12 @@ public struct UsageWindow: Sendable, Equatable {
     /// over-limit `utilization > 100` reads as 0 remaining rather than negative.
     public var percentRemaining: Double {
         min(100, max(0, 100 - utilization))
+    }
+
+    /// Percentage consumed, clamped independently because provider payloads can report
+    /// transient under/over-limit values outside the normal 0...100 range.
+    public var percentUsed: Double {
+        min(100, max(0, utilization))
     }
 
     /// Static health band for this window (UI-01). A pure threshold on
@@ -220,8 +260,8 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
 }
 
 /// Which provider's *weekly* usage drives how full the menu-bar vessel is drawn. The
-/// glyph's fill drains as that provider's weekly allotment is consumed. `.none` keeps a
-/// static decorative fill (the identity mark), decoupled from any single provider.
+/// glyph follows the selected percentage mode for that provider. `.none` keeps a static
+/// decorative fill (the identity mark), decoupled from any single provider.
 public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatable {
     case none
     case claude

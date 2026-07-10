@@ -34,6 +34,7 @@ struct PopoverView: View {
                         providerID: id,
                         displayName: store.displayNames[id] ?? id.raw,
                         snapshot: store.appDisplaySnapshot(for: id),
+                        percentageMode: store.usagePercentageMode,
                         now: context.date,
                         onRetrySetup: { store.refreshNow() }
                     )

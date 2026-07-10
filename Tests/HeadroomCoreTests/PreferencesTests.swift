@@ -51,6 +51,18 @@ struct PreferencesTests {
         #expect(prefs.showMenuBarPercentage)
     }
 
+    @Test func usagePercentageModeDefaultsPersistsAndIgnoresUnknownValues() {
+        let defaults = freshDefaults()
+        let prefs = Preferences(defaults: defaults)
+        #expect(prefs.usagePercentageMode == .remaining)
+
+        prefs.usagePercentageMode = .used
+        #expect(prefs.usagePercentageMode == .used)
+
+        defaults.set("spent", forKey: "usagePercentageMode")
+        #expect(prefs.usagePercentageMode == .remaining)
+    }
+
     @Test func menuBarFillSourceSupportsBothProviders() {
         let prefs = Preferences(defaults: freshDefaults())
         #expect(prefs.menuBarFillSource == .none)
