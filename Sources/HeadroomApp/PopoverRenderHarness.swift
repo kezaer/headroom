@@ -16,14 +16,19 @@ enum PopoverRenderHarness {
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
         Task { @MainActor in
+            var failedPaths: [String] = []
             for state in State.allCases {
                 let modes: [UsagePercentageMode] = state == .connected ? UsagePercentageMode.allCases : [.remaining]
                 for mode in modes {
                     for dark in [false, true] {
                         let modeSuffix = mode == .used ? "-used" : ""
                         let name = "popover-\(state.rawValue)\(modeSuffix)-\(dark ? "dark" : "light").png"
-                        await render(state: state, percentageMode: mode, dark: dark, to: outDir.appendingPathComponent(name))
-                        print("✓ \(outDir.appendingPathComponent(name).path)")
+                        let url = outDir.appendingPathComponent(name)
+                        if await render(state: state, percentageMode: mode, dark: dark, to: url) {
+                            print("✓ \(url.path)")
+                        } else {
+                            failedPaths.append(url.path)
+                        }
                     }
                 }
             }
@@ -31,11 +36,18 @@ enum PopoverRenderHarness {
                 for dark in [false, true] {
                     let modeSuffix = mode == .used ? "-used" : ""
                     let name = "settings\(modeSuffix)-\(dark ? "dark" : "light").png"
-                    await renderSettings(percentageMode: mode, dark: dark, to: outDir.appendingPathComponent(name))
-                    print("✓ \(outDir.appendingPathComponent(name).path)")
+                    let url = outDir.appendingPathComponent(name)
+                    if await renderSettings(percentageMode: mode, dark: dark, to: url) {
+                        print("✓ \(url.path)")
+                    } else {
+                        failedPaths.append(url.path)
+                    }
                 }
             }
-            exit(0)
+            for path in failedPaths {
+                FileHandle.standardError.write(Data("✗ Failed to render \(path)\n".utf8))
+            }
+            exit(failedPaths.isEmpty ? 0 : 1)
         }
         app.run()
     }
@@ -44,7 +56,7 @@ enum PopoverRenderHarness {
         case connect, waiting, connected
     }
 
-    private static func render(state: State, percentageMode: UsagePercentageMode, dark: Bool, to url: URL) async {
+    private static func render(state: State, percentageMode: UsagePercentageMode, dark: Bool, to url: URL) async -> Bool {
         // App-wide appearance, not just window-level: SwiftUI's semantic styles
         // (.primary/.secondary/.quaternary) resolve against the app's effective
         // appearance in this offscreen path, so a window-only override leaves
@@ -105,8 +117,9 @@ enum PopoverRenderHarness {
         // the real OS-selected surface) via `screencapture -l`. The offscreen `cacheDisplay` path
         // resolves semantic text colors against the wrong appearance, so it's only the
         // fallback when screen capture is unavailable (no Screen Recording permission).
-        capture(window: window, to: url)
+        let captured = capture(window: window, to: url)
         window.orderOut(nil)
+        return captured
     }
 
     private static func captureWindow(number: Int, to url: URL) -> Bool {
@@ -131,7 +144,7 @@ enum PopoverRenderHarness {
     /// Settings window, demo store, fixed 460×1240 — verifies the shared type hierarchy
     /// (22pt title / 15pt tile heads / 13pt controls / 11pt fine print) and the
     /// all-tiles material system across both windows.
-    private static func renderSettings(percentageMode: UsagePercentageMode, dark: Bool, to url: URL) async {
+    private static func renderSettings(percentageMode: UsagePercentageMode, dark: Bool, to url: URL) async -> Bool {
         NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         let preferences = renderPreferences(mode: percentageMode)
         let store = UsageStore(
@@ -158,20 +171,25 @@ enum PopoverRenderHarness {
         window.orderFrontRegardless()
         window.displayIfNeeded()
         try? await Task.sleep(for: .milliseconds(500))
-        capture(window: window, to: url)
+        let captured = capture(window: window, to: url)
         window.orderOut(nil)
+        return captured
     }
 
-    private static func capture(window: NSWindow, to url: URL) {
-        if captureWindow(number: window.windowNumber, to: url) { return }
+    private static func capture(window: NSWindow, to url: URL) -> Bool {
+        if captureWindow(number: window.windowNumber, to: url) { return true }
         guard let view = window.contentView,
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-        else { return }
+        else { return false }
         (window.appearance ?? NSAppearance(named: .aqua))?.performAsCurrentDrawingAppearance {
             view.cacheDisplay(in: view.bounds, to: rep)
         }
-        if let data = rep.representation(using: .png, properties: [:]) {
-            try? data.write(to: url)
+        guard let data = rep.representation(using: .png, properties: [:]), data.count > 10_000 else { return false }
+        do {
+            try data.write(to: url)
+            return true
+        } catch {
+            return false
         }
     }
 

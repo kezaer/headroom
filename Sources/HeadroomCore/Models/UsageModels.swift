@@ -68,10 +68,10 @@ public struct UsageWindow: Sendable, Equatable {
     public let kind: WindowKind
     public let utilization: Double
     public let resetsAt: Date
-    /// The provider's own reset text shown verbatim when present (e.g. Claude's
-    /// "Resets Jul 2 at 10am"). Preferred over a client-computed countdown because it
-    /// can't drift from what the source displays. Nil for providers that give only a
-    /// machine reset timestamp (Codex).
+    /// The provider's own reset text when present (e.g. Claude's "Resets Jul 2 at
+    /// 10am"). Preserved for diagnostics and snapshot consumers; the macOS app derives
+    /// its compact relative presentation from `resetsAt`. Nil for providers that give
+    /// only a machine reset timestamp (Codex).
     public let resetLabel: String?
 
     public init(kind: WindowKind, utilization: Double, resetsAt: Date, resetLabel: String? = nil) {
