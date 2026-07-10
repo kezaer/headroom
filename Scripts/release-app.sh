@@ -2,6 +2,7 @@
 # Build, Developer ID sign, notarize, staple, and package Headroom for website distribution.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source Scripts/macos-compatibility.sh
 
 APP="Headroom.app"
 WIDGET_APPEX="${APP}/Contents/PlugIns/HeadroomWidgets.appex"
@@ -319,11 +320,13 @@ write_minimal_appcast() {
   local archive_length
   local download_url="${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}${DMG_NAME}"
   local pub_date
+  local sparkle_minimum
 
   signature_line="$(cat "${DMG_PATH}.sparkle-signature.txt")"
   ed_signature="$(printf '%s\n' "${signature_line}" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')"
   archive_length="$(printf '%s\n' "${signature_line}" | sed -n 's/.*length="\([0-9]*\)".*/\1/p')"
   pub_date="$(LC_ALL=C date -R)"
+  sparkle_minimum="$(headroom_sparkle_minimum_from_app "${APP}")"
 
   if [[ -z "${ed_signature}" || -z "${archive_length}" ]]; then
     echo "Could not parse Sparkle signature metadata from ${DMG_PATH}.sparkle-signature.txt" >&2
@@ -342,7 +345,7 @@ write_minimal_appcast() {
       <pubDate>${pub_date}</pubDate>
       <sparkle:version>${BUILD}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>${sparkle_minimum}</sparkle:minimumSystemVersion>
       <enclosure url="${download_url}" sparkle:edSignature="${ed_signature}" length="${archive_length}" type="application/octet-stream" />
     </item>
   </channel>
@@ -532,6 +535,7 @@ archive_and_export_developer_id_app
 echo "→ verifying signed app bundle"
 codesign --verify --deep --strict --verbose=2 "${APP}"
 verify_release_entitlements
+headroom_verify_macos_bundle "${APP}" "${WIDGET_APPEX}"
 
 if [[ "${HEADROOM_RELEASE_BUILD_ONLY}" == "1" ]]; then
   echo "✓ Developer ID app ready: ${APP}"
@@ -592,6 +596,10 @@ if [[ -n "${HEADROOM_SPARKLE_UPDATES_DIR}" ]]; then
     echo "→ Sparkle generate_appcast timed out; writing minimal signed appcast"
     write_minimal_appcast
   fi
+  headroom_verify_appcast_minimum \
+    "${HEADROOM_SPARKLE_UPDATES_DIR}/appcast.xml" \
+    "${APP}" \
+    "${BUILD}"
   ditto "${DMG_PATH}" "${LATEST_DMG_PATH}"
   write_sha256_file "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${DMG_NAME}.sha256"
   write_sha256_file "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${LATEST_DMG_NAME}.sha256"

@@ -5,9 +5,10 @@ changes.
 
 ## What this is
 
-A native macOS 26 (Tahoe) menu bar app (Swift 6 / SwiftUI) showing remaining AI-subscription
+A native macOS 15+ menu bar app (Swift 6 / SwiftUI) showing remaining AI-subscription
 usage — 5-hour and weekly windows, reset times, manual renewal dates — for **Claude** and
-**ChatGPT/Codex**, behind one provider abstraction so more can be added.
+**ChatGPT/Codex**, behind one provider abstraction so more can be added. Tahoe uses Liquid
+Glass; Sequoia uses a native material popover surface.
 
 ## ⚠️ Hard constraint — do NOT reintroduce Claude subscription-OAuth
 
@@ -37,8 +38,9 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
   - `Credentials/` — `CredentialStore` (Codex-only), `CodexAuthReader`, `Redaction`.
   - `Engine/` — `PollingEngine`, `UsageStore` (`@MainActor @Observable`).
   - `Settings/` — `Preferences` (UserDefaults), `LaunchAtLogin` (SMAppService).
-- `Sources/HeadroomApp` — SwiftUI `MenuBarExtra(.window)` shell + Tahoe/Liquid Glass popover,
-  cards, settings, menu bar label. `AppComposition` is the one place providers are wired.
+- `Sources/HeadroomApp` — SwiftUI `MenuBarExtra(.window)` shell + adaptive popover (Liquid
+  Glass on Tahoe, native material on Sequoia), cards, settings, menu bar label.
+  `AppComposition` is the one place providers are wired.
 
 Data flow: `PollingEngine` → `UsageStore.refreshAll()` fetches providers concurrently →
 merges with continuity → menu bar label + popover bind to the `@Observable` store.
@@ -52,8 +54,9 @@ swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windo
 ./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
 ```
 
-Requires Xcode 26 / Swift 6.3, macOS 26, `claude` CLI logged in (Claude) and
-`~/.codex/auth.json` (Codex).
+Building requires Xcode 26 / Swift 6.3. The app targets macOS 15+ on Apple silicon; a real
+macOS 15 Apple-silicon runtime smoke is required before advertising Sequoia support. Claude
+requires the `claude` CLI logged in; Codex requires `~/.codex/auth.json`.
 
 ## Conventions
 

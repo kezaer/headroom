@@ -11,7 +11,7 @@ import PackageDescription
 // on the user's machine — see docs/plans and README.
 let package = Package(
     name: "Headroom",
-    platforms: [.macOS("26.0"), .iOS("26.0")],
+    platforms: [.macOS("15.0"), .iOS("26.0")],
     products: [
         .library(name: "HeadroomCore", targets: ["HeadroomCore"]),
         .library(name: "HeadroomWidgetSharedUI", targets: ["HeadroomWidgetSharedUI"]),

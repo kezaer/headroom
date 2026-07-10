@@ -2,7 +2,7 @@ name: Headroom
 options:
   bundleIdPrefix: com.kylezantos
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "15.0"
     iOS: "26.0"
   createIntermediateGroups: true
 settings:
@@ -52,7 +52,7 @@ targets:
         INFOPLIST_KEY_CFBundleShortVersionString: 1.0.3
         INFOPLIST_KEY_CFBundleVersion: 14
         INFOPLIST_KEY_HeadroomAppGroupIdentifier: "$(HEADROOM_APP_GROUP_IDENTIFIER)"
-        INFOPLIST_KEY_LSMinimumSystemVersion: "26.0"
+        INFOPLIST_KEY_LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         INFOPLIST_KEY_LSUIElement: YES
         INFOPLIST_KEY_NSHumanReadableCopyright: Personal use
         INFOPLIST_KEY_SUAllowsAutomaticUpdates: NO

@@ -3,7 +3,7 @@ import AppKit
 import HeadroomCore
 
 /// Hidden diagnostic (`--render-popover <dir>`): renders the real `PopoverView` — demo
-/// fixture data, real glass, real appearance — to PNGs for every onboarding state ×
+/// fixture data, the current OS surface, real appearance — to PNGs for every onboarding state ×
 /// appearance, headlessly. Exists so popover design changes can be visually reviewed
 /// and diffed against the HTML design mockups without posing the live menu bar
 /// (`Scripts/capture-demo-screenshots.sh` still covers the marketing hero shots).
@@ -58,7 +58,7 @@ enum PopoverRenderHarness {
         try? await Task.sleep(for: .milliseconds(700))
 
         let root = ZStack {
-            // Desk backdrop so the glass has something to sample (mirrors the mockup).
+            // Desk backdrop so the system surface has something to sample (mirrors the mockup).
             LinearGradient(
                 colors: dark
                     ? [Color(red: 0.137, green: 0.137, blue: 0.169), Color(red: 0.078, green: 0.078, blue: 0.102)]
@@ -94,7 +94,7 @@ enum PopoverRenderHarness {
         try? await Task.sleep(for: .milliseconds(600))
 
         // Capture the compositor's actual output (correct dynamic-color resolution and
-        // real Liquid Glass) via `screencapture -l`. The offscreen `cacheDisplay` path
+        // the real OS-selected surface) via `screencapture -l`. The offscreen `cacheDisplay` path
         // resolves semantic text colors against the wrong appearance, so it's only the
         // fallback when screen capture is unavailable (no Screen Recording permission).
         let captured = captureWindow(number: window.windowNumber, to: url)

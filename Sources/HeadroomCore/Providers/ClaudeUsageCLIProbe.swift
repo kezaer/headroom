@@ -128,7 +128,15 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         var fileActions = posix_spawn_file_actions_t(bitPattern: 0)
         posix_spawn_file_actions_init(&fileActions)
-        posix_spawn_file_actions_addchdir(&fileActions, workingDirectory)
+        // Darwin exposed the chdir spawn action as `_np` from macOS 10.15 through
+        // Sequoia, then standardized the unsuffixed symbol in Tahoe. Keep the working
+        // directory as a spawn action on both paths so the child never races a
+        // process-wide chdir and Finder-launched probes retain their stable workspace.
+        if #available(macOS 26.0, *) {
+            posix_spawn_file_actions_addchdir(&fileActions, workingDirectory)
+        } else {
+            posix_spawn_file_actions_addchdir_np(&fileActions, workingDirectory)
+        }
         posix_spawn_file_actions_adddup2(&fileActions, slave, 0)
         posix_spawn_file_actions_adddup2(&fileActions, slave, 1)
         posix_spawn_file_actions_adddup2(&fileActions, slave, 2)

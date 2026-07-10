@@ -7,6 +7,11 @@ official `claude` CLI's `/usage` panel instead.
 
 ## Claude CLI probe
 
+- **`--probe-claude` raw preview can disclose account PII.** The default diagnostic prints
+  the first 1,500 characters of the captured Claude panel, whose welcome banner can include
+  the signed-in account email and organization name before the `/usage` content. Redact
+  email/organization strings before printing or make raw output an explicit opt-in that
+  warns about PII; never include the raw preview in shared logs.
 - **Parser is pinned to the current `/usage` layout.** `ClaudeUsageParser` keys on stable
   shapes ("Current session", "Current week (…)", "N% used", "Resets …") rather than line
   positions, but a future Claude Code redesign of the panel could still break it. It fails
@@ -27,6 +32,12 @@ official `claude` CLI's `/usage` panel instead.
 
 ## Polish
 
+- **`PopoverRenderHarness` dark captures can resolve primary text as black.** The generated
+  dark PNG uses the correct dark surfaces and secondary colors, but default/primary text
+  (title, percentages, footer controls) can render black in the headless compositor path.
+  The harness also announces Settings PNGs even when `screencapture` fails to create them.
+  Fix the capture-only appearance propagation and only print success for files that exist;
+  live app appearance is unaffected.
 - ~~App icon — user to provide.~~ Done: Vessel `AppIcon.appiconset` (16–1024), wired via
   `ASSETCATALOG_COMPILER_APPICON_NAME`. The artwork is full-bleed square PNG output so iOS,
   iPadOS, and macOS can apply their native icon shape without a second baked-in frame.

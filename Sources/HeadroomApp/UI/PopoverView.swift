@@ -2,10 +2,11 @@ import SwiftUI
 import AppKit
 import HeadroomCore
 
-/// The Liquid Glass popover (U7). Composes one card per provider on a Tahoe glass
-/// surface, a gear that opens Settings, and a Quit control (required — the app has no
-/// Dock presence, KTD9). A `TimelineView` drives a per-minute `now` so countdowns and
-/// "updated N min ago" tick without a data poll.
+/// The native popover (U7). Composes one card per provider on a system surface, a gear
+/// that opens Settings, and a Quit control (required — the app has no Dock presence,
+/// KTD9). Tahoe uses Liquid Glass; Sequoia falls back to native material. A
+/// `TimelineView` drives a per-minute `now` so countdowns and "updated N min ago" tick
+/// without a data poll.
 struct PopoverView: View {
     var store: UsageStore
     var onOpenSettings: () -> Void
@@ -47,8 +48,8 @@ struct PopoverView: View {
             // mockup (Jul 2026); roomier than the original concentric 12pt scheme.
             .padding(19)
             .frame(width: 384)
-            // One clean glass layer: the `.glassEffect` already supplies the material, so the
-            // redundant `.ultraThinMaterial` stacked underneath is gone — more native, less muddy.
+            // One clean system surface: Liquid Glass on Tahoe, native material on Sequoia.
+            // Both paths own their full background so no redundant material muddies the host.
             .modifier(PopoverSurfaceModifier(cornerRadius: 22))
             // Capture the popover's hosting window so opening Settings can dismiss it.
             .background(WindowAccessor { configurePopoverWindow($0) })
@@ -75,8 +76,8 @@ struct PopoverView: View {
     private func configurePopoverWindow(_ window: NSWindow?) {
         popoverWindow = window
         guard let window else { return }
-        // HR-33: keep the custom content glass radius, but clear the MenuBarExtra host
-        // backing so the popover has exactly one material layer at the rounded edge.
+        // HR-33: keep the custom content radius, but clear the MenuBarExtra host backing
+        // so the popover has exactly one system material layer at the rounded edge.
         window.isOpaque = false
         window.backgroundColor = .clear
     }
@@ -211,8 +212,12 @@ private struct PopoverSurfaceModifier: ViewModifier {
             content
                 .background(Color(nsColor: .windowBackgroundColor), in: shape)
                 .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
-        } else {
+        } else if #available(macOS 26.0, *) {
             content.glassEffect(in: shape)
+        } else {
+            content
+                .background(.regularMaterial, in: shape)
+                .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
         }
     }
 }
