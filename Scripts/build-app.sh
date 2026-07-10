@@ -2,6 +2,7 @@
 # Build Headroom.app as a real macOS app with an embedded WidgetKit extension.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source Scripts/macos-compatibility.sh
 
 CONFIG_INPUT="${1:-release}"
 case "${CONFIG_INPUT}" in
@@ -300,6 +301,7 @@ prepare_entitlements
 stamp_app_group_info
 stamp_sparkle_info
 embed_provisioning_profiles
+headroom_verify_macos_bundle "${APP}" "${WIDGET_APPEX}"
 
 # Interrupted codesign runs can leave temporary files inside the bundle. Remove them
 # before sealing, or codesign treats the temp file as a malformed nested component.

@@ -42,7 +42,10 @@ xcodebuild -project Headroom.xcodeproj -scheme HeadroomIOS \
   -derivedDataPath .xcode-derived build
 ```
 
-Requires Xcode 26 / Swift 6.3 on macOS 26 (Tahoe). The app bundle build also requires
+Building requires Xcode 26 / Swift 6.3. The shipped Mac app supports macOS 15 Sequoia
+and later on Apple silicon: Tahoe uses Liquid Glass, while Sequoia uses a native material
+popover surface. Intel slices may be present in generic Xcode artifacts, but Intel runtime
+support is not currently validated or advertised. The app bundle build also requires
 `xcodegen` because macOS widget discovery expects a real Xcode app-extension target:
 `brew install xcodegen`. Claude usage requires the `claude` CLI installed and logged in.
 Codex subscription usage requires `~/.codex/auth.json`. API spend rows require the
@@ -56,8 +59,8 @@ Claude path works on your machine.
   (`ClaudeUsageCLIProbe`) + parser (`ClaudeUsageParser`), the Codex provider, optional API
   spend providers, the polling engine/`@Observable` store, widget cache/export models,
   credentials, and preferences.
-- `Sources/HeadroomApp` — the SwiftUI `MenuBarExtra` shell and the Tahoe / Liquid Glass
-  popover, cards, settings, and menu bar label.
+- `Sources/HeadroomApp` — the SwiftUI `MenuBarExtra` shell with Liquid Glass on Tahoe and
+  native material on Sequoia, plus cards, settings, and the menu bar label.
 - `Sources/HeadroomWidgets` — the WidgetKit extension. It reads only the redaction-safe
   App Group cache written by the app; it never spawns `claude`, reads credentials, or
   calls provider endpoints.
@@ -283,7 +286,7 @@ HEADROOM_IOS_UPLOAD=1 \
 
 Working end-to-end: live Claude 5h/weekly windows via the CLI probe (verified against a
 real account and from a bare launch environment), Codex via its endpoint, optional
-OpenAI/Anthropic API spend rows, manual renewal dates, launch-at-login, the Tahoe popover,
+OpenAI/Anthropic API spend rows, manual renewal dates, launch-at-login, the adaptive macOS popover,
 widget cache export, app icon, the bundled macOS widget extension, and the iPhone
 companion/widget targets with live Mac → iPhone iCloud sync. Widget design parity with the
 companion is pixel-verified on device in both appearances, and text/bar colors pass a
