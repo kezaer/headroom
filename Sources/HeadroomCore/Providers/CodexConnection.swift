@@ -51,7 +51,7 @@ public enum CodexCLI {
           read -k 1
           exit 127
         fi
-        exec \(executable) login
+        exec \(executable) \(loginArguments.joined(separator: " "))
         """
     }
 

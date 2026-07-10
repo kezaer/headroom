@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 enum CodexSetupSession {
     static var openedSetupAt: Date?
+    private static var openingTask: Task<Void, Never>?
 
     static func copyCommand() {
         NSPasteboard.general.clearContents()
@@ -14,28 +15,46 @@ enum CodexSetupSession {
     }
 
     static func openSetup(onRetry: @escaping () -> Void) {
-        let supportDirectory = ClaudeUsageWorkspace.defaultDirectoryURL.deletingLastPathComponent()
-        let scriptURL = supportDirectory.appendingPathComponent("Open Codex Login.command")
+        guard openingTask == nil else { return }
+        openingTask = Task { @MainActor in
+            defer { openingTask = nil }
+            let preparation = await Task.detached(priority: .userInitiated) { () -> (scriptURL: URL, hasExecutable: Bool)? in
+                let supportDirectory = ClaudeUsageWorkspace.defaultDirectoryURL.deletingLastPathComponent()
+                let scriptURL = supportDirectory.appendingPathComponent("Open Codex Login.command")
+                let executablePath = CodexCLI.resolveExecutable()
+                do {
+                    try FileManager.default.createDirectory(
+                        at: supportDirectory,
+                        withIntermediateDirectories: true
+                    )
+                    try CodexCLI.loginScript(executablePath: executablePath)
+                        .write(to: scriptURL, atomically: true, encoding: .utf8)
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o755],
+                        ofItemAtPath: scriptURL.path
+                    )
+                    return (scriptURL: scriptURL, hasExecutable: executablePath != nil)
+                } catch {
+                    return nil
+                }
+            }.value
 
-        do {
-            try FileManager.default.createDirectory(
-                at: supportDirectory,
-                withIntermediateDirectories: true
-            )
-            let script = CodexCLI.loginScript(executablePath: CodexCLI.resolveExecutable())
-            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: scriptURL.path
-            )
-            guard NSWorkspace.shared.open(scriptURL) else {
+            guard let preparation else {
+                copyCommand()
+                return
+            }
+            guard NSWorkspace.shared.open(preparation.scriptURL) else {
+                copyCommand()
+                return
+            }
+            guard preparation.hasExecutable else {
+                openedSetupAt = nil
+                cancelRetries()
                 copyCommand()
                 return
             }
             openedSetupAt = Date()
             scheduleRetries(onRetry)
-        } catch {
-            copyCommand()
         }
     }
 

@@ -82,21 +82,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     /// still resolves node/nvm the way the terminal does. Falls back to a sane default.
     private static func loginPath() -> String {
         let fallback = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let probe = Process()
-        probe.executableURL = URL(fileURLWithPath: shell)
-        probe.arguments = ["-lic", "printf %s \"$PATH\""]
-        let pipe = Pipe()
-        probe.standardOutput = pipe
-        probe.standardError = Pipe()
-        do {
-            try probe.run()
-            probe.waitUntilExit()
-            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let out, !out.isEmpty { return "\(out):\(fallback)" }
-        } catch {}
-        return fallback
+        return CLIExecutableResolver.resolveLoginPath(fallback: fallback)
     }
 
     // MARK: pty mechanics

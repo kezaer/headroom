@@ -62,7 +62,7 @@ struct CodexConnectionTests {
         for path in executablePaths {
             #expect(
                 CLIExecutableResolver.selectExecutable(
-                    loginShellOutput: "\(path)\n",
+                    loginShellOutput: "__HEADROOM_EXECUTABLE__\n\(path)\n",
                     fallbackPaths: [],
                     isExecutable: executablePaths.contains
                 ) == path
@@ -74,17 +74,48 @@ struct CodexConnectionTests {
         let fallback = "/usr/local/bin/codex"
         #expect(
             CLIExecutableResolver.selectExecutable(
-                loginShellOutput: "/missing/codex\n",
+                loginShellOutput: "__HEADROOM_EXECUTABLE__\n/missing/codex\n",
                 fallbackPaths: ["/also/missing", fallback],
                 isExecutable: { $0 == fallback }
             ) == fallback
         )
         #expect(
             CLIExecutableResolver.selectExecutable(
-                loginShellOutput: "/missing/codex\n",
+                loginShellOutput: "__HEADROOM_EXECUTABLE__\n/missing/codex\n",
                 fallbackPaths: ["/also/missing"],
                 isExecutable: { _ in false }
             ) == nil
+        )
+    }
+
+    @Test func executableResolutionIgnoresInteractiveShellStartupOutput() {
+        let staleStartupPath = "/opt/homebrew/bin/codex"
+        let resolvedPath = "/Users/test/.nvm/versions/node/v24/bin/codex"
+        let output = "Welcome\n\(staleStartupPath)\n__HEADROOM_EXECUTABLE__\n\(resolvedPath)\n"
+
+        #expect(
+            CLIExecutableResolver.selectExecutable(
+                loginShellOutput: output,
+                fallbackPaths: [staleStartupPath],
+                isExecutable: { $0 == staleStartupPath || $0 == resolvedPath }
+            ) == resolvedPath
+        )
+    }
+
+    @Test func loginPathResolutionIgnoresInteractiveShellStartupOutput() {
+        let output = "Welcome to the shell\n__HEADROOM_PATH__/nvm/bin:/usr/bin\n"
+
+        #expect(
+            CLIExecutableResolver.selectLoginPath(
+                loginShellOutput: output,
+                fallback: "/usr/local/bin:/usr/bin"
+            ) == "/nvm/bin:/usr/bin:/usr/local/bin:/usr/bin"
+        )
+        #expect(
+            CLIExecutableResolver.selectLoginPath(
+                loginShellOutput: "/untrusted/startup/output",
+                fallback: "/usr/bin:/bin"
+            ) == "/usr/bin:/bin"
         )
     }
 
