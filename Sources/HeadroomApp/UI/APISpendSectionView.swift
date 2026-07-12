@@ -44,11 +44,16 @@ struct APISpendSectionView: View {
                 HStack(spacing: 6) {
                     Text(snapshot.displayName)
                         .font(.caption.weight(.medium))
-                    Text(snapshot.periodLabel)
+                    Text("· \(store.apiSpendPeriod.displayLabel(now: now))")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-                statusLine(snapshot)
+                // The live "Updated N min ago" sub-line is dropped — the popover header
+                // already carries one consolidated stamp. Non-live states keep their
+                // status line because it carries information the header does not (U2).
+                if snapshot.freshness != .live {
+                    statusLine(snapshot)
+                }
             }
             Spacer(minLength: 8)
             amountView(snapshot)
@@ -62,11 +67,9 @@ struct APISpendSectionView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         case .live:
-            if let updated = Countdown.updatedLabel(capturedAt: snapshot.capturedAt, now: now) {
-                Text("Updated \(updated)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
+            // Live rows render no sub-line (gated out in spendRow) — the popover header
+            // carries the single consolidated "Updated" stamp.
+            EmptyView()
         case .stale(let reason):
             HStack(spacing: 6) {
                 Text(reason.isPermanent ? "Needs setup" : "Stale")

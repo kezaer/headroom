@@ -39,22 +39,27 @@ struct UsageBarView: View {
         Countdown.resetText(for: window, now: now)
     }
 
-    /// Standard windows carry the reset inline beside the label (2 lines total); the
-    /// long `.other` model labels (Codex's "GPT-5.3-Codex-Spark …") would overflow, so
-    /// theirs drops to its own left-aligned line under the bar.
-    private var resetInline: Bool {
-        switch window.kind {
-        case .fiveHour, .weekly: return true
-        case .other: return false
-        }
-    }
-
     private func fillWidth(in availableWidth: Double) -> Double {
         guard fraction > 0 else { return 0 }
         return max(8, availableWidth * fraction)
     }
 
     var body: some View {
+        // Prefer the reset inline beside the label; fall back to a sub-line under the bar
+        // when the row is too tight to share (Codex's long "GPT-5.3-Codex-Spark …" labels).
+        // Fit-aware instead of keyed on window kind, so short labels like "Weekly (Fable)"
+        // inline like the standard windows (KTD3).
+        ViewThatFits(in: .horizontal) {
+            meter(inlineReset: true)
+            meter(inlineReset: false)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) usage")
+        .accessibilityValue("\(pct) percent \(percentageMode.term), \(resetText)")
+        .animation(valueAnimation, value: severity)
+    }
+
+    private func meter(inlineReset: Bool) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             // Row recipe aligned with the large widget's meter (Jul 2026): 13pt medium
             // label + "· reset" in the shared WCAG-tuned widget grays (system .tertiary
@@ -66,12 +71,15 @@ struct UsageBarView: View {
                     .foregroundStyle(ProviderStyle.secondaryText(scheme: scheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if resetInline {
+                if inlineReset {
+                    // fixedSize so the reset reports its full width to ViewThatFits — the
+                    // inline candidate must be rejected (dropping to the sub-line) rather
+                    // than accepted by silently compressing the reset.
                     Text("· \(resetText)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
                         .lineLimit(1)
-                        .layoutPriority(-1)
+                        .fixedSize()
                 }
                 Spacer(minLength: 6)
                 if !dimmed, severity == .critical {
@@ -89,30 +97,30 @@ struct UsageBarView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(ProviderStyle.barTrack(scheme: scheme))
-                    Capsule()
-                        .fill(fillColor)
-                        .frame(width: fillWidth(in: geo.size.width))
-                        // Width and its severity color ride one spring — a band change only
-                        // ever happens when the fraction changes, so both animate together in
-                        // the same transaction. The visible payoff of a refresh cycle; not a
-                        // loop. (Stale desaturation rides the card's freshness cross-fade.)
-                        .animation(valueAnimation, value: fraction)
-                }
-            }
-            .frame(height: 8)
-            if !resetInline {
+            bar
+            if !inlineReset {
                 Text(resetText)
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label) usage")
-        .accessibilityValue("\(pct) percent \(percentageMode.term), \(resetText)")
-        .animation(valueAnimation, value: severity)
+    }
+
+    private var bar: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(ProviderStyle.barTrack(scheme: scheme))
+                Capsule()
+                    .fill(fillColor)
+                    .frame(width: fillWidth(in: geo.size.width))
+                    // Width and its severity color ride one spring — a band change only
+                    // ever happens when the fraction changes, so both animate together in
+                    // the same transaction. The visible payoff of a refresh cycle; not a
+                    // loop. (Stale desaturation rides the card's freshness cross-fade.)
+                    .animation(valueAnimation, value: fraction)
+            }
+        }
+        .frame(height: 8)
     }
 
     /// Small static "Low" flag shown only for the critical band (≤15% left) — a word
