@@ -257,6 +257,9 @@ test: open the DMG, drag Headroom to `/Applications`, launch it, verify the menu
 appears, confirm Claude/Codex setup or live states, and check that widgets can be added and
 read the app's exported cache.
 
+For the complete version-bump, notarization, cross-repo publishing, and live-verification
+procedure, see [`docs/release/website-dmg-release.md`](docs/release/website-dmg-release.md).
+
 ## iOS distribution
 
 The iPhone companion app and iOS widgets are distributed through Apple's normal iOS
