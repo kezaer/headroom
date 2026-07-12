@@ -40,7 +40,8 @@ let package = Package(
         ),
         .testTarget(
             name: "HeadroomCoreTests",
-            dependencies: ["HeadroomCore"]
+            dependencies: ["HeadroomCore"],
+            resources: [.process("Fixtures")]
         ),
     ]
 )

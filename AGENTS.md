@@ -82,6 +82,14 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   ("Current session", "Current week (…)", "N% used", "Resets …"), not line positions, and
   fails safe (empty → transient stale). If Claude redesigns the panel, update the parser and
   the fixture in `ClaudeProviderTests.swift`; use `--probe-claude` to see the live panel.
+- **Codex window kind comes from `limit_window_seconds`, NOT the primary/secondary slot**
+  (`#codex-window-kind`, `CodexWindowClassifier`). Slot position is plan-dependent: the
+  `prolite` plan returns its *weekly* window in `primary_window` with `secondary_window: null`,
+  so the old slot-based mapping mislabeled it "5-hour" and dropped the weekly row. Codex tags
+  each window with `limit_window_seconds` (18000 = 5h, 604800 = 7d); classify off that, falling
+  back to the slot only when the field is absent. Verify fixtures against a live capture with
+  `--probe-codex` (or curl `chatgpt.com/backend-api/wham/usage` with the `~/.codex/auth.json`
+  token) — the DTO field names in `UsageDTOs.swift` were originally speculative.
 - **PTY probe robustness is intentional** — hard deadlines, guaranteed process-group kill,
   quiet-period capture across re-renders, login-shell PATH resolution (works from a bare
   Finder-launch env), off-main-actor. Preserve these when editing `ClaudeUsageCLIProbe`.
@@ -97,5 +105,6 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
 
 ## Follow-ups
 
-See `BUGS.md` for deferred items (Codex field-name verification, backoff, app icon, Xcode
-signing for persistent permission grants).
+See `BUGS.md` for deferred items (backoff, Xcode signing for persistent permission grants).
+Codex field names are now verified against a live `wham/usage` capture — see the
+`#codex-window-kind` gotcha above and `docs/solutions/codex-window-kind-mislabel.md`.

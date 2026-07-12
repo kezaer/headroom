@@ -28,15 +28,20 @@ struct CodexWindowDTO: Decodable {
     let resets_at: String?
     let reset_after_seconds: Double?
     let resets_in_seconds: Double?
+    // Codex tags each window with its true duration; this — not the primary/secondary slot —
+    // is what identifies a window as 5-hour vs weekly (#codex-window-kind).
+    let limit_window_seconds: Double?
 
     var utilizationValue: Double? { used_percent ?? usage_percent ?? utilization }
     var resetAtValue: String? { resets_at ?? reset_at }
     var resetEpochValue: Double? { resetAtEpoch }
     var resetSecondsValue: Double? { resets_in_seconds ?? reset_after_seconds }
+    var windowSecondsValue: Double? { limit_window_seconds }
 
     enum CodingKeys: String, CodingKey {
         case used_percent, usage_percent, utilization
         case reset_at, resets_at, reset_after_seconds, resets_in_seconds
+        case limit_window_seconds
     }
 
     init(from decoder: Decoder) throws {
@@ -49,6 +54,7 @@ struct CodexWindowDTO: Decodable {
         resetAtEpoch = c.flexibleDouble(.reset_at)
         reset_after_seconds = c.flexibleDouble(.reset_after_seconds)
         resets_in_seconds = c.flexibleDouble(.resets_in_seconds)
+        limit_window_seconds = c.flexibleDouble(.limit_window_seconds)
     }
 }
 
@@ -65,6 +71,7 @@ struct CodexNamedWindowDTO: Decodable {
     let resets_at: String?
     let reset_after_seconds: Double?
     let resets_in_seconds: Double?
+    let limit_window_seconds: Double?
     let rate_limit: CodexRateLimitDTO?
 
     var displayLabel: String { name ?? label ?? limit_name ?? metered_feature ?? "other" }
@@ -72,11 +79,13 @@ struct CodexNamedWindowDTO: Decodable {
     var resetAtValue: String? { resets_at ?? reset_at }
     var resetEpochValue: Double? { resetAtEpoch }
     var resetSecondsValue: Double? { resets_in_seconds ?? reset_after_seconds }
+    var windowSecondsValue: Double? { limit_window_seconds }
 
     enum CodingKeys: String, CodingKey {
         case name, label, limit_name, metered_feature
         case used_percent, usage_percent, utilization
         case reset_at, resets_at, reset_after_seconds, resets_in_seconds
+        case limit_window_seconds
         case rate_limit
     }
 
@@ -94,6 +103,7 @@ struct CodexNamedWindowDTO: Decodable {
         resetAtEpoch = c.flexibleDouble(.reset_at)
         reset_after_seconds = c.flexibleDouble(.reset_after_seconds)
         resets_in_seconds = c.flexibleDouble(.resets_in_seconds)
+        limit_window_seconds = c.flexibleDouble(.limit_window_seconds)
         rate_limit = try? c.decode(CodexRateLimitDTO.self, forKey: .rate_limit)
     }
 }
@@ -235,6 +245,35 @@ enum UsageWindowBuilder {
     static func genericFailure(for status: Int) -> FailureReason {
         status == 429 ? .transient("Rate limited — will retry")
                       : .transient("Service error (\(status))")
+    }
+}
+
+/// Classifies a Codex usage window by its true duration rather than by which slot
+/// (`primary_window`/`secondary_window`) it arrived in.
+///
+/// #codex-window-kind — slot position is NOT reliable: the "prolite" plan returns its
+/// weekly window in `primary_window` with `secondary_window: null`, so the old
+/// primary→5-hour / secondary→weekly assumption mislabeled the weekly window as 5-hour
+/// (and dropped the weekly row entirely). Codex tags each window with `limit_window_seconds`
+/// (18000 = 5h, 604800 = 7d); we key off those verified values exactly and fall back to
+/// `positionalDefault` only when the duration is absent (older/other response variants and
+/// pre-`limit_window_seconds` fixtures). Any other declared duration keeps its own label.
+enum CodexWindowClassifier {
+    static func kind(limitWindowSeconds seconds: Double?, positionalDefault: WindowKind) -> WindowKind {
+        guard let seconds, seconds > 0 else { return positionalDefault }
+        switch seconds {
+        case 18_000:  return .fiveHour
+        case 604_800: return .weekly
+        default:      return .other(durationLabel(seconds: seconds))
+        }
+    }
+
+    /// Human label for an unrecognized window duration, so a new Codex window (e.g. a daily
+    /// or monthly limit) still renders honestly instead of being forced into 5h/weekly.
+    static func durationLabel(seconds: Double) -> String {
+        let hours = (seconds / 3600).rounded()
+        if hours < 48 { return "\(Int(hours))h" }
+        return "\(Int((seconds / 86_400).rounded()))d"
     }
 }
 
