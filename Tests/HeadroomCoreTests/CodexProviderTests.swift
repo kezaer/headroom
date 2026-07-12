@@ -11,11 +11,18 @@ struct CodexProviderTests {
                              now: { Date(timeIntervalSince1970: 1_000_000) })
     }
 
+    private func fixture(named name: String) throws -> Data {
+        let url = try #require(Bundle.module.url(forResource: name, withExtension: "json"))
+        return try Data(contentsOf: url)
+    }
+
+    // Shape mirrors a real chatgpt.com/backend-api/wham/usage capture: each window carries
+    // `limit_window_seconds` (18000 = 5h, 604800 = 7d) and `reset_at` as an epoch number.
     @Test func decodesLiveResponse() async {
         let json = """
         { "rate_limit": {
-            "primary_window": {"used_percent": 30, "reset_at": 1783023708},
-            "secondary_window": {"used_percent": 55, "reset_at": "2026-07-08T00:00:00Z"} },
+            "primary_window": {"used_percent": 30, "limit_window_seconds": 18000, "reset_at": 1783023708},
+            "secondary_window": {"used_percent": 55, "limit_window_seconds": 604800, "reset_at": "2026-07-08T00:00:00Z"} },
           "plan_type": "pro" }
         """
         let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
@@ -23,6 +30,34 @@ struct CodexProviderTests {
         #expect(snap.planLabel == "pro")
         #expect(snap.windows.first { $0.kind == .fiveHour }?.percentRemaining == 70)
         #expect(snap.windows.first { $0.kind == .weekly }?.percentRemaining == 45)
+    }
+
+    // Regression (#codex-window-kind): the "prolite" plan returns its weekly window in
+    // `primary_window` with `secondary_window: null`. Keying off the slot mislabeled it
+    // "5-hour" and dropped the weekly row; keying off `limit_window_seconds` fixes it.
+    @Test func realProliteCaptureLabelsPrimaryWindowAsWeekly() async throws {
+        let body = try fixture(named: "codex-wham-usage-prolite")
+        let snap = await provider(MockFetcher([.success(HTTPResult(status: 200, body: body))])).fetchSnapshot()
+        #expect(snap.freshness == .live)
+        #expect(snap.planLabel == "prolite")
+        #expect(snap.windows.count == 2)
+        #expect(snap.windows.first { $0.kind == .weekly }?.percentRemaining == 67)
+        #expect(!snap.windows.contains { $0.kind == .fiveHour })
+        #expect(snap.windows.contains { $0.kind == .other("GPT-5.3-Codex-Spark Weekly") })
+        #expect(!snap.windows.contains { $0.kind == .other("GPT-5.3-Codex-Spark 5h") })
+    }
+
+    @Test func realProliteCaptureContainsOnlyRedactedIdentity() throws {
+        let body = try fixture(named: "codex-wham-usage-prolite")
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["user_id"] as? String == "<REDACTED_USER_ID>")
+        #expect(json["account_id"] as? String == "<REDACTED_ACCOUNT_ID>")
+        #expect(json["email"] as? String == "redacted@example.invalid")
+    }
+
+    @Test func unknownDeclaredDurationIsNotForcedIntoKnownKind() {
+        #expect(CodexWindowClassifier.kind(limitWindowSeconds: 21_600, positionalDefault: .fiveHour) == .other("6h"))
+        #expect(CodexWindowClassifier.kind(limitWindowSeconds: 691_200, positionalDefault: .weekly) == .other("8d"))
     }
 
     @Test func unknownPlanTypeDecodesLeniently() async {
@@ -47,8 +82,10 @@ struct CodexProviderTests {
           "plan_type": "pro" }
         """
         let snap = await provider(MockFetcher(status: 200, body: json)).fetchSnapshot()
+        // No `limit_window_seconds` here → positional fallback; suffix comes from
+        // `WindowKind.shortLabel` ("5h"/"Weekly"), consistent with the main windows.
         #expect(snap.windows.contains { $0.kind == .other("codex-spark 5h") })
-        #expect(snap.windows.contains { $0.kind == .other("codex-spark weekly") })
+        #expect(snap.windows.contains { $0.kind == .other("codex-spark Weekly") })
     }
 
     @Test func legacyResetFieldNamesStillDecode() async {

@@ -1,0 +1,27 @@
+{
+  "user_id": "<REDACTED_USER_ID>",
+  "account_id": "<REDACTED_ACCOUNT_ID>",
+  "email": "redacted@example.invalid",
+  "plan_type": "prolite",
+  "rate_limit": {
+    "primary_window": {
+      "used_percent": 33,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 503180
+    },
+    "secondary_window": null
+  },
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "rate_limit": {
+        "primary_window": {
+          "used_percent": 0,
+          "limit_window_seconds": 604800,
+          "reset_after_seconds": 604800
+        },
+        "secondary_window": null
+      }
+    }
+  ]
+}
