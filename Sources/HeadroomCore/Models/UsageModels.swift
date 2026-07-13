@@ -259,16 +259,16 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
     }
 }
 
-/// Which provider's *weekly* usage drives how full the menu-bar vessel is drawn. The
-/// glyph follows the selected percentage mode for that provider. `.none` keeps a static
-/// decorative fill (the identity mark), decoupled from any single provider.
+/// Which provider's preferred usage window drives how full the menu-bar vessel is drawn.
+/// The glyph follows the selected percentage mode for that provider. `.none` keeps a
+/// static decorative fill (the identity mark), decoupled from any single provider.
 public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatable {
     case none
     case claude
     case codex
     case both
 
-    /// The provider whose weekly window sets the fill, or nil for the static glyph.
+    /// The provider whose preferred window sets the fill, or nil for static/both modes.
     public var providerID: ProviderID? {
         switch self {
         case .none, .both: return nil
@@ -287,8 +287,8 @@ public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatabl
     }
 }
 
-/// Which limit window the menu bar reports — percentage text, vessel fill, and severity
-/// tint all follow one window so the glyph always means one thing.
+/// A provider's preferred menu-bar limit window. Percentage text, vessel fill, and
+/// severity tint resolve together so each glyph always means one thing.
 public enum MenuBarWindowSource: String, CaseIterable, Sendable, Codable, Equatable {
     case weekly
     case fiveHour

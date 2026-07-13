@@ -28,7 +28,8 @@ struct SettingsView: View {
     @State private var showMenuBarPercentage = false
     @State private var usagePercentageMode: UsagePercentageMode = .remaining
     @State private var menuBarFillSource: MenuBarFillSource = .none
-    @State private var menuBarWindowSource: MenuBarWindowSource = .weekly
+    @State private var claudeMenuBarWindowSource: MenuBarWindowSource = .weekly
+    @State private var codexMenuBarWindowSource: MenuBarWindowSource = .weekly
     @State private var widgetsEnabled = true
     @State private var showCodexSparkCountersInApp = true
     @State private var showCodexSparkCountersInWidgets = false
@@ -47,7 +48,7 @@ struct SettingsView: View {
     /// confirm the state change.
     private static let settleAnimation = HeadroomMotion.settle
 
-    /// One trailing-control width for every segmented picker (Theme / Limit window /
+    /// One trailing-control width for every segmented picker (Theme / provider window /
     /// Period). The old window ran three widths (280 / 200 / unconstrained), so the
     /// eye re-learned the layout per row.
     private static let segmentedMaxWidth: CGFloat = 220
@@ -222,7 +223,7 @@ struct SettingsView: View {
     /// (live data ticks don't need choreography). Includes `colorScheme` so switching theme
     /// re-bakes the specimen.
     private var menuBarPreviewKey: String {
-        "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.rawValue)-\(store.menuBarWindowSource.rawValue)-\(colorScheme)"
+        "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.rawValue)-\(claudeMenuBarWindowSource.rawValue)-\(codexMenuBarWindowSource.rawValue)-\(colorScheme)"
     }
 
     private var menuBarTile: some View {
@@ -262,25 +263,8 @@ struct SettingsView: View {
                 }
 
             VStack(alignment: .leading, spacing: 4) {
-                responsiveControlRow(label: "Limit window") {
-                    Picker("Limit window", selection: $menuBarWindowSource) {
-                        ForEach(MenuBarWindowSource.allCases, id: \.self) { source in
-                            Text(source.label).tag(source)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: Self.segmentedMaxWidth)
-                    .onChange(of: menuBarWindowSource) { _, newValue in
-                        store.setMenuBarWindowSource(newValue)
-                    }
-                }
-                SettingsHelpText(text: "Percentage, fill, and color follow this window.")
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                responsiveControlRow(label: "Fill tracks") {
-                    Picker("Fill tracks", selection: $menuBarFillSource) {
+                responsiveControlRow(label: "Show meters") {
+                    Picker("Show meters", selection: $menuBarFillSource) {
                         ForEach(MenuBarFillSource.allCases, id: \.self) { source in
                             Text(source.label).tag(source)
                         }
@@ -291,7 +275,24 @@ struct SettingsView: View {
                         store.setMenuBarFillSource(newValue)
                     }
                 }
-                SettingsHelpText(text: "The vessel follows the selected percentage mode. Both shows Claude and Codex side by side.")
+                SettingsHelpText(text: "Both shows Claude and Codex side by side. None keeps the static Headroom mark.")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Preferred window")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                menuBarWindowRow(
+                    providerID: .claude,
+                    selection: $claudeMenuBarWindowSource
+                )
+                menuBarWindowRow(
+                    providerID: .codex,
+                    selection: $codexMenuBarWindowSource
+                )
+
+                SettingsHelpText(text: "Each provider's percentage, fill, and color follow its preferred window.")
             }
         }
     }
@@ -414,6 +415,65 @@ struct SettingsView: View {
                 content()
             }
         }
+    }
+
+    /// Provider identity is the row label, so the two choices scan as one compact
+    /// matrix without introducing nested provider cards inside the Menu Bar tile.
+    private func menuBarWindowRow(
+        providerID: ProviderID,
+        selection: Binding<MenuBarWindowSource>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    providerWindowLabel(providerID)
+                    Spacer(minLength: 12)
+                    menuBarWindowPicker(providerID: providerID, selection: selection)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    providerWindowLabel(providerID)
+                    menuBarWindowPicker(providerID: providerID, selection: selection)
+                }
+            }
+
+            if let fallback = menuBarWindowFallbackText(for: providerID) {
+                SettingsHelpText(text: fallback)
+            }
+        }
+    }
+
+    private func providerWindowLabel(_ providerID: ProviderID) -> some View {
+        HStack(spacing: 7) {
+            ProviderLogoView(providerID: providerID, size: 15)
+            Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
+        }
+    }
+
+    private func menuBarWindowPicker(
+        providerID: ProviderID,
+        selection: Binding<MenuBarWindowSource>
+    ) -> some View {
+        let name = store.displayNames[providerID] ?? providerID.raw.capitalized
+        return Picker("\(name) preferred window", selection: selection) {
+            ForEach(MenuBarWindowSource.allCases, id: \.self) { source in
+                Text(source.label).tag(source)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: Self.segmentedMaxWidth)
+        .onChange(of: selection.wrappedValue) { _, newValue in
+            store.setMenuBarWindowSource(newValue, for: providerID)
+        }
+    }
+
+    private func menuBarWindowFallbackText(for providerID: ProviderID) -> String? {
+        let preferred = store.menuBarWindowSource(for: providerID)
+        guard let resolved = store.resolvedMenuBarWindowSource(for: providerID),
+              resolved != preferred
+        else { return nil }
+        return "Using \(resolved.label.lowercased()) while \(preferred.label.lowercased()) data is unavailable."
     }
 
     /// Provider master row: brand mark + name (popover siblings), switch trailing.
@@ -591,7 +651,8 @@ struct SettingsView: View {
         showMenuBarPercentage = store.showMenuBarPercentage
         usagePercentageMode = store.usagePercentageMode
         menuBarFillSource = store.menuBarFillSource
-        menuBarWindowSource = store.menuBarWindowSource
+        claudeMenuBarWindowSource = store.menuBarWindowSource(for: .claude)
+        codexMenuBarWindowSource = store.menuBarWindowSource(for: .codex)
         widgetsEnabled = store.widgetsEnabled
         showCodexSparkCountersInApp = store.showCodexSparkCountersInApp
         showCodexSparkCountersInWidgets = store.showCodexSparkCountersInWidgets
