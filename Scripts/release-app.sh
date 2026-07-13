@@ -131,21 +131,20 @@ on run argv
   tell application "Finder"
     activate
     set dmgFolder to POSIX file mountPath as alias
-    open dmgFolder
+    set dmgWindow to make new Finder window to dmgFolder
     delay 1
-    set dmgWindowName to name of container window of dmgFolder
 
-    set current view of container window of dmgFolder to icon view
+    set current view of dmgWindow to icon view
     try
-      set toolbar visible of container window of dmgFolder to false
+      set toolbar visible of dmgWindow to false
     end try
     try
-      set statusbar visible of container window of dmgFolder to false
+      set statusbar visible of dmgWindow to false
     end try
     -- 680 x 440 content area + 28px title bar = 468 tall
-    set bounds of container window of dmgFolder to {180, 120, 860, 588}
+    set bounds of dmgWindow to {180, 120, 860, 588}
 
-    set viewOptions to icon view options of container window of dmgFolder
+    set viewOptions to icon view options of dmgWindow
     set arrangement of viewOptions to not arranged
     set icon size of viewOptions to 128
     set text size of viewOptions to 13
@@ -180,10 +179,10 @@ on run argv
 
   tell application "Finder"
     -- Re-assert the frame after the chrome collapse so the saved content area is 680x440.
-    set bounds of container window of dmgFolder to {180, 120, 860, 588}
+    set bounds of dmgWindow to {180, 120, 860, 588}
     update dmgFolder without registering applications
     delay 1
-    close window dmgWindowName
+    close dmgWindow
   end tell
 end run
 APPLESCRIPT
