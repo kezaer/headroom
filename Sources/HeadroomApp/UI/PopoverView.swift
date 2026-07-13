@@ -10,6 +10,14 @@ import HeadroomCore
 struct PopoverView: View {
     var store: UsageStore
     var onOpenSettings: () -> Void
+    /// Render-harness only: `ImageRenderer` does not fire `onAppear`, so the entrance
+    /// fade would leave the snapshot fully transparent. Forces the content visible for
+    /// the offscreen marketing export; the live app leaves this off.
+    var forceVisible: Bool = false
+    /// Render-harness only: `ImageRenderer` can't rasterize the Liquid Glass shell, so the
+    /// marketing export forces the solid surface branch (a flat dark shell that also
+    /// matches the design artboard). The live app leaves this off and keeps its glass.
+    var forceSolidSurface: Bool = false
 
     @State private var popoverWindow: NSWindow?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -43,7 +51,7 @@ struct PopoverView: View {
                 footer
             }
             // One quick content fade on open — no per-row stagger or vertical travel.
-            .opacity(appeared ? 1 : 0)
+            .opacity((appeared || forceVisible) ? 1 : 0)
             .animation(reduceMotion || !animatesEntrance ? nil : HeadroomMotion.quickSettle, value: appeared)
             // 19pt inset / 20pt tile gap / 384pt overall — tuned in the onboarding HTML
             // mockup (Jul 2026); roomier than the original concentric 12pt scheme.
@@ -51,7 +59,7 @@ struct PopoverView: View {
             .frame(width: 384)
             // One clean system surface: Liquid Glass on Tahoe, native material on Sequoia.
             // Both paths own their full background so no redundant material muddies the host.
-            .modifier(PopoverSurfaceModifier(cornerRadius: 22))
+            .modifier(PopoverSurfaceModifier(cornerRadius: 22, forceSolid: forceSolidSurface))
             // Capture the popover's hosting window so opening Settings can dismiss it.
             .background(WindowAccessor { configurePopoverWindow($0) })
             .onAppear {
@@ -213,11 +221,13 @@ private enum PopoverEntranceAnimation {
 
 private struct PopoverSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
+    /// Render-harness only: force the solid shell (ImageRenderer can't rasterize glass).
+    var forceSolid: Bool = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if reduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+        if reduceTransparency || forceSolid || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
             content
                 .background(Color(nsColor: .windowBackgroundColor), in: shape)
                 .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))

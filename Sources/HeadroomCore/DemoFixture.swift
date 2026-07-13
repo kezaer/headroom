@@ -19,12 +19,14 @@ public enum DemoFixture {
         UsageSnapshot(
             providerID: .claude,
             windows: [
-                UsageWindow(kind: .fiveHour, utilization: 28, resetsAt: soon(hours: 5), resetLabel: "Resets 2:15pm"),
-                UsageWindow(kind: .weekly, utilization: 62, resetsAt: soon(days: 3), resetLabel: "Resets Jul 9"),
-                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 62, resetsAt: soon(days: 3), resetLabel: "Resets Jul 9"),
+                UsageWindow(kind: .fiveHour, utilization: 28, resetsAt: soon(hours: 3, minutes: 15, seconds: 30), resetLabel: "Resets 2:15pm"),
+                UsageWindow(kind: .weekly, utilization: 62, resetsAt: soon(days: 4, minutes: 30), resetLabel: "Resets Jul 9"),
+                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 46, resetsAt: soon(days: 4, minutes: 30), resetLabel: "Resets Jul 9"),
             ],
             planLabel: "Max",
-            capturedAt: Date(),
+            // ~2 min ago so the popover/scene reads "Updated 2 min ago" (matches the
+            // widget assets in the marketing scene and the design artboard).
+            capturedAt: Date().addingTimeInterval(-135),
             freshness: .live
         )
     }
@@ -33,11 +35,11 @@ public enum DemoFixture {
         UsageSnapshot(
             providerID: .codex,
             windows: [
-                UsageWindow(kind: .fiveHour, utilization: 9, resetsAt: soon(hours: 3), resetLabel: "Resets in 3h 12m"),
-                UsageWindow(kind: .weekly, utilization: 36, resetsAt: soon(days: 6), resetLabel: "Resets in 6d 4h"),
+                UsageWindow(kind: .fiveHour, utilization: 9, resetsAt: soon(hours: 3, minutes: 12, seconds: 30), resetLabel: "Resets in 3h 12m"),
+                UsageWindow(kind: .weekly, utilization: 36, resetsAt: soon(days: 6, hours: 4, minutes: 30), resetLabel: "Resets in 6d 4h"),
             ],
             planLabel: "Prolite",
-            capturedAt: Date(),
+            capturedAt: Date().addingTimeInterval(-135),  // ~2 min ago (see claudeSnapshot)
             freshness: .live
         )
     }
@@ -80,8 +82,13 @@ public enum DemoFixture {
 
     // MARK: Helpers
 
-    private static func soon(hours: Int = 0, days: Int = 0) -> Date {
-        Date().addingTimeInterval(TimeInterval(days * 86_400 + hours * 3_600))
+    /// A future `resetsAt` for demo windows. The popover renders these live via
+    /// `Countdown.resetText`, which *truncates* the remaining time — so callers add a
+    /// small `minutes:`/`seconds:` buffer to keep the displayed value on the intended
+    /// minute/hour despite the ~1s capture delay (KTD5: the popover derives reset text
+    /// from `resetsAt`, not `resetLabel`).
+    private static func soon(days: Int = 0, hours: Int = 0, minutes: Int = 0, seconds: Int = 0) -> Date {
+        Date().addingTimeInterval(TimeInterval(days * 86_400 + hours * 3_600 + minutes * 60 + seconds))
     }
 
     private static func day(month: Int, day: Int) -> Date {

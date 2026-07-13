@@ -34,10 +34,19 @@ struct ProviderLogoView: View {
 private enum BrandIconImage {
     static func image(for providerID: ProviderID) -> NSImage? {
         guard let name = ProviderStyle.svgResourceName(for: providerID),
-              let url = url(forResource: name) else {
+              let url = url(forResource: name),
+              let svg = NSImage(contentsOf: url) else {
             return nil
         }
-        return NSImage(contentsOf: url)
+        // The brand SVGs are a 10pt viewBox. `ImageRenderer` (the marketing hero export)
+        // rasterizes nested images at their intrinsic size and upscales — blurring a 10pt
+        // mark ~8×. Bake a high-res bitmap once so the offscreen export stays crisp; the
+        // live app draws this `.resizable()` and downsamples cleanly, so it's unaffected.
+        let hi = NSImage(size: NSSize(width: 256, height: 256))
+        hi.lockFocus()
+        svg.draw(in: NSRect(x: 0, y: 0, width: 256, height: 256))
+        hi.unlockFocus()
+        return hi
     }
 
     private static func url(forResource name: String) -> URL? {

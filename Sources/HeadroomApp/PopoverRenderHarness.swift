@@ -44,6 +44,12 @@ enum PopoverRenderHarness {
                     }
                 }
             }
+            let heroURL = outDir.appendingPathComponent("hero-popover-dark.png")
+            if await renderHero(to: heroURL) {
+                print("✓ \(heroURL.path)")
+            } else {
+                failedPaths.append(heroURL.path)
+            }
             for path in failedPaths {
                 FileHandle.standardError.write(Data("✗ Failed to render \(path)\n".utf8))
             }
@@ -80,6 +86,7 @@ enum PopoverRenderHarness {
                 DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: claudeSnapshot(for: state)),
                 DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: codexSnapshot(for: state)),
             ],
+            apiSpendProviders: spendProviders(for: state),
             preferences: preferences
         )
         store.refreshNow()
@@ -131,6 +138,62 @@ enum PopoverRenderHarness {
         return captured
     }
 
+    /// Marketing hero for headroom.zantos.co (U4): the connected, dark popover with the
+    /// API Spend section, rendered via `ImageRenderer` at 3× with a transparent
+    /// background (rounded corners live in the PNG alpha) — no Screen Recording
+    /// permission needed, unlike the compositor `screencapture` path above. Forces the
+    /// solid surface branch (reduce-transparency), because `ImageRenderer` can't
+    /// rasterize the live Liquid Glass material; the resulting flat shell + tiles match
+    /// the design artboard (OQ1 resolved to the solid shell — see the plan).
+    @MainActor
+    private static func renderHero(to url: URL) async -> Bool {
+        NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Steady connected state: clear any setup-session flags the diagnostic render loop
+        // left set, so the transient "✓ Connected" payoff chip doesn't appear (the design
+        // artboard shows plain provider headers).
+        ClaudeSetupSession.openedSetupAt = nil
+        CodexSetupSession.openedSetupAt = nil
+        let preferences = renderPreferences(mode: .remaining)
+        let store = UsageStore(
+            providers: [
+                DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
+                DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
+            ],
+            apiSpendProviders: [
+                DemoSpendProvider(id: .claude, displayName: "Anthropic API", snapshot: DemoFixture.anthropicSpend),
+                DemoSpendProvider(id: .codex, displayName: "OpenAI API", snapshot: DemoFixture.openAISpend),
+            ],
+            preferences: preferences
+        )
+        store.refreshNow()
+        try? await Task.sleep(for: .milliseconds(400))
+
+        let root = PopoverView(store: store, onOpenSettings: {}, forceVisible: true, forceSolidSurface: true)
+            .environment(\.colorScheme, .dark)
+            .focusEffectDisabled()
+            // The popover's `WindowAccessor` background NSView renders as the system accent
+            // under ImageRenderer, filling the rounded-corner cutouts with an opaque fringe.
+            // Clip the whole export to the surface shape so those cutouts stay transparent.
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+        let renderer = ImageRenderer(content: root)
+        renderer.scale = 3
+        renderer.isOpaque = false
+
+        var pngData: Data?
+        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance {
+            guard let cgImage = renderer.cgImage else { return }
+            pngData = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+        }
+        guard let data = pngData, data.count > 10_000 else { return false }
+        do {
+            try data.write(to: url)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private static func captureWindow(number: Int, to url: URL) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -160,6 +223,10 @@ enum PopoverRenderHarness {
             providers: [
                 DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
                 DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
+            ],
+            apiSpendProviders: [
+                DemoSpendProvider(id: .claude, displayName: "Anthropic API", snapshot: DemoFixture.anthropicSpend),
+                DemoSpendProvider(id: .codex, displayName: "OpenAI API", snapshot: DemoFixture.openAISpend),
             ],
             preferences: preferences
         )
@@ -208,7 +275,25 @@ enum PopoverRenderHarness {
         defaults.removePersistentDomain(forName: suite)
         let preferences = Preferences(defaults: defaults)
         preferences.usagePercentageMode = mode
+        // API spend surfaces are off by default (`isSurfaceEnabled` → `isSubscription`),
+        // so the store's `apiSpendProviderOrder` is empty and the section renders nothing.
+        // Enable both so the connected hero shows the API Spend section — wiring the
+        // providers alone is not sufficient (mirrors AppComposition.demoStore()).
+        preferences.setSurfaceEnabled(true, for: .anthropicAPI)
+        preferences.setSurfaceEnabled(true, for: .openAIAPI)
         return preferences
+    }
+
+    /// Demo API-spend providers for a popover render. Only the connected hero carries
+    /// spend — the setup/waiting states have no configured keys, so showing dollar
+    /// totals there would be misleading. The surfaces themselves are enabled in
+    /// `renderPreferences`.
+    private static func spendProviders(for state: State) -> [any APISpendProvider] {
+        guard state == .connected else { return [] }
+        return [
+            DemoSpendProvider(id: .claude, displayName: "Anthropic API", snapshot: DemoFixture.anthropicSpend),
+            DemoSpendProvider(id: .codex, displayName: "OpenAI API", snapshot: DemoFixture.openAISpend),
+        ]
     }
 
     private static func claudeSnapshot(for state: State) -> UsageSnapshot {

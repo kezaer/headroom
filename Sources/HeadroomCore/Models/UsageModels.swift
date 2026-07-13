@@ -329,6 +329,24 @@ public enum APISpendPeriod: String, CaseIterable, Sendable, Codable, Equatable {
         }
     }
 
+    /// Compact period label for the popover spend row — distinct from `label`, which the
+    /// Settings picker owns. Current-month renders the actual month name ("July") so the
+    /// row reads like the design mock; rolling keeps the descriptive phrase.
+    public func displayLabel(now: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> String {
+        switch self {
+        case .currentMonth:
+            var calendar = calendar
+            calendar.timeZone = .current
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.locale = .current
+            formatter.setLocalizedDateFormatFromTemplate("MMMM")
+            return formatter.string(from: now)
+        case .rolling30Days:
+            return label
+        }
+    }
+
     public func range(now: Date, calendar: Calendar = Calendar(identifier: .gregorian)) -> APISpendRange {
         var calendar = calendar
         calendar.timeZone = .current

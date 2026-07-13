@@ -14,19 +14,19 @@ struct APISpendSectionView: View {
             // the settings "API Spend" panel so the two surfaces share one language.
             VStack(alignment: .leading, spacing: 10) {
                 Text("API Spend")
-                    .font(.caption.weight(.semibold))
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
-                    .tracking(0.4)
+                    .tracking(0.5)
 
                 VStack(spacing: 0) {
                     ForEach(Array(ids.enumerated()), id: \.element) { index, id in
                         if index > 0 {
                             Divider().overlay(Color.primary.opacity(0.08))
-                                .padding(.vertical, 4)
+                                .padding(.vertical, 7)
                         }
                         spendRow(store.apiSpendSnapshot(for: id))
-                            .padding(.vertical, 4)
+                            .padding(.vertical, 7)
                     }
                 }
             }
@@ -38,17 +38,22 @@ struct APISpendSectionView: View {
     }
 
     @ViewBuilder private func spendRow(_ snapshot: APISpendSnapshot) -> some View {
-        HStack(alignment: .center, spacing: 9) {
-            ProviderLogoView(providerID: snapshot.providerID, size: 16)
+        HStack(alignment: .center, spacing: 6) {
+            ProviderLogoView(providerID: snapshot.providerID, size: 19)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snapshot.displayName)
-                        .font(.caption.weight(.medium))
-                    Text(snapshot.periodLabel)
-                        .font(.caption2)
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("· \(store.apiSpendPeriod.displayLabel(now: now))")
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.tertiary)
                 }
-                statusLine(snapshot)
+                // The live "Updated N min ago" sub-line is dropped — the popover header
+                // already carries one consolidated stamp. Non-live states keep their
+                // status line because it carries information the header does not (U2).
+                if snapshot.freshness != .live {
+                    statusLine(snapshot)
+                }
             }
             Spacer(minLength: 8)
             amountView(snapshot)
@@ -62,11 +67,9 @@ struct APISpendSectionView: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         case .live:
-            if let updated = Countdown.updatedLabel(capturedAt: snapshot.capturedAt, now: now) {
-                Text("Updated \(updated)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
+            // Live rows render no sub-line (gated out in spendRow) — the popover header
+            // carries the single consolidated "Updated" stamp.
+            EmptyView()
         case .stale(let reason):
             HStack(spacing: 6) {
                 Text(reason.isPermanent ? "Needs setup" : "Stale")
@@ -83,7 +86,7 @@ struct APISpendSectionView: View {
     @ViewBuilder private func amountView(_ snapshot: APISpendSnapshot) -> some View {
         if let amount = APISpendPresentation.amountText(amount: snapshot.amount, currency: snapshot.currency) {
             Text(amount)
-                .font(.callout.weight(.semibold).monospacedDigit())
+                .font(.system(size: 17, weight: .semibold).monospacedDigit())
                 .foregroundStyle(snapshot.freshness == .live ? .primary : .secondary)
                 .privacySensitive()
         } else {

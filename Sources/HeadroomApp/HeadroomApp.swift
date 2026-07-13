@@ -368,7 +368,7 @@ enum AppComposition {
     private static func demoStore() -> UsageStore {
         let prefs = Preferences(defaults: UserDefaults(suiteName: "co.zantos.headroom.demo") ?? .standard)
         prefs.showMenuBarPercentage = true
-        prefs.menuBarFillSource = .claude          // Claude weekly (38%) drives the menu-bar number
+        prefs.menuBarFillSource = .both            // show both Claude + Codex pills side by side in the menu bar
         prefs.widgetsEnabled = true
         prefs.syncToIPhoneEnabled = true
         prefs.setSurfaceEnabled(true, for: .anthropicAPI)   // API spend surfaces are off by default
