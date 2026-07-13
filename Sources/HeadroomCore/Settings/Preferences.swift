@@ -13,12 +13,15 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let showMenuBarPercentage = "showMenuBarPercentage"
         static let usagePercentageMode = "usagePercentageMode"
         static let menuBarFillSource = "menuBarFillSource"
-        static let menuBarWindowSource = "menuBarWindowSource"
+        /// Kept as a read-through migration source for installs that saved one shared
+        /// menu-bar window before providers became independently configurable.
+        static let legacyMenuBarWindowSource = "menuBarWindowSource"
         static let widgetsEnabled = "widgetsEnabled"
         static let showCodexSparkCountersInApp = "showCodexSparkCountersInApp"
         static let showCodexSparkCountersInWidgets = "showCodexSparkCountersInWidgets"
         static let syncToIPhoneEnabled = "syncToIPhoneEnabled"
         static let apiSpendPeriod = "apiSpendPeriod"
+        static func menuBarWindowSource(_ id: ProviderID) -> String { "menuBarWindowSource.\(id.raw)" }
         static func renewal(_ id: ProviderID) -> String { "renewalDate.\(id.raw)" }
         static func surfaceEnabled(_ surface: UsageSurface) -> String { "surfaceEnabled.\(surface.rawValue)" }
     }
@@ -68,15 +71,23 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         nonmutating set { defaults.set(newValue.rawValue, forKey: Key.menuBarFillSource) }
     }
 
-    /// Which limit window the menu bar reports (percentage, fill, tint). Default weekly.
-    public var menuBarWindowSource: MenuBarWindowSource {
-        get {
-            guard let raw = defaults.string(forKey: Key.menuBarWindowSource),
-                  let source = MenuBarWindowSource(rawValue: raw)
-            else { return .weekly }
+    /// The preferred menu-bar window for one provider. A provider-specific value wins;
+    /// otherwise the pre-1.1 shared value is inherited so upgrading does not change the
+    /// existing menu-bar presentation. Fresh installs default both providers to weekly.
+    public func menuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource {
+        if let raw = defaults.string(forKey: Key.menuBarWindowSource(id)),
+           let source = MenuBarWindowSource(rawValue: raw) {
             return source
         }
-        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.menuBarWindowSource) }
+        if let raw = defaults.string(forKey: Key.legacyMenuBarWindowSource),
+           let source = MenuBarWindowSource(rawValue: raw) {
+            return source
+        }
+        return .weekly
+    }
+
+    public func setMenuBarWindowSource(_ source: MenuBarWindowSource, for id: ProviderID) {
+        defaults.set(source.rawValue, forKey: Key.menuBarWindowSource(id))
     }
 
     public var widgetsEnabled: Bool {

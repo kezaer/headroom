@@ -57,6 +57,12 @@ public struct MenuBarMeter: Sendable, Equatable {
     }
 }
 
+private struct ResolvedMenuBarWindow {
+    let id: ProviderID
+    let window: UsageWindow
+    let source: MenuBarWindowSource
+}
+
 /// The observable view model the UI and menu bar label bind to (U6). `@MainActor`
 /// and `@Observable`: snapshots are published on the main actor; providers are
 /// fetched concurrently off-main (KTD10). Per-provider isolation — one provider's
@@ -69,7 +75,7 @@ public final class UsageStore {
     public private(set) var showMenuBarPercentage: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
     public private(set) var menuBarFillSource: MenuBarFillSource
-    public private(set) var menuBarWindowSource: MenuBarWindowSource
+    public private(set) var menuBarWindowSources: [ProviderID: MenuBarWindowSource]
     public private(set) var showCodexSparkCountersInApp: Bool
     public private(set) var showCodexSparkCountersInWidgets: Bool
     public private(set) var enabledSurfaces: Set<UsageSurface>
@@ -111,7 +117,10 @@ public final class UsageStore {
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
         self.usagePercentageMode = preferences.usagePercentageMode
         self.menuBarFillSource = preferences.menuBarFillSource
-        self.menuBarWindowSource = preferences.menuBarWindowSource
+        self.menuBarWindowSources = [
+            .claude: preferences.menuBarWindowSource(for: .claude),
+            .codex: preferences.menuBarWindowSource(for: .codex),
+        ]
         self.showCodexSparkCountersInApp = preferences.showCodexSparkCountersInApp
         self.showCodexSparkCountersInWidgets = preferences.showCodexSparkCountersInWidgets
         self.enabledSurfaces = Set(UsageSurface.allCases.filter { preferences.isSurfaceEnabled($0) })
@@ -170,9 +179,19 @@ public final class UsageStore {
         menuBarFillSource = source
     }
 
-    public func setMenuBarWindowSource(_ source: MenuBarWindowSource) {
-        preferences.menuBarWindowSource = source
-        menuBarWindowSource = source
+    public func menuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource {
+        menuBarWindowSources[id] ?? preferences.menuBarWindowSource(for: id)
+    }
+
+    public func setMenuBarWindowSource(_ source: MenuBarWindowSource, for id: ProviderID) {
+        preferences.setMenuBarWindowSource(source, for: id)
+        menuBarWindowSources[id] = source
+    }
+
+    /// The source currently rendered after availability fallback. Settings compares
+    /// this with the preferred source so a provider removing a window is never silent.
+    public func resolvedMenuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource? {
+        menuBarWindow(for: id)?.source
     }
 
     public func setShowCodexSparkCountersInApp(_ enabled: Bool) {
@@ -192,13 +211,13 @@ public final class UsageStore {
     /// per Settings). Reads
     /// from the last-known windows regardless of
     /// freshness, so a transient failure doesn't make the pill jump. Nil when the
-    /// source is `.none` or that provider has no weekly window yet — the label then
+    /// source is `.none` or that provider has no supported window yet — the label then
     /// falls back to a static decorative fill.
     public var menuBarFill: Double? {
         guard let id = menuBarFillSource.providerID,
-              let weekly = menuBarWindow(for: id)
+              let resolved = menuBarWindow(for: id)
         else { return nil }
-        return usagePercentageMode.fraction(for: weekly.window)
+        return usagePercentageMode.fraction(for: resolved.window)
     }
 
     /// Render-ready menu bar meters. In `Both` mode each enabled provider gets its own
@@ -411,8 +430,8 @@ public final class UsageStore {
         )
     }
 
-    /// The menu bar summary: selected percentage presentation in the user's chosen window
-    /// 5-hour), tagged with provider identity. If Settings chooses a fill source, the
+    /// The menu bar summary: selected percentage presentation in each provider's chosen
+    /// window, tagged with provider identity. If Settings chooses a fill source, the
     /// number and severity follow that provider's window so the text, vessel fill, and
     /// color all mean the same thing. If no source is chosen, the text/tint use the
     /// lowest enabled balance while the vessel level stays decorative. Neutral until
@@ -431,7 +450,7 @@ public final class UsageStore {
         return MenuBarSummary(
             text: "\(pct)%",
             providerID: best.id,
-            detail: "\(name) \(menuBarWindowSource.shortLabel)",
+            detail: "\(name) \(best.source.shortLabel)",
             isNeutral: false,
             percentageMode: usagePercentageMode,
             severity: best.window.severity,
@@ -439,7 +458,7 @@ public final class UsageStore {
         )
     }
 
-    private func menuBarBestWindow() -> (id: ProviderID, window: UsageWindow)? {
+    private func menuBarBestWindow() -> ResolvedMenuBarWindow? {
         if let id = menuBarFillSource.providerID {
             return menuBarWindow(for: id)
         }
@@ -449,13 +468,14 @@ public final class UsageStore {
 
     private func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {
         let needsAttention = providerNeedsAttention(id)
-        guard let weekly = menuBarWindow(for: id) else {
+        guard let resolved = menuBarWindow(for: id) else {
             let name = displayNames[id] ?? id.raw
+            let preferred = menuBarWindowSource(for: id)
             return MenuBarMeter(
                 summary: MenuBarSummary(
                     text: "—",
                     providerID: id,
-                    detail: "\(name) \(menuBarWindowSource.shortLabel)",
+                    detail: "\(name) \(preferred.shortLabel)",
                     isNeutral: true,
                     needsAttention: needsAttention
                 ),
@@ -463,19 +483,19 @@ public final class UsageStore {
             )
         }
 
-        let pct = usagePercentageMode.roundedPercentage(for: weekly.window)
+        let pct = usagePercentageMode.roundedPercentage(for: resolved.window)
         let name = displayNames[id] ?? id.raw
         return MenuBarMeter(
             summary: MenuBarSummary(
                 text: "\(pct)%",
                 providerID: id,
-                detail: "\(name) \(menuBarWindowSource.shortLabel)",
+                detail: "\(name) \(resolved.source.shortLabel)",
                 isNeutral: false,
                 percentageMode: usagePercentageMode,
-                severity: weekly.window.severity,
+                severity: resolved.window.severity,
                 needsAttention: needsAttention
             ),
-            fill: usagePercentageMode.fraction(for: weekly.window)
+            fill: usagePercentageMode.fraction(for: resolved.window)
         )
     }
 
@@ -484,15 +504,23 @@ public final class UsageStore {
         return false
     }
 
-    /// The window the menu bar reports for a provider — weekly or 5-hour per the
-    /// user's `menuBarWindowSource` (Settings → Menu Bar).
-    private func menuBarWindow(for id: ProviderID) -> (id: ProviderID, window: UsageWindow)? {
-        let kind = menuBarWindowSource.kind
+    /// Resolve one provider's preferred window. If the provider temporarily stops
+    /// reporting that window, use the other supported window while retaining the saved
+    /// preference so it resumes automatically when the data returns.
+    private func menuBarWindow(for id: ProviderID) -> ResolvedMenuBarWindow? {
         guard providerOrder.contains(id),
-              snapshots[id]?.freshness != .pending,
-              let window = snapshots[id]?.windows.first(where: { $0.kind == kind })
+              let snapshot = snapshots[id],
+              snapshot.freshness != .pending
         else { return nil }
-        return (id, window)
+
+        let preferred = menuBarWindowSource(for: id)
+        let candidates = [preferred] + MenuBarWindowSource.allCases.filter { $0 != preferred }
+        for source in candidates {
+            if let window = snapshot.windows.first(where: { $0.kind == source.kind }) {
+                return ResolvedMenuBarWindow(id: id, window: window, source: source)
+            }
+        }
+        return nil
     }
 
     private func subscriptionSurface(for id: ProviderID) -> UsageSurface {

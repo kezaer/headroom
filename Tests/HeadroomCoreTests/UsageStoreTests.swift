@@ -245,14 +245,45 @@ struct UsageStoreTests {
         #expect(store.menuBarFill == nil)    // decoupled → static glyph
     }
 
-    @Test func menuBarFillIsNilWithoutAWeeklyWindow() async {
+    @Test func menuBarFillFallsBackWhenPreferredWindowIsUnavailable() async {
         let store = makeStore(source: .codex, providers: [
             StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
                 UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: reset),   // no weekly
             ])),
         ])
         await store.refreshAll()
-        #expect(store.menuBarFill == nil)
+        #expect(store.menuBarWindowSource(for: .codex) == .weekly)
+        #expect(store.resolvedMenuBarWindowSource(for: .codex) == .fiveHour)
+        #expect(store.menuBarFill == 0.8)
+    }
+
+    @Test func preferredWindowResumesWhenProviderReportsItAgain() async {
+        let preferences = freshPreferences()
+        preferences.menuBarFillSource = .codex
+        preferences.setMenuBarWindowSource(.fiveHour, for: .codex)
+        let provider = MutableStubProvider(
+            id: .codex,
+            displayName: "Codex",
+            snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 70, resetsAt: reset),
+            ])
+        )
+        let store = UsageStore(providers: [provider], preferences: preferences)
+
+        await store.refreshAll()
+        #expect(store.resolvedMenuBarWindowSource(for: .codex) == .weekly)
+        #expect(store.menuBarSummary.text == "30%")
+
+        provider.set(.live(.codex, windows: [
+            UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: reset),
+            UsageWindow(kind: .weekly, utilization: 70, resetsAt: reset),
+        ]))
+        await store.refreshAll()
+
+        #expect(store.menuBarWindowSource(for: .codex) == .fiveHour)
+        #expect(store.resolvedMenuBarWindowSource(for: .codex) == .fiveHour)
+        #expect(store.menuBarSummary.text == "80%")
+        #expect(store.menuBarSummary.detail == "Codex 5h")
     }
 
     @Test func menuBarFillSourcePersistsThroughStore() {
@@ -308,6 +339,29 @@ struct UsageStoreTests {
         #expect(meters[1].summary.text == "12%")
         #expect(meters[1].summary.severity == .critical)
         #expect(meters[1].fill == 0.12)
+    }
+
+    @Test func menuBarMetersUseIndependentProviderWindowSources() async {
+        let preferences = freshPreferences()
+        preferences.menuBarFillSource = .both
+        preferences.setMenuBarWindowSource(.fiveHour, for: .codex)
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset),
+                UsageWindow(kind: .weekly, utilization: 60, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 25, resetsAt: reset),
+                UsageWindow(kind: .weekly, utilization: 90, resetsAt: reset),
+            ])),
+        ], preferences: preferences)
+
+        await store.refreshAll()
+
+        #expect(store.menuBarWindowSource(for: .claude) == .weekly)
+        #expect(store.menuBarWindowSource(for: .codex) == .fiveHour)
+        #expect(store.menuBarMeters.map(\.summary.text) == ["40%", "75%"])
+        #expect(store.menuBarMeters.map(\.summary.detail) == ["Claude weekly", "Codex 5h"])
     }
 
     @Test func usedModeAppliesToBothProviderMenuBarMeters() async {
@@ -376,13 +430,14 @@ struct UsageStoreTests {
         #expect(store.appDisplaySnapshot(for: .codex).windows.count == 3)
     }
 
-    @Test func menuBarFollowsSelectedWindowSource() async {
-        let store = makeStore(providers: [
+    @Test func menuBarWindowSourcePersistsPerProviderAndUpdatesPresentation() async {
+        let preferences = freshPreferences()
+        let store = UsageStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
                 UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: reset),   // 80% left
                 UsageWindow(kind: .weekly, utilization: 70, resetsAt: reset),     // 30% left
             ])),
-        ])
+        ], preferences: preferences)
 
         await store.refreshAll()
 
@@ -390,8 +445,9 @@ struct UsageStoreTests {
         #expect(store.menuBarSummary.text == "30%")
         #expect(store.menuBarSummary.detail == "Claude weekly")
 
-        store.setMenuBarWindowSource(.fiveHour)
-        #expect(store.menuBarWindowSource == .fiveHour)
+        store.setMenuBarWindowSource(.fiveHour, for: .claude)
+        #expect(store.menuBarWindowSource(for: .claude) == .fiveHour)
+        #expect(preferences.menuBarWindowSource(for: .claude) == .fiveHour)
         #expect(store.menuBarSummary.text == "80%")
         #expect(store.menuBarSummary.detail == "Claude 5h")
     }

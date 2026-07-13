@@ -70,6 +70,32 @@ struct PreferencesTests {
         #expect(prefs.menuBarFillSource == .both)
     }
 
+    @Test func menuBarWindowSourcesDefaultAndPersistIndependently() {
+        let prefs = Preferences(defaults: freshDefaults())
+
+        #expect(prefs.menuBarWindowSource(for: .claude) == .weekly)
+        #expect(prefs.menuBarWindowSource(for: .codex) == .weekly)
+
+        prefs.setMenuBarWindowSource(.fiveHour, for: .claude)
+
+        #expect(prefs.menuBarWindowSource(for: .claude) == .fiveHour)
+        #expect(prefs.menuBarWindowSource(for: .codex) == .weekly)
+    }
+
+    @Test func providerWindowSourcesInheritLegacySharedPreferenceUntilOverridden() {
+        let defaults = freshDefaults()
+        defaults.set(MenuBarWindowSource.fiveHour.rawValue, forKey: "menuBarWindowSource")
+        let prefs = Preferences(defaults: defaults)
+
+        #expect(prefs.menuBarWindowSource(for: .claude) == .fiveHour)
+        #expect(prefs.menuBarWindowSource(for: .codex) == .fiveHour)
+
+        prefs.setMenuBarWindowSource(.weekly, for: .codex)
+
+        #expect(prefs.menuBarWindowSource(for: .claude) == .fiveHour)
+        #expect(prefs.menuBarWindowSource(for: .codex) == .weekly)
+    }
+
     @Test func widgetsEnabledDefaultsOnAndPersists() {
         let prefs = Preferences(defaults: freshDefaults())
         #expect(prefs.widgetsEnabled)
