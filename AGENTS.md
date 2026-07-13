@@ -54,6 +54,14 @@ swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windo
 ./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
 ```
 
+## Website DMG releases
+
+For any request to prepare, publish, or ship a new public Headroom DMG, use the repo-local
+`release-website-dmg` skill. Its authoritative runbook is
+`docs/release/website-dmg-release.md`; it covers Developer ID signing, notarization, the
+Sparkle appcast, portfolio deployment, and the required installed-app update acceptance test.
+The public domain is `headroom.zantos.co`.
+
 Building requires Xcode 26 / Swift 6.3. The app targets macOS 15+ on Apple silicon; a real
 macOS 15 Apple-silicon runtime smoke is required before advertising Sequoia support. Claude
 requires the `claude` CLI logged in; Codex requires its CLI-managed `~/.codex/auth.json`.

@@ -3,7 +3,7 @@
 Use this runbook to ship a new public macOS Headroom release at
 `https://headroom.zantos.co`. It covers the whole chain: version metadata, Developer ID
 signing, Apple notarization, Sparkle appcast generation, the portfolio-hosted download files,
-and live verification.
+and live verification. It also includes the installed-app acceptance test for Sparkle updates.
 
 The macOS app source is this repository. The public files are hosted by the separate
 `/Users/kylezantos/App Development/Manual Library/kz-portfolio` repository. Its Vercel
@@ -12,7 +12,8 @@ new Vercel project.
 
 ## Prerequisites
 
-- A clean, up-to-date `main` branch in both repositories.
+- The Headroom release commit already merged to `main`, and a clean, up-to-date
+  `kz-portfolio/main` before creating its publish branch.
 - A Developer ID Application certificate installed locally.
 - Working notarization credentials, normally the `headroom-notary` keychain profile.
 - The Sparkle private signing key available in the login Keychain.
@@ -33,8 +34,7 @@ Create a release branch in this repository. Update `project.yml` as one consiste
 - macOS app Info.plist version settings
 - `CURRENT_PROJECT_VERSION` for all app targets, including iOS targets
 
-Regenerate the Xcode project, then test and merge the release bump before creating the public
-artifact:
+Regenerate the Xcode project, test the bump, and merge it before creating the public artifact:
 
 ```bash
 xcodegen generate
@@ -47,19 +47,25 @@ Release from `main`, never from an unmerged feature branch.
 ## 2. Seed the release staging folder from production
 
 `Scripts/release-app.sh` generates the appcast from `dist/headroom.zantos.co`. That directory
-is local build output and may be stale. Before every release, replace it with the current
-production asset set from the portfolio repository. This preserves the current appcast item and
+is local build output and may be stale. Before every release, seed it from the current
+production asset set in the portfolio repository. This preserves the current appcast item and
 lets Sparkle generate a delta from the version users actually have.
 
 ```bash
-rm -rf dist/headroom.zantos.co
+STAGING='dist/headroom.zantos.co'
+if [[ -e "$STAGING" ]]; then
+  BACKUP="dist/release-staging-backups/$(date -u '+%Y%m%dT%H%M%SZ')"
+  mkdir -p "$BACKUP"
+  mv "$STAGING" "$BACKUP/headroom.zantos.co"
+fi
 ditto \
   '/Users/kylezantos/App Development/Manual Library/kz-portfolio/public' \
-  dist/headroom.zantos.co
+  "$STAGING"
 ```
 
-The delete is limited to ignored local staging output. Do not remove old versioned DMGs from the
-portfolio `public/` directory unless intentionally retiring a supported update path.
+The prior local staging folder is retained under ignored `dist/release-staging-backups/` so this
+step never destroys a recoverable artifact. Do not remove old versioned DMGs from the portfolio
+`public/` directory unless intentionally retiring a supported update path.
 
 ## 3. Build, sign, notarize, and generate the feed
 
@@ -87,14 +93,17 @@ shasum -a 256 dist/Headroom-<version>-<build>.dmg
 ```
 
 Check that the first appcast item names the new version and build, retains the current
-production item, and references only files present in `dist/headroom.zantos.co/`.
+production item, and references only files present in `dist/headroom.zantos.co/`. Its full
+versioned DMG enclosure is the universal fallback for every older installed app; deltas only
+optimize matching older builds.
 
 ## 4. Publish assets through the portfolio repository
 
 Create a branch in `kz-portfolio`. Copy only the generated files needed by the new appcast:
 
 ```bash
-SOURCE='/Users/kylezantos/App Development/Manual Library/headroom/dist/headroom.zantos.co'
+HEADROOM_REPO='/absolute/path/to/this/headroom/checkout'
+SOURCE="$HEADROOM_REPO/dist/headroom.zantos.co"
 TARGET='/Users/kylezantos/App Development/Manual Library/kz-portfolio/public'
 
 ditto "$SOURCE/Headroom-<version>-<build>.dmg" "$TARGET/Headroom-<version>-<build>.dmg"
@@ -144,6 +153,33 @@ hdiutil verify /path/to/Headroom.dmg
 codesign --verify --deep --strict --verbose=2 /Volumes/Headroom\ Installer/Headroom.app
 /Volumes/Headroom\ Installer/Headroom.app/Contents/MacOS/Headroom --probe-codex
 ```
+
+## 6. Prove the installed-app update path
+
+The website build enables Sparkle's automatic *checks*, while leaving automatic installation
+off. Users receive an update prompt and choose when to install it; this is intentional
+(`SUEnableAutomaticChecks = YES`, `SUAllowsAutomaticUpdates = NO`). Every public release must
+prove that an already-installed, older public build can take that path.
+
+Use a dedicated macOS test user or VM so this does not replace a working development install:
+
+1. Download an older **public** versioned DMG from the portfolio `public/` history, install
+   `Headroom.app` in `/Applications`, and launch it once.
+2. Open Headroom Settings, select **Check for Updates…**, accept the Sparkle prompt, and let it
+   relaunch. Do not test against a locally built app; it lacks the production feed configuration.
+3. Confirm the installed app's version and build equal the new release, then repeat the normal
+   provider/setup smoke:
+
+   ```bash
+   /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+     /Applications/Headroom.app/Contents/Info.plist
+   /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+     /Applications/Headroom.app/Contents/Info.plist
+   /Applications/Headroom.app/Contents/MacOS/Headroom --probe-codex
+   ```
+
+Record the starting and ending versions in the release PR. A rejected signature, missing
+enclosure, or no-update result is a release blocker: stop before announcing the download.
 
 For a manual acceptance pass, drag the app to `/Applications`, launch it, and confirm the
 popover matches the official provider surfaces. For the Codex window-classification fix, a
