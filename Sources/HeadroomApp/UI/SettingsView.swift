@@ -444,6 +444,16 @@ struct SettingsView: View {
     }
 
     private func providerWindowLabel(_ providerID: ProviderID) -> some View {
+        ZStack(alignment: .leading) {
+            providerWindowLabelContent(.claude).hidden()
+            providerWindowLabelContent(.codex).hidden()
+            providerWindowLabelContent(providerID)
+        }
+    }
+
+    /// Both rows reserve the wider provider label so their flexible picker slots receive
+    /// identical proposals at compact window widths.
+    private func providerWindowLabelContent(_ providerID: ProviderID) -> some View {
         HStack(spacing: 7) {
             ProviderLogoView(providerID: providerID, size: 15)
             Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
