@@ -116,6 +116,6 @@ Review status (if applicable), clean-device acceptance result, selected App Stor
 review-thread reply date, and final resubmission status. Do not mark the release shipped
 until those facts are verified in App Store Connect.
 
-- 2026-07-15: Local build 21 signed archive and archive preflight passed. App Store
-  export/upload remains blocked on this Mac until a valid App Store Connect Xcode account
-  or API-key authentication and an iOS Distribution certificate are available.
+- 2026-07-15: Fresh reviewed build 21 signed archive and archive preflight passed. Xcode
+  Organizer uploaded the host app and embedded widget to App Store Connect at 12:31 PM PT;
+  processing, internal-group assignment, and clean TestFlight acceptance remain pending.
