@@ -11,6 +11,23 @@ struct IOSWidgetTimelineMappingTests {
         #expect(IOSWidgetSnapshotState.from(cacheRead: .snapshot(snapshot)) == .content(snapshot))
     }
 
+    @Test func demoWinsBeforeCacheAndSyncWithoutMutatingEitherSource() {
+        let demo = DemoScreenshotData.envelope
+        let cache = WidgetSnapshotEnvelope(generatedAt: now.addingTimeInterval(7_200), status: .enabled, providers: [])
+        let remote = WidgetSnapshotEnvelope(generatedAt: now.addingTimeInterval(14_400), status: .enabled, providers: [])
+
+        let resolution = IOSWidgetSnapshotState.resolve(
+            demoEnvelope: demo,
+            cacheRead: .snapshot(cache),
+            syncRead: .snapshot(synced(remote))
+        )
+
+        #expect(resolution.state == .demo(demo))
+        #expect(resolution.origin == .demo)
+        #expect(cache.generatedAt != demo.generatedAt)
+        #expect(remote.generatedAt != demo.generatedAt)
+    }
+
     @Test func disabledCacheMapsToDisabled() {
         #expect(IOSWidgetSnapshotState.from(cacheRead: .snapshot(.disabled(generatedAt: now))) == .disabled)
     }

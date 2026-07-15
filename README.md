@@ -5,7 +5,7 @@ A macOS menu bar app that shows how much of your AI-subscription usage remains �
 date — for **Anthropic Claude** and **ChatGPT/Codex**, side by side. It can also show
 optional API dollar spend in a separate section for users who use metered OpenAI or
 Anthropic APIs, bundles macOS widgets for small, medium, and large glanceable desktop /
-Notification Center views, and includes an iPhone companion app + widgets that read a
+Notification Center views, and includes an iPhone/iPad companion app + widgets that read a
 redaction-safe snapshot synced from the Mac through iCloud Key-Value Store.
 
 ## How it gets the data (and why this way)
@@ -69,9 +69,9 @@ Claude path works on your machine.
 - `Sources/HeadroomWidgets` — the WidgetKit extension. It reads only the redaction-safe
   App Group cache written by the app; it never spawns `claude`, reads credentials, or
   calls provider endpoints.
-- `Sources/HeadroomIOS` — the iPhone companion shell. It reads the synced snapshot only;
+- `Sources/HeadroomIOS` — the iPhone/iPad companion shell. It reads the synced snapshot only;
   no subscription credentials or provider probes ship to iOS.
-- `Sources/HeadroomIOSWidgets` — the iPhone WidgetKit extension, backed by the same synced
+- `Sources/HeadroomIOSWidgets` — the iOS/iPadOS WidgetKit extension, backed by the same synced
   snapshot contract as the companion app.
 
 ## Widgets
@@ -102,15 +102,18 @@ directly. Local manual-signed builds also mirror the redaction-safe widget snaps
 the widget extension container as a development fallback while App Group provisioning is
 being finished.
 
-## iPhone companion
+## iPhone and iPad companion
 
 Enable **Sync snapshot to iPhone** in Headroom Settings to publish the same widget-safe
 summary through iCloud Key-Value Store. The synced payload contains provider names,
 window labels, percentages, reset labels, freshness, and update time; it does not include
-Claude/Codex credentials, API keys, raw auth files, or provider endpoints. The iPhone app
-and iPhone widgets are read-only views over that snapshot. The companion app mirrors the
+Claude/Codex credentials, API keys, raw auth files, or provider endpoints. The iPhone/iPad
+app and widgets are read-only views over that snapshot. The companion app mirrors the
 Mac popover with provider tiles, session/weekly bars, stale/attention treatments, and a
-small About sheet for sync status and device-local appearance.
+small Settings sheet for sync status and device-local appearance. A production **Explore
+Demo** action shows clearly labeled bundled sample data without a Mac, login, or network
+request; its separate App Group flag also makes the widgets demo safely. Exiting demo
+restores the untouched real waiting/synced state.
 
 Local simulator smoke test:
 
@@ -262,22 +265,23 @@ procedure, see [`docs/release/website-dmg-release.md`](docs/release/website-dmg-
 
 ## iOS distribution
 
-The iPhone companion app and iOS widgets are distributed through Apple's normal iOS
+The iPhone/iPad companion app and iOS widgets are distributed through Apple's normal iOS
 channels, not through Sparkle, DMG packaging, or Developer ID notarization: TestFlight
 for betas, then the **App Store** (the public distribution channel) via the same
 `com.kylezantos.headroom.ios` App Store Connect app record. Ad Hoc builds are only for
 registered-device testing and are not the update mechanism for users.
 
-Build a local App Store Connect export:
+Build a local App Store Connect export (replace `20` with the highest build already
+uploaded to App Store Connect):
 
 ```bash
-./Scripts/release-ios-testflight.sh
+HEADROOM_IOS_LAST_UPLOADED_BUILD=20 ./Scripts/release-ios-testflight.sh
 ```
 
 Upload the archive to App Store Connect for TestFlight processing:
 
 ```bash
-HEADROOM_IOS_UPLOAD=1 ./Scripts/release-ios-testflight.sh
+HEADROOM_IOS_LAST_UPLOADED_BUILD=20 HEADROOM_IOS_UPLOAD=1 ./Scripts/release-ios-testflight.sh
 ```
 
 The upload path requires an App Store Connect app record for
@@ -289,6 +293,7 @@ or confirm the App Store Connect app record for that bundle ID first.
 HEADROOM_ASC_KEY_PATH="/path/to/AuthKey_KEYID.p8" \
 HEADROOM_ASC_KEY_ID="KEYID" \
 HEADROOM_ASC_ISSUER_ID="ISSUER-ID" \
+HEADROOM_IOS_LAST_UPLOADED_BUILD=20 \
 HEADROOM_IOS_UPLOAD=1 \
   ./Scripts/release-ios-testflight.sh
 ```

@@ -35,6 +35,12 @@ public enum MirrorRowTreatment: Equatable, Sendable {
 }
 
 public enum MirrorPresentation {
+    /// The projector has already filtered unsupported counters. The companion must render
+    /// every remaining window so model-specific limits stay in parity with macOS.
+    public static func windows(for provider: WidgetProviderSummary) -> [WidgetWindowSummary] {
+        provider.windows
+    }
+
     public static func treatment(for freshness: WidgetProviderFreshness) -> MirrorRowTreatment {
         switch freshness {
         case .live:

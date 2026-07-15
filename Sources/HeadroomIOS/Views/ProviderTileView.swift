@@ -34,6 +34,7 @@ struct ProviderTileView: View {
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("headroom.provider.\(provider.id)")
     }
 
     private var header: some View {
@@ -78,7 +79,7 @@ struct ProviderTileView: View {
 
     private var bars: some View {
         VStack(spacing: 14) {
-            ForEach(provider.subscriptionWindows) { window in
+            ForEach(MirrorPresentation.windows(for: provider)) { window in
                 UsageBarView(window: window, now: now, dimmed: treatment.isDimmed)
             }
         }

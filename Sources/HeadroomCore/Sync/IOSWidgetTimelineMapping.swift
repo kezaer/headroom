@@ -4,6 +4,7 @@ import Foundation
 /// companion Settings diagnostics so a stale display is never silently blamed on
 /// rendering when the real problem is which snapshot won resolution.
 public enum IOSWidgetContentOrigin: String, Equatable, Sendable {
+    case demo
     case cache
     case sync
 }
@@ -27,13 +28,15 @@ public enum IOSWidgetSnapshotState: Equatable, Sendable {
     case disabled
     case corrupt
     case incompatibleSchema
+    case demo(WidgetSnapshotEnvelope)
     case content(WidgetSnapshotEnvelope)
 
     public static func from(
+        demoEnvelope: WidgetSnapshotEnvelope? = nil,
         cacheRead: WidgetSnapshotCacheRead,
         syncRead: iCloudSnapshotSyncRead? = nil
     ) -> IOSWidgetSnapshotState {
-        resolve(cacheRead: cacheRead, syncRead: syncRead).state
+        resolve(demoEnvelope: demoEnvelope, cacheRead: cacheRead, syncRead: syncRead).state
     }
 
     /// Newest-valid-snapshot wins. When both the local cache and the iCloud read carry
@@ -43,9 +46,14 @@ public enum IOSWidgetSnapshotState: Equatable, Sendable {
     /// iCloud read never hides usable cached content. Only when neither side has a
     /// snapshot do we surface the most actionable setup/wait state.
     public static func resolve(
+        demoEnvelope: WidgetSnapshotEnvelope? = nil,
         cacheRead: WidgetSnapshotCacheRead,
         syncRead: iCloudSnapshotSyncRead? = nil
     ) -> IOSWidgetResolution {
+        if let demoEnvelope {
+            return IOSWidgetResolution(state: .demo(demoEnvelope), origin: .demo)
+        }
+
         let cacheSnapshot = cacheRead.envelope
         let syncSnapshot = syncRead?.envelope?.snapshot
 

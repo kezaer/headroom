@@ -3,6 +3,7 @@ import SwiftUI
 struct ProviderLogoView: View {
     let providerID: String
     var size: CGFloat = 24
+    var visualScale: CGFloat = 1
 
     @Environment(\.colorScheme) private var scheme
 
@@ -12,6 +13,7 @@ struct ProviderLogoView: View {
     // aligned across rows.
     var body: some View {
         let slot = size * 1.35
+        let opticalSlot = slot * opticalScale
         Group {
             if let assetName {
                 Image(assetName)
@@ -23,7 +25,10 @@ struct ProviderLogoView: View {
                     .foregroundStyle(HeadroomTheme.providerTextAccent(for: providerID, scheme: scheme))
             }
         }
-        .frame(width: slot * opticalScale, height: slot * opticalScale)
+        .frame(width: opticalSlot * visualScale, height: opticalSlot * visualScale)
+        // Keep a reduced mark pinned to the same optical leading edge as the full-size
+        // provider mark. The outer slot remains identical, so adjacent titles align too.
+        .frame(width: opticalSlot, height: opticalSlot, alignment: .leading)
         .frame(width: slot, height: slot)
         .accessibilityHidden(true)
     }
