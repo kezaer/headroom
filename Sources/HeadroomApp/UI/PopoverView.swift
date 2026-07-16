@@ -25,6 +25,9 @@ struct PopoverView: View {
     // SwiftUI recreates this view per open; replaying motion there reads as latency.
     @State private var appeared = false
     @State private var animatesEntrance = false
+    /// Content extends past the scroll cap and isn't scrolled to the bottom — gates
+    /// the bottom fade so it never softens a fully visible last card.
+    @State private var scrollContinuesBelow = false
 
     private static let titleFont = NSFont.systemFont(ofSize: 20, weight: .bold)
     private static let statusFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -54,6 +57,7 @@ struct PopoverView: View {
                                 },
                                 percentageMode: store.usagePercentageMode,
                                 now: context.date,
+                                compactDensity: usesCompactDensity,
                                 onRetrySetup: { store.refreshNow() }
                             )
                         }
@@ -62,6 +66,26 @@ struct PopoverView: View {
                 }
                 .scrollIndicators(.automatic)
                 .scrollBounceBehavior(.basedOnSize)
+                // Soft bottom fade while content continues below the cap — the flat
+                // clip alone read as a card with missing data (impeccable audit P2).
+                // Overflow-gated so the common non-scrolling popover keeps its crisp
+                // final card edge.
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    geometry.contentOffset.y + geometry.containerSize.height < geometry.contentSize.height - 4
+                } action: { _, overflows in
+                    scrollContinuesBelow = overflows
+                }
+                .mask {
+                    VStack(spacing: 0) {
+                        Rectangle().fill(.black)
+                        LinearGradient(
+                            colors: [.black, scrollContinuesBelow ? .black.opacity(0) : .black],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                        .frame(height: 26)
+                    }
+                }
+                .animation(reduceMotion ? nil : HeadroomMotion.settle, value: scrollContinuesBelow)
                 .frame(maxHeight: 640)
                 footer
             }
@@ -87,6 +111,13 @@ struct PopoverView: View {
                 PopoverEntranceAnimation.hasAnimatedThisSession = true
             }
         }
+    }
+
+    /// One density for the whole popover: compact as soon as ANY provider stacks 3+
+    /// accounts. Sibling cards must share a meter scale — different sizes read as
+    /// different importance (impeccable audit P1, PRODUCT.md #1).
+    private var usesCompactDensity: Bool {
+        store.providerOrder.contains { store.accounts(for: $0).count >= 3 }
     }
 
     /// Native pattern: navigating out of the transient menu-bar popover into the persistent

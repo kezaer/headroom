@@ -18,6 +18,7 @@ struct AccountsSettingsTile: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
+    @State private var hoveredLabel: AccountKey?
     @FocusState private var focusedLabel: AccountKey?
 
     private static let providerIDs: [ProviderID] = [.claude, .codex]
@@ -71,7 +72,7 @@ struct AccountsSettingsTile: View {
                 }
                 Text("\(accounts.count) of \(AccountRegistry.maxPerProvider)")
                     .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
                 Button("Add Account…") { addAccount(for: providerID) }
                     .buttonStyle(.bordered)
@@ -93,18 +94,31 @@ struct AccountsSettingsTile: View {
     private func accountRow(_ account: ProviderAccount) -> some View {
         let snapshot = store.snapshot(for: account.key)
         let status = AccountStatus(snapshot: snapshot, waiting: isWaitingForSetup(account))
+        let isEditingLabel = focusedLabel == account.key || hoveredLabel == account.key
         return HStack(spacing: 8) {
+            // Quiet at rest, but the affordance reveals on approach: a hover/focus fill
+            // marks the label as editable (impeccable audit P1 — a plain field that
+            // renders identically to static text hides the rename feature entirely).
             TextField("Account name", text: labelBinding(for: account))
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .focused($focusedLabel, equals: account.key)
                 .onSubmit { commitLabel(for: account) }
-                .frame(maxWidth: 150, alignment: .leading)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(
+                    Color.primary.opacity(isEditingLabel ? 0.06 : 0),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+                .onHover { hovering in
+                    hoveredLabel = hovering ? account.key : (hoveredLabel == account.key ? nil : hoveredLabel)
+                }
+                .frame(maxWidth: 158, alignment: .leading)
+                .help("Click to rename this account")
                 .accessibilityLabel("\(account.label) account name")
             if account.isBuiltIn {
                 Text("CLI login")
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
                     .help("Uses the account your CLI is signed into")
@@ -116,19 +130,24 @@ struct AccountsSettingsTile: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
-            if !account.isBuiltIn {
-                Button { removalCandidate = account } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 11))
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
-                .foregroundStyle(.secondary)
-                .help("Remove this account")
-                .accessibilityLabel("Remove \(account.label)")
+            // The trash slot is always laid out — hidden (not absent) on built-in rows —
+            // so status text shares one right anchor down the whole list (audit P2).
+            Button { removalCandidate = account } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+                    .frame(width: 22, height: 22)
             }
+            .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
+            .foregroundStyle(.secondary)
+            .help("Remove this account")
+            .accessibilityLabel("Remove \(account.label)")
+            .opacity(account.isBuiltIn ? 0 : 1)
+            .disabled(account.isBuiltIn)
+            .accessibilityHidden(account.isBuiltIn)
         }
-        .padding(.leading, 22) // aligns rows under the provider name, past the logo
+        // 16pt + the field's 6pt inner pad lands the label text at the 22pt provider-
+        // name alignment axis.
+        .padding(.leading, 16)
     }
 
     @ViewBuilder private func statusLabel(_ status: AccountStatus) -> some View {
@@ -140,7 +159,7 @@ struct AccountsSettingsTile: View {
         case .fetching:
             Text("Fetching…")
                 .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
         case .waiting:
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini)
@@ -149,9 +168,16 @@ struct AccountsSettingsTile: View {
                     .foregroundStyle(.secondary)
             }
         case .stale:
-            Text("Stale")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+            // Clock glyph separates "data gone old" from the affirmative "Connected" —
+            // the two rendered identically before (impeccable audit P1). Restrained on
+            // purpose: stale is usually a transient blip, not an alarm.
+            HStack(spacing: 4) {
+                Image(systemName: "clock")
+                    .font(.system(size: 9, weight: .medium))
+                Text("Stale")
+                    .font(.system(size: 11))
+            }
+            .foregroundStyle(.secondary)
         case .needsSignIn:
             Text("Needs sign-in")
                 .font(.system(size: 11, weight: .medium))

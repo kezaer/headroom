@@ -34,6 +34,11 @@ struct ProviderCardView: View {
     let entries: [ProviderAccountEntry]
     let percentageMode: UsagePercentageMode
     let now: Date
+    /// Popover-wide density, decided by the caller across ALL provider cards — never
+    /// per-card. Siblings must share one meter scale (PRODUCT.md #1: comparison stays
+    /// fair); a per-card threshold made a 3-account Claude compact next to a
+    /// regular-size 2-account Codex (impeccable audit P1).
+    var compactDensity: Bool = false
     let onRetrySetup: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,9 +46,7 @@ struct ProviderCardView: View {
     @State private var showsConnectedChip = false
 
     private var isMultiAccount: Bool { entries.count > 1 }
-    /// Compact meters once the stack is deep enough that full-size rows would push
-    /// the popover past a comfortable glance height.
-    private var isCompact: Bool { entries.count >= 3 }
+    private var isCompact: Bool { compactDensity }
     private var primaryEntry: ProviderAccountEntry? { entries.first }
     private var snapshot: UsageSnapshot { primaryEntry?.snapshot ?? .pending(for: providerID) }
     private var primaryAccount: ProviderAccount {
@@ -240,9 +243,9 @@ struct ProviderCardView: View {
         if snapshot.windows.isEmpty {
             Text("No usage data").font(.caption).foregroundStyle(.secondary)
         } else {
-            VStack(spacing: 9) {
+            VStack(spacing: isCompact ? 7 : 9) {
                 ForEach(Array(snapshot.windows.enumerated()), id: \.offset) { _, window in
-                    UsageBarView(window: window, percentageMode: percentageMode, now: now, dimmed: dimmed)
+                    UsageBarView(window: window, percentageMode: percentageMode, now: now, dimmed: dimmed, compact: isCompact)
                 }
             }
         }
@@ -338,13 +341,14 @@ private struct AccountSectionView: View {
         .onAppear { settleSetupIfLive() }
     }
 
-    /// Label + plan pill. The label is the account's identity — 11.5pt semibold in
-    /// secondary ink so it frames the meters without competing with the numerals.
+    /// Label + plan pill. The label is the account's identity — 13pt semibold in
+    /// secondary ink, one weight step above the 13pt-medium window labels it parents
+    /// (impeccable audit P2: a group header must not read smaller than its rows).
     private var identityRow: some View {
         HStack(spacing: 6) {
             Text(account.label)
-                .font(.system(size: 11.5, weight: .semibold))
-                .kerning(0.1)
+                .font(.system(size: 13, weight: .semibold))
+                .kerning(-0.1)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)

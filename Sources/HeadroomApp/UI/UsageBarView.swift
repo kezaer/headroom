@@ -22,10 +22,11 @@ struct UsageBarView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
+    // Whole-point steps only, staying on the family ladder (impeccable audit P3).
     private var labelSize: CGFloat { compact ? 12 : 13 }
-    private var resetSize: CGFloat { compact ? 10.5 : 11 }
+    private var resetSize: CGFloat { 11 }
     private var percentSize: CGFloat { compact ? 15 : 18 }
-    private var termSize: CGFloat { compact ? 10.5 : 11 }
+    private var termSize: CGFloat { 11 }
     private var barHeight: CGFloat { compact ? 6 : 8 }
     private var rowSpacing: CGFloat { compact ? 4 : 5 }
 
