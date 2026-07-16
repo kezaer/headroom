@@ -50,6 +50,9 @@ struct AccountsSettingsTile: View {
             presenting: removalCandidate
         ) { account in
             Button("Remove \(account.label)", role: .destructive) {
+                // End any in-flight handoff first, so orphaned retry tasks can't keep
+                // polling for a deleted account (code-review finding).
+                SetupSessions.settle(for: account)
                 withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
                     store.removeAccount(account.key)
                 }
@@ -58,6 +61,18 @@ struct AccountsSettingsTile: View {
         } message: { account in
             Text("Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
         }
+        // Commit a pending rename when the field loses focus — Enter-only commit
+        // silently discarded renames while still displaying the draft (code-review
+        // finding).
+        .onChange(of: focusedLabel) { previous, _ in
+            if let previous, let account = account(for: previous) {
+                commitLabel(for: account)
+            }
+        }
+    }
+
+    private func account(for key: AccountKey) -> ProviderAccount? {
+        store.accounts(for: key.providerID).first { $0.key == key }
     }
 
     // MARK: - Provider group
@@ -85,8 +100,18 @@ struct AccountsSettingsTile: View {
             ForEach(accounts) { account in
                 accountRow(account)
             }
+            if !store.isSurfaceEnabled(subscriptionSurface(for: providerID)) {
+                // Without this hint, an account added while the surface is off would
+                // sit in "Needs sign-in" forever with no visible cause (code-review
+                // finding) — the disabled surface means it's never polled.
+                SettingsHelpText(text: "\(store.displayNames[providerID] ?? providerID.raw.capitalized) usage is turned off in Subscription Usage — accounts stay signed in but aren't fetched.")
+            }
         }
         .animation(reduceMotion ? nil : HeadroomMotion.settle, value: accounts.map(\.id))
+    }
+
+    private func subscriptionSurface(for providerID: ProviderID) -> UsageSurface {
+        providerID == .claude ? .claudeSubscription : .codexSubscription
     }
 
     // MARK: - Account row
@@ -223,19 +248,15 @@ struct AccountsSettingsTile: View {
     }
 
     private func openSetup(for account: ProviderAccount) {
-        switch account.providerID {
-        case .claude: ClaudeSetupSession.openSetup(for: account, onRetry: { store.refreshNow() })
-        case .codex: CodexSetupSession.openSetup(for: account, onRetry: { store.refreshNow() })
-        default: break
-        }
+        // Per-account retry: watching one sign-in must not re-probe the whole fleet
+        // (each Claude account is a 20–30s CLI session — code-review finding).
+        SetupSessions.openSetup(for: account, onRetry: { [store] in
+            store.refreshAccountNow(account.key)
+        })
     }
 
     private func isWaitingForSetup(_ account: ProviderAccount) -> Bool {
-        switch account.providerID {
-        case .claude: ClaudeSetupSession.openedSetupAt(for: account.id) != nil
-        case .codex: CodexSetupSession.openedSetupAt(for: account.id) != nil
-        default: false
-        }
+        SetupSessions.isWaiting(for: account)
     }
 
     // MARK: - Rename plumbing

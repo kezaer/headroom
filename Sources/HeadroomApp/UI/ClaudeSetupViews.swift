@@ -10,23 +10,24 @@ import HeadroomCore
 /// mockup (.context/headroom-claude-onboarding.html) and are transferred 1:1.
 @MainActor
 enum ClaudeSetupSession {
-    /// Set when the user opens the setup Terminal this app session, per account. Drives
-    /// the Connect → Waiting swap and the one-session "Connected" payoff chip; cleared
-    /// on app relaunch, so the chip never becomes permanent UI.
-    private static var openedAt: [AccountID: Date] = [:]
+    /// Waiting state lives in the observable `SetupSessionActivity` so rows repaint
+    /// the instant a Terminal handoff opens; cleared on app relaunch, so the payoff
+    /// chip never becomes permanent UI.
     private static var retryTasks: [AccountID: [Task<Void, Never>]] = [:]
 
-    static func openedSetupAt(for accountID: AccountID) -> Date? { openedAt[accountID] }
+    static func openedSetupAt(for accountID: AccountID) -> Date? {
+        SetupSessionActivity.shared.openedAt(for: AccountKey(providerID: .claude, accountID: accountID))
+    }
 
     static func setOpenedSetupAt(_ date: Date?, for accountID: AccountID) {
-        openedAt[accountID] = date
+        SetupSessionActivity.shared.set(date, for: AccountKey(providerID: .claude, accountID: accountID))
     }
 
     /// Built-in-account accessor kept for the single-account flow (popover header,
     /// render harness).
     static var openedSetupAt: Date? {
-        get { openedAt[.primary] }
-        set { openedAt[.primary] = newValue }
+        get { openedSetupAt(for: .primary) }
+        set { setOpenedSetupAt(newValue, for: .primary) }
     }
 
     /// The Claude workspace the probe drives for an account. Built-in keeps the
@@ -71,7 +72,7 @@ enum ClaudeSetupSession {
     /// Extra accounts additionally export their `CLAUDE_CONFIG_DIR` and walk the user
     /// through signing in with the account being added.
     static func openSetup(for account: ProviderAccount = .builtIn(for: .claude), onRetry: @escaping () -> Void) {
-        openedAt[account.id] = Date()
+        setOpenedSetupAt(Date(), for: account.id)
         do {
             let workspace: URL
             if account.isBuiltIn {
@@ -80,8 +81,13 @@ enum ClaudeSetupSession {
                 try AccountStorage.ensureDirectories(for: account)
                 workspace = AccountStorage.claudeWorkspaceDirectoryURL(for: account)
             }
+            // Script filename is per-account: a shared name let a second account's
+            // Sign In overwrite the script a still-open Terminal was about to run,
+            // landing the login in the wrong config home (code-review finding).
             let scriptURL = ClaudeUsageWorkspace.defaultDirectoryURL.deletingLastPathComponent()
-                .appendingPathComponent(account.isBuiltIn ? "Open Claude Setup.command" : "Add Claude Account.command")
+                .appendingPathComponent(account.isBuiltIn
+                    ? "Open Claude Setup.command"
+                    : "Add Claude Account \(account.id.raw.prefix(8)).command")
             let configExport = account.isBuiltIn
                 ? ""
                 : "export CLAUDE_CONFIG_DIR=\(shellQuoted(AccountStorage.claudeConfigDirectoryURL(for: account).path))\n"
@@ -121,6 +127,11 @@ enum ClaudeSetupSession {
             NSWorkspace.shared.open(scriptURL)
             scheduleRetries(for: account.id, onRetry)
         } catch {
+            // Failed to stage the handoff: clear the waiting flag (no Terminal ever
+            // opened, so a spinner would wait forever — code-review finding) and fall
+            // back to the copyable command.
+            setOpenedSetupAt(nil, for: account.id)
+            cancelRetries(for: account.id)
             copyCommand(for: account)
         }
     }

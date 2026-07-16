@@ -98,6 +98,9 @@ public final class UsageStore {
     private let apiSpendProviders: [any APISpendProvider]
     private let preferences: Preferences
     private let accountRegistry: AccountRegistry?
+    private let accountStorage: any AccountStorageManaging
+    /// Counts timer-driven cycles for the not-signed-in poll backoff.
+    private var timerCycleCount = 0
     /// Builds the concrete provider for a newly added account. Lives in the composition
     /// root (R13) and is injected so the store never names concrete provider types.
     private let providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)?
@@ -112,6 +115,7 @@ public final class UsageStore {
         preferences: Preferences = Preferences(),
         accounts: [ProviderAccount]? = nil,
         accountRegistry: AccountRegistry? = nil,
+        accountStorage: any AccountStorageManaging = DefaultAccountStorage(),
         providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)? = nil,
         widgetExporter: (any WidgetSnapshotExporting)? = nil,
         phoneSyncExporter: (any WidgetSnapshotExporting)? = nil
@@ -120,12 +124,18 @@ public final class UsageStore {
         self.apiSpendProviders = apiSpendProviders
         self.preferences = preferences
         self.accountRegistry = accountRegistry
+        self.accountStorage = accountStorage
         self.providerFactory = providerFactory
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
         self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
-        self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.accountKey, .pending(for: $0.id)) })
+        // Uniquing, never trapping: a duplicated persisted account entry must degrade
+        // to one row, not a launch crash loop (code-review finding).
+        self.snapshots = Dictionary(
+            providers.map { ($0.accountKey, UsageSnapshot.pending(for: $0.id)) },
+            uniquingKeysWith: { first, _ in first }
+        )
         self.accountsByProvider = Self.accountsIndex(providers: providers, accounts: accounts, registry: accountRegistry)
         self.apiSpendSnapshots = Dictionary(uniqueKeysWithValues: apiSpendProviders.map {
             ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
@@ -190,8 +200,10 @@ public final class UsageStore {
     }
 
     public func canAddAccount(for providerID: ProviderID) -> Bool {
-        guard accountRegistry != nil, providerFactory != nil else { return false }
-        return accounts(for: providerID).count < AccountRegistry.maxPerProvider
+        // Delegate the cap rule to the registry — one source of truth for the same
+        // gate `addAccount` enforces (code-review finding).
+        guard let accountRegistry, providerFactory != nil else { return false }
+        return accountRegistry.canAddAccount(for: providerID)
     }
 
     /// Create a new account: registry entry, on-disk config home, provider instance,
@@ -202,7 +214,7 @@ public final class UsageStore {
         guard let accountRegistry, let providerFactory,
               let account = accountRegistry.addAccount(for: providerID, label: label)
         else { return nil }
-        _ = try? AccountStorage.ensureDirectories(for: account)
+        accountStorage.ensureDirectories(for: account)
         providers.append(providerFactory(account))
         accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
         snapshots[account.key] = .stale(
@@ -234,7 +246,7 @@ public final class UsageStore {
         providers.removeAll { $0.accountKey == key }
         snapshots.removeValue(forKey: key)
         accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
-        AccountStorage.removeDirectories(for: account)
+        accountStorage.removeDirectories(for: account)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
     }
@@ -249,7 +261,7 @@ public final class UsageStore {
         await refreshAll()
         let engine = PollingEngine(
             intervalMinutes: { [preferences] in preferences.pollIntervalMinutes },
-            tick: { [weak self] in await self?.refreshAll() }
+            tick: { [weak self] in await self?.refreshAll(source: .timer) }
         )
         engine.start()
         self.engine = engine
@@ -373,15 +385,44 @@ public final class UsageStore {
         preferences.apiSpendPeriod = period
     }
 
+    /// What triggered a refresh cycle. Timer ticks back off never-signed-in extra
+    /// accounts; user-initiated refreshes always probe everything.
+    private enum RefreshSource { case manual, timer }
+
     /// Fetch every provider concurrently and merge results with continuity. Guarded
     /// so overlapping triggers (a timer tick during a popover-open `refreshNow()`)
     /// coalesce into one in-flight cycle instead of racing duplicate fetches.
     public func refreshAll() async {
+        await refreshAll(source: .manual)
+    }
+
+    private func refreshAll(source: RefreshSource) async {
         if isRefreshing { return }
         isRefreshing = true
         defer { isRefreshing = false }
-        await refreshSubscriptions(exportAfter: false)
+        if source == .timer { timerCycleCount += 1 }
+        await refreshSubscriptions(source: source, exportAfter: false)
         await refreshAPISpend(exportAfter: false)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+    }
+
+    /// Refresh a single account — the setup-session retry path, so watching one new
+    /// sign-in never fans out into a full fleet poll (each Claude account is a
+    /// 20–30s CLI session; code-review finding).
+    public func refreshAccountNow(_ key: AccountKey) {
+        Task { await refreshAccount(key) }
+    }
+
+    func refreshAccount(_ key: AccountKey) async {
+        guard !isRefreshing,
+              let provider = providers.first(where: { $0.accountKey == key }),
+              enabledSurfaces.contains(subscriptionSurface(for: key.providerID))
+        else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        let fresh = await provider.fetchSnapshot()
+        merge(key: key, fresh: fresh)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
     }
@@ -393,10 +434,11 @@ public final class UsageStore {
         await refreshAPISpend()
     }
 
-    private func refreshSubscriptions(exportAfter: Bool = true) async {
+    private func refreshSubscriptions(source: RefreshSource = .manual, exportAfter: Bool = true) async {
         let results = await withTaskGroup(of: (AccountKey, UsageSnapshot).self) { group in
             for provider in providers {
                 guard enabledSurfaces.contains(subscriptionSurface(for: provider.id)) else { continue }
+                guard !shouldSkipOnTimer(provider: provider, source: source) else { continue }
                 group.addTask { (provider.accountKey, await provider.fetchSnapshot()) }
             }
             var acc: [(AccountKey, UsageSnapshot)] = []
@@ -426,6 +468,20 @@ public final class UsageStore {
             exportWidgetSnapshot()
             exportPhoneSyncSnapshot()
         }
+    }
+
+    /// Timer backoff for never-signed-in *extra* accounts: each one costs a full
+    /// 20–30s Claude CLI session per probe, so an abandoned Add Account must not burn
+    /// a session every cycle forever. Probed every 4th timer cycle; manual refreshes
+    /// and the per-account retry path always probe. The built-in account is exempt —
+    /// its `.notLoggedIn` can also mean "CLI missing", where fast detection matters
+    /// and the probe short-circuits cheaply anyway.
+    private func shouldSkipOnTimer(provider: any UsageProvider, source: RefreshSource) -> Bool {
+        guard source == .timer,
+              provider.accountID != .primary,
+              case .stale(.notLoggedIn(_)) = snapshots[provider.accountKey]?.freshness
+        else { return false }
+        return timerCycleCount % 4 != 0
     }
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows

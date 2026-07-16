@@ -58,7 +58,8 @@ struct PopoverView: View {
                                 percentageMode: store.usagePercentageMode,
                                 now: context.date,
                                 compactDensity: usesCompactDensity,
-                                onRetrySetup: { store.refreshNow() }
+                                onRetrySetup: { store.refreshNow() },
+                                onRetryAccount: { store.refreshAccountNow($0.key) }
                             )
                         }
                         APISpendSectionView(store: store, now: context.date, onOpenSettings: openSettingsDismissingPopover)

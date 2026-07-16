@@ -26,6 +26,8 @@ public struct ClaudeProvider: UsageProvider {
         switch await source.capturePanel() {
         case .cliNotFound:
             return stale(.notLoggedIn("Install Claude Code to show usage"))
+        case .loginRequired:
+            return stale(.needsReauth("Run `claude` and log in"))
         case .failed:
             return stale(.transient("Couldn't read Claude usage — will retry"))
         case .panel(let text):
@@ -36,11 +38,9 @@ public struct ClaudeProvider: UsageProvider {
                     return stale(.needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
                 }
                 // Panel captured but no windows found: most often "not logged in".
-                // "Choose the text style" is the fresh-config first-run screen (extra
-                // accounts before their first sign-in) — the probe bails there before
-                // typing, so it reaches us with no login wording of its own.
-                if text.lowercased().contains("log in") || text.lowercased().contains("login")
-                    || text.localizedCaseInsensitiveContains("Choose the text style") {
+                // (First-run screens arrive typed as `.loginRequired`; this string
+                // check covers logged-out wording inside an otherwise normal session.)
+                if text.lowercased().contains("log in") || text.lowercased().contains("login") {
                     return stale(.needsReauth("Run `claude` and log in"))
                 }
                 return stale(.transient("Couldn't read Claude usage — will retry"))

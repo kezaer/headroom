@@ -6,21 +6,22 @@ import SwiftUI
 /// from Claude setup so either provider can wait or recover without canceling the other.
 @MainActor
 enum CodexSetupSession {
-    private static var openedAt: [AccountID: Date] = [:]
     private static var retryTasks: [AccountID: [Task<Void, Never>]] = [:]
     private static var openingTasks: [AccountID: Task<Void, Never>] = [:]
 
-    static func openedSetupAt(for accountID: AccountID) -> Date? { openedAt[accountID] }
+    static func openedSetupAt(for accountID: AccountID) -> Date? {
+        SetupSessionActivity.shared.openedAt(for: AccountKey(providerID: .codex, accountID: accountID))
+    }
 
     static func setOpenedSetupAt(_ date: Date?, for accountID: AccountID) {
-        openedAt[accountID] = date
+        SetupSessionActivity.shared.set(date, for: AccountKey(providerID: .codex, accountID: accountID))
     }
 
     /// Built-in-account accessor kept for the single-account flow (popover header,
     /// render harness).
     static var openedSetupAt: Date? {
-        get { openedAt[.primary] }
-        set { openedAt[.primary] = newValue }
+        get { openedSetupAt(for: .primary) }
+        set { setOpenedSetupAt(newValue, for: .primary) }
     }
 
     /// `CODEX_HOME` for an extra account; nil for the built-in (default `~/.codex`).
@@ -47,7 +48,10 @@ enum CodexSetupSession {
                 _ = try? AccountStorage.ensureDirectories(for: account)
             }
             let codexHome = codexHome(for: account)
-            let scriptName = account.isBuiltIn ? "Open Codex Login.command" : "Add Codex Account.command"
+            // Per-account filename — see ClaudeSetupSession.openSetup (script-overwrite race).
+            let scriptName = account.isBuiltIn
+                ? "Open Codex Login.command"
+                : "Add Codex Account \(account.id.raw.prefix(8)).command"
             let preparation = await Task.detached(priority: .userInitiated) { () -> (scriptURL: URL, hasExecutable: Bool)? in
                 let supportDirectory = ClaudeUsageWorkspace.defaultDirectoryURL.deletingLastPathComponent()
                 let scriptURL = supportDirectory.appendingPathComponent(scriptName)
@@ -78,12 +82,12 @@ enum CodexSetupSession {
                 return
             }
             guard preparation.hasExecutable else {
-                openedAt[account.id] = nil
+                setOpenedSetupAt(nil, for: account.id)
                 cancelRetries(for: account.id)
                 copyCommand(for: account)
                 return
             }
-            openedAt[account.id] = Date()
+            setOpenedSetupAt(Date(), for: account.id)
             scheduleRetries(for: account.id, onRetry)
         }
     }

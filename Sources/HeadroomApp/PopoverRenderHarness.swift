@@ -356,9 +356,23 @@ enum PopoverRenderHarness {
         if multiAccount {
             let fixture = multiFixture(for: .multiMixed)
             // A live registry + factory so account management renders enabled (the real
-            // app always has both); seeded with the fixture accounts.
-            let registry = AccountRegistry(defaults: UserDefaults(suiteName: "co.zantos.headroom.render.accounts.\(UUID().uuidString)") ?? .standard)
-            registry.seed(fixture.accounts)
+            // app always has both); seeded with the fixture accounts. The registry MUST
+            // live in its own suite — seeding .standard would clobber the user's real
+            // account catalog (code-review finding) — so a nil suite skips seeding.
+            let registry = UserDefaults(suiteName: "co.zantos.headroom.render.accounts.\(UUID().uuidString)")
+                .map { AccountRegistry(defaults: $0) }
+            registry?.seed(fixture.accounts)
+            var factory: (@MainActor (ProviderAccount) -> any UsageProvider)?
+            if registry != nil {
+                factory = { account in
+                    DemoUsageProvider(
+                        id: account.providerID,
+                        displayName: account.providerID == .claude ? "Claude" : "Codex",
+                        snapshot: .pending(for: account.providerID),
+                        accountID: account.id
+                    )
+                }
+            }
             store = UsageStore(
                 providers: fixture.providers,
                 apiSpendProviders: [
@@ -368,14 +382,7 @@ enum PopoverRenderHarness {
                 preferences: preferences,
                 accounts: fixture.accounts,
                 accountRegistry: registry,
-                providerFactory: { account in
-                    DemoUsageProvider(
-                        id: account.providerID,
-                        displayName: account.providerID == .claude ? "Claude" : "Codex",
-                        snapshot: .pending(for: account.providerID),
-                        accountID: account.id
-                    )
-                }
+                providerFactory: factory
             )
             store.refreshNow()
             try? await Task.sleep(for: .milliseconds(300))

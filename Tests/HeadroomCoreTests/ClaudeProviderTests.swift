@@ -144,14 +144,20 @@ struct ClaudeProviderTests {
         #expect(reason.isPermanent)    // needsReauth
     }
 
-    @Test func firstRunThemePickerReadsAsNeedsSignIn() async {
+    @Test func loginRequiredResultReadsAsNeedsSignIn() async {
         // A fresh CLAUDE_CONFIG_DIR (extra account before its first sign-in) boots into
-        // the theme picker; the probe bails there before typing (an Enter on the next
-        // screen would start a browser sign-in). Must classify as permanent sign-in
-        // needed — not a transient blip that hides the account's Sign in affordance.
-        let snap = await provider(.panel("Welcome to Claude Code\nChoose the text style that looks best with your terminal")).fetchSnapshot()
+        // a first-run screen; the probe bails there before typing (an Enter on the
+        // login selector would start a browser sign-in) and types the result. Must be
+        // permanent — a transient blip would hide the account's Sign in affordance.
+        let snap = await provider(.loginRequired).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
         #expect(reason.isPermanent)
+    }
+
+    @Test func probeClassifiesFirstRunScreens() {
+        #expect(ClaudeUsageCLIProbe.isFirstRunScreen("Welcome!\nChoose the text style that looks best with your terminal"))
+        #expect(ClaudeUsageCLIProbe.isFirstRunScreen("Select login method: 1. Claude account with subscription"))
+        #expect(!ClaudeUsageCLIProbe.isFirstRunScreen("Current session\n38% used\nResets 2:15pm"))
     }
 
     @Test func loginMethodSelectorReadsAsNeedsSignIn() async {

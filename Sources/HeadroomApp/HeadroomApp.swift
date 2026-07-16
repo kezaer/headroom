@@ -53,6 +53,8 @@ enum Entry {
                 print("RESULT: CLI not found")
             case .failed:
                 print("RESULT: capture failed (no panel text)")
+            case .loginRequired:
+                print("RESULT: login required (first-run screen — no account signed into this config home)")
             case .panel(let text):
                 let windows = ClaudeUsageParser.parse(text)
                 print("RESULT: captured panel (\(text.count) chars), parsed \(windows.count) window(s):")
@@ -427,6 +429,9 @@ enum AppComposition {
             let reader = CodexAuthFileReader(path: AccountStorage.codexAuthFileURL(for: account))
             return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
         default: // .claude
+            // ProviderID is open by design (R13); a third provider must register its
+            // own account factory here, never fall through to a Claude probe.
+            assert(account.providerID == .claude, "No account provider registered for \(account.providerID)")
             guard !account.isBuiltIn else {
                 return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory()))
             }

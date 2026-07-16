@@ -22,6 +22,13 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
     UsageWindow(kind: kind, utilization: used, resetsAt: Date(timeIntervalSince1970: 3_000_000))
 }
 
+/// No-op storage so account-lifecycle tests never touch the real Application
+/// Support tree (AGENTS.md: suite is all mocked).
+private struct NoopAccountStorage: AccountStorageManaging {
+    func ensureDirectories(for account: ProviderAccount) {}
+    func removeDirectories(for account: ProviderAccount) {}
+}
+
 // MARK: - Registry
 
 @Suite struct AccountRegistryTests {
@@ -182,6 +189,7 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
             ],
             preferences: Preferences(defaults: defaults),
             accountRegistry: registry,
+            accountStorage: NoopAccountStorage(),
             providerFactory: { account in
                 AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
                                     snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
@@ -208,6 +216,7 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
             ],
             preferences: Preferences(defaults: defaults),
             accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
             providerFactory: { account in
                 AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
                                     snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
@@ -228,6 +237,7 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
             ],
             preferences: Preferences(defaults: defaults),
             accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
             providerFactory: { account in
                 AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
                                     snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
@@ -252,6 +262,7 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
             ],
             preferences: Preferences(defaults: defaults),
             accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
             providerFactory: { account in
                 AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
                                     snapshot: .pending(for: .claude))
@@ -270,6 +281,7 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
             ],
             preferences: Preferences(defaults: defaults),
             accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
             providerFactory: { account in
                 AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
                                     snapshot: .pending(for: .claude))
@@ -289,6 +301,17 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
         )
         #expect(!store.canAddAccount(for: .claude))
         #expect(store.addAccount(for: .claude) == nil)
+    }
+
+    @Test func refreshAccountFetchesOnlyThatAccount() async {
+        let store = twoAccountStore(
+            workSnapshot: .live(.claude, windows: [window(.weekly, used: 80)])
+        )
+        let workKey = AccountKey(providerID: .claude, accountID: work)
+        await store.refreshAccount(workKey)
+        // The targeted account is live; its sibling was never fetched and stays pending.
+        #expect(store.snapshot(for: workKey).freshness == .live)
+        #expect(store.snapshot(for: AccountKey(providerID: .claude, accountID: .primary)).freshness == .pending)
     }
 
     @Test func widgetExportUsesPrimaryAccountOnly() async {

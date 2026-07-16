@@ -40,6 +40,9 @@ struct ProviderCardView: View {
     /// regular-size 2-account Codex (impeccable audit P1).
     var compactDensity: Bool = false
     let onRetrySetup: () -> Void
+    /// Retry scoped to one account — the multi-account rows use this so watching one
+    /// sign-in doesn't re-probe the whole fleet. Defaults to the whole-card retry.
+    var onRetryAccount: ((ProviderAccount) -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
@@ -126,12 +129,11 @@ struct ProviderCardView: View {
                             .frame(height: 1)
                     }
                     AccountSectionView(
-                        providerID: providerID,
                         entry: entry,
                         percentageMode: percentageMode,
                         now: now,
                         compact: isCompact,
-                        onRetrySetup: onRetrySetup
+                        onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
                     )
                 }
             }
@@ -140,7 +142,11 @@ struct ProviderCardView: View {
 
     /// The guided-setup payoff: when either provider goes live after its Terminal handoff,
     /// stop only that provider's retries and show the "Connected" chip briefly.
+    /// Single-account mode only — in multi-account mode each `AccountSectionView`
+    /// settles its own session, and letting both observe the primary account raced
+    /// nondeterministically (code-review finding).
     private func evaluateConnectedPayoff() {
+        guard !isMultiAccount else { return }
         guard case .live = snapshot.freshness else { return }
         let accountID = primaryAccount.id
         let setupOpenedAt: Date
@@ -239,16 +245,14 @@ struct ProviderCardView: View {
         }
     }
 
-    @ViewBuilder private func bars(for snapshot: UsageSnapshot, dimmed: Bool) -> some View {
-        if snapshot.windows.isEmpty {
-            Text("No usage data").font(.caption).foregroundStyle(.secondary)
-        } else {
-            VStack(spacing: isCompact ? 7 : 9) {
-                ForEach(Array(snapshot.windows.enumerated()), id: \.offset) { _, window in
-                    UsageBarView(window: window, percentageMode: percentageMode, now: now, dimmed: dimmed, compact: isCompact)
-                }
-            }
-        }
+    private func bars(for snapshot: UsageSnapshot, dimmed: Bool) -> some View {
+        UsageBarsStack(
+            windows: snapshot.windows,
+            percentageMode: percentageMode,
+            now: now,
+            dimmed: dimmed,
+            compact: isCompact
+        )
     }
 
     /// Varied widths (audit UI-13): real content isn't two identical bars, so the
@@ -256,21 +260,10 @@ struct ProviderCardView: View {
     /// the ~20–30s first Claude poll so the delay feels intentional, not hung.
     private var pendingSkeleton: some View {
         VStack(alignment: .leading, spacing: 9) {
-            skeletonMeter(labelWidth: 72, valueWidth: 42)
-            skeletonMeter(labelWidth: 86, valueWidth: 36)
+            SkeletonMeter(labelWidth: 72, valueWidth: 42, compact: false)
+            SkeletonMeter(labelWidth: 86, valueWidth: 36, compact: false)
             Text("Fetching usage…")
                 .font(.caption2).foregroundStyle(.tertiary)
-        }
-    }
-
-    private func skeletonMeter(labelWidth: CGFloat, valueWidth: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: labelWidth, height: 13)
-                Spacer(minLength: 6)
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: valueWidth, height: 13)
-            }
-            Capsule().fill(ProviderStyle.barTrack(scheme: scheme)).frame(height: 8)
         }
     }
 
@@ -318,12 +311,11 @@ struct ProviderCardView: View {
 /// Kept intentionally smaller than the card header — accounts are siblings *within*
 /// a provider, one hierarchy step below the brand row.
 private struct AccountSectionView: View {
-    let providerID: ProviderID
     let entry: ProviderAccountEntry
     let percentageMode: UsagePercentageMode
     let now: Date
     let compact: Bool
-    let onRetrySetup: () -> Void
+    let onRetry: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
@@ -392,22 +384,14 @@ private struct AccountSectionView: View {
         .transition(.opacity)
     }
 
-    @ViewBuilder private func bars(dimmed: Bool) -> some View {
-        if snapshot.windows.isEmpty {
-            Text("No usage data").font(.caption).foregroundStyle(.secondary)
-        } else {
-            VStack(spacing: compact ? 7 : 9) {
-                ForEach(Array(snapshot.windows.enumerated()), id: \.offset) { _, window in
-                    UsageBarView(
-                        window: window,
-                        percentageMode: percentageMode,
-                        now: now,
-                        dimmed: dimmed,
-                        compact: compact
-                    )
-                }
-            }
-        }
+    private func bars(dimmed: Bool) -> some View {
+        UsageBarsStack(
+            windows: snapshot.windows,
+            percentageMode: percentageMode,
+            now: now,
+            dimmed: dimmed,
+            compact: compact
+        )
     }
 
     /// Permanent failure on one account: a single compact row — the reason, then the
@@ -424,7 +408,7 @@ private struct AccountSectionView: View {
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 6)
-                    Button("Check now") { onRetrySetup() }
+                    Button("Check now") { onRetry() }
                         .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(ClaudeSetupStyle.accentText(dark: scheme == .dark))
@@ -441,7 +425,7 @@ private struct AccountSectionView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 6)
                     Button {
-                        openSetup()
+                        SetupSessions.openSetup(for: account, onRetry: onRetry)
                     } label: {
                         Label("Sign in", systemImage: "terminal")
                             .font(.system(size: 11.5, weight: .semibold))
@@ -465,46 +449,66 @@ private struct AccountSectionView: View {
     }
 
     private var isWaitingForSetup: Bool {
-        switch providerID {
-        case .claude: ClaudeSetupSession.openedSetupAt(for: account.id) != nil
-        case .codex: CodexSetupSession.openedSetupAt(for: account.id) != nil
-        default: false
-        }
-    }
-
-    private func openSetup() {
-        switch providerID {
-        case .claude: ClaudeSetupSession.openSetup(for: account, onRetry: onRetrySetup)
-        case .codex: CodexSetupSession.openSetup(for: account, onRetry: onRetrySetup)
-        default: break
-        }
+        SetupSessions.isWaiting(for: account)
     }
 
     /// An account going live ends its handoff session and pending retries so the
     /// waiting row doesn't keep spinning (and retrying) after success.
     private func settleSetupIfLive() {
-        guard case .live = snapshot.freshness else { return }
-        switch providerID {
-        case .claude:
-            if ClaudeSetupSession.openedSetupAt(for: account.id) != nil {
-                ClaudeSetupSession.cancelRetries(for: account.id)
-                ClaudeSetupSession.setOpenedSetupAt(nil, for: account.id)
-            }
-        case .codex:
-            if CodexSetupSession.openedSetupAt(for: account.id) != nil {
-                CodexSetupSession.cancelRetries(for: account.id)
-                CodexSetupSession.setOpenedSetupAt(nil, for: account.id)
-            }
-        default: break
-        }
+        guard case .live = snapshot.freshness, SetupSessions.isWaiting(for: account) else { return }
+        SetupSessions.settle(for: account)
     }
 
     private var accountSkeleton: some View {
+        SkeletonMeter(labelWidth: 72, valueWidth: 38, compact: compact)
+    }
+}
+
+// MARK: - Shared meter building blocks
+
+/// One meter stack for every card body — single-account, multi-account, dimmed,
+/// compact. A single definition so the two render paths can never drift apart.
+struct UsageBarsStack: View {
+    let windows: [UsageWindow]
+    let percentageMode: UsagePercentageMode
+    let now: Date
+    let dimmed: Bool
+    let compact: Bool
+
+    var body: some View {
+        if windows.isEmpty {
+            Text("No usage data").font(.caption).foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: compact ? 7 : 9) {
+                ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
+                    UsageBarView(
+                        window: window,
+                        percentageMode: percentageMode,
+                        now: now,
+                        dimmed: dimmed,
+                        compact: compact
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// Varied-width placeholder meter (audit UI-13): previews the true row shape so the
+/// pending state reads intentional, not broken. Shared by both card paths.
+struct SkeletonMeter: View {
+    let labelWidth: CGFloat
+    let valueWidth: CGFloat
+    let compact: Bool
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: 72, height: compact ? 11 : 13)
+                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: labelWidth, height: compact ? 11 : 13)
                 Spacer(minLength: 6)
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: 38, height: compact ? 11 : 13)
+                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: valueWidth, height: compact ? 11 : 13)
             }
             Capsule().fill(ProviderStyle.barTrack(scheme: scheme)).frame(height: compact ? 6 : 8)
         }

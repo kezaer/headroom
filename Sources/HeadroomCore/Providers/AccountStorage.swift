@@ -62,9 +62,32 @@ public enum AccountStorage {
 
     /// Delete an extra account's config home (its CLI session/token included) after the
     /// account is removed from the registry. Built-in accounts are never touched — their
-    /// config belongs to the user's own CLI.
+    /// config belongs to the user's own CLI. The recursive delete runs off-main: a used
+    /// config home holds thousands of small CLI files and must not beachball the
+    /// Settings window (code-review finding).
     public static func removeDirectories(for account: ProviderAccount) {
         guard !account.isBuiltIn else { return }
-        try? FileManager.default.removeItem(at: accountDirectoryURL(for: account))
+        let url = accountDirectoryURL(for: account)
+        Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+}
+
+/// Injection seam for the account config-home file operations, so `UsageStore` unit
+/// tests never touch the real Application Support tree (AGENTS.md: the suite is all
+/// mocked — no CLI/network/Keychain/filesystem).
+public protocol AccountStorageManaging: Sendable {
+    func ensureDirectories(for account: ProviderAccount)
+    func removeDirectories(for account: ProviderAccount)
+}
+
+public struct DefaultAccountStorage: AccountStorageManaging {
+    public init() {}
+    public func ensureDirectories(for account: ProviderAccount) {
+        _ = try? AccountStorage.ensureDirectories(for: account)
+    }
+    public func removeDirectories(for account: ProviderAccount) {
+        AccountStorage.removeDirectories(for: account)
     }
 }
