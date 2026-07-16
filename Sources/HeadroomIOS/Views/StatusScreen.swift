@@ -4,6 +4,7 @@ struct StatusScreen: View {
     let title: String
     let message: String
     var isWaiting = false
+    var onExploreDemo: (() -> Void)?
     var onRefresh: () async -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -40,9 +41,18 @@ struct StatusScreen: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
             .disabled(isRefreshing)
+            if let onExploreDemo {
+                Button("Explore Demo", systemImage: "sparkles") {
+                    onExploreDemo()
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Shows sample usage without connecting a Mac or account")
+                .accessibilityIdentifier("headroom.demo.enter")
+            }
             Spacer(minLength: 36)
         }
         .padding(.horizontal, 32)
+        .frame(maxWidth: 520)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HeadroomTheme.backgroundView(scheme).ignoresSafeArea())
     }

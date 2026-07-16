@@ -30,6 +30,19 @@ struct HeadroomIOSWidgetView: View {
             stateContent
                 .padding(contentMargins)
         }
+        .overlay(alignment: .topTrailing) {
+            if isDemoMode {
+                Text("DEMO")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.tint, in: Capsule())
+                    .padding(contentMargins)
+                    .accessibilityLabel("Demo data")
+            }
+        }
         .containerBackground(for: .widget) {
             HeadroomWidgetContainerBackground()
         }
@@ -40,6 +53,8 @@ struct HeadroomIOSWidgetView: View {
     @ViewBuilder
     private var stateContent: some View {
         switch entry.state {
+        case .demo(let envelope):
+            content(envelope)
         case .content(let envelope):
             content(envelope)
         case .disabled:
@@ -53,6 +68,10 @@ struct HeadroomIOSWidgetView: View {
         case .incompatibleSchema:
             IOSWidgetStatusView(title: "Update Needed", message: "Update Headroom on both devices.")
         }
+    }
+
+    private var isDemoMode: Bool {
+        if case .demo = entry.state { true } else { false }
     }
 
     @ViewBuilder
@@ -133,7 +152,7 @@ struct HeadroomIOSWidgetView: View {
                 Spacer(minLength: 0)
                 mediumProviderColumns(envelope.providers)
                 Spacer(minLength: 0)
-                mediumFooter(generatedAt: envelope.generatedAt, prefix: "from Mac · ")
+                mediumFooter(generatedAt: envelope.generatedAt, prefix: freshnessPrefix)
             } else {
                 mediumProviderColumns(envelope.providers)
                 Spacer(minLength: 6)
@@ -233,7 +252,7 @@ struct HeadroomIOSWidgetView: View {
             }
             Spacer(minLength: 0)
             if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date) {
-                Text("from Mac · \(updated)")
+                Text("\(freshnessPrefix)\(updated)")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
                     .lineLimit(1)
@@ -298,5 +317,9 @@ struct HeadroomIOSWidgetView: View {
     private func percent(_ window: WidgetWindowSummary?) -> String {
         guard let window else { return "--" }
         return "\(Int(window.percentRemaining.rounded()))%"
+    }
+
+    private var freshnessPrefix: String {
+        isDemoMode ? "sample · " : "from Mac · "
     }
 }

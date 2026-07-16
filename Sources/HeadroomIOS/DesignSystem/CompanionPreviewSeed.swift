@@ -7,8 +7,22 @@ import Foundation
 /// whole file is compiled out of Release. Mirrors the reference screenshot (Claude Max,
 /// Codex Prolite) so the card styling can be reviewed against the approved mock.
 enum CompanionPreviewSeed {
+    enum UITestState: String {
+        case waiting
+        case content
+        case stale
+    }
+
     static var isEnabled: Bool {
         ProcessInfo.processInfo.environment["HEADROOM_PREVIEW"] == "1"
+    }
+
+    static var uiTestState: UITestState? {
+        ProcessInfo.processInfo.environment["HEADROOM_UI_TEST_STATE"].flatMap(UITestState.init(rawValue:))
+    }
+
+    static var shouldResetDemoForUITest: Bool {
+        ProcessInfo.processInfo.environment["HEADROOM_UI_TEST_RESET_DEMO"] == "1"
     }
 
     static func envelope(now: Date = Date()) -> WidgetSnapshotEnvelope {
@@ -88,6 +102,32 @@ enum CompanionPreviewSeed {
                 ),
             ]
         )
+    }
+
+    static func envelope(for state: UITestState, now: Date = Date()) -> WidgetSnapshotEnvelope? {
+        switch state {
+        case .waiting:
+            return nil
+        case .content:
+            return envelope(now: now)
+        case .stale:
+            let content = envelope(now: now)
+            return WidgetSnapshotEnvelope(
+                generatedAt: content.generatedAt,
+                status: content.status,
+                providers: content.providers.map { provider in
+                    WidgetProviderSummary(
+                        id: provider.id,
+                        displayName: provider.displayName,
+                        planLabel: provider.planLabel,
+                        freshness: .stale(message: "Using last snapshot", needsAttention: false),
+                        windows: provider.windows,
+                        renewalDate: provider.renewalDate
+                    )
+                },
+                apiSpendProviders: content.apiSpendProviders
+            )
+        }
     }
 }
 #endif

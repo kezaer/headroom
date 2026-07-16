@@ -7,7 +7,13 @@ struct IOSCompanionView: View {
     @State private var syncInfo: IOSCompanionSyncInfo?
     @State private var diagnostics: IOSSyncDiagnostics?
     @State private var showSettings = false
+    @State private var sessionDemoEnabled = false
+    @State private var demoWidgetUnavailable = false
+    @State private var didApplyUITestReset = false
+    @State private var suppressPersistedDemoForUITest = false
     @Environment(\.scenePhase) private var scenePhase
+
+    private let demoModeStore = CompanionDemoModeStore.appGroup()
 
     var body: some View {
         NavigationStack {
@@ -20,6 +26,7 @@ struct IOSCompanionView: View {
                             Image(systemName: "gearshape")
                         }
                         .accessibilityLabel("Settings")
+                        .accessibilityIdentifier("headroom.settings")
                     }
                 }
                 .sheet(isPresented: $showSettings) {
@@ -27,7 +34,12 @@ struct IOSCompanionView: View {
                         envelope: currentEnvelope,
                         syncInfo: syncInfo,
                         diagnostics: diagnostics,
-                        appearance: $appearance
+                        isDemoMode: isDemoMode,
+                        canExitDemo: canExitDemo,
+                        demoWidgetUnavailable: demoWidgetUnavailable,
+                        appearance: $appearance,
+                        onEnterDemo: enterDemo,
+                        onExitDemo: exitDemo
                     )
                 }
         }
@@ -46,33 +58,52 @@ struct IOSCompanionView: View {
     @ViewBuilder
     private var content: some View {
         switch state {
+        case .demo(let envelope):
+            MirrorView(
+                envelope: envelope,
+                syncInfo: nil,
+                diagnostics: diagnostics,
+                isDemoMode: true,
+                canExitDemo: canExitDemo,
+                demoWidgetUnavailable: demoWidgetUnavailable,
+                onExitDemo: exitDemo,
+                appearance: $appearance,
+                onRefresh: refresh
+            )
         case .content(let envelope):
             MirrorView(
                 envelope: envelope,
                 syncInfo: syncInfo,
                 diagnostics: diagnostics,
+                isDemoMode: false,
+                canExitDemo: false,
+                demoWidgetUnavailable: false,
+                onExitDemo: exitDemo,
                 appearance: $appearance,
                 onRefresh: refresh
             )
         case .disabled:
             StatusScreen(
-                title: "iPhone Sync Paused",
+                title: "Companion Sync Paused",
                 message: "Turn Sync snapshot to iPhone back on in Headroom Settings on your Mac.",
+                onExploreDemo: enterDemo,
                 onRefresh: refresh
             )
             .navigationTitle("Headroom")
         case .setupNeeded:
             StatusScreen(
                 title: "iCloud Not Available",
-                message: "Make sure iCloud is enabled for Headroom on this iPhone and your Mac.",
+                message: "Make sure iCloud is enabled for Headroom on this device and your Mac.",
+                onExploreDemo: enterDemo,
                 onRefresh: refresh
             )
             .navigationTitle("Headroom")
         case .waitingForMac:
             StatusScreen(
                 title: "Waiting for Mac",
-                message: "Open Headroom on your Mac to start syncing your usage to this iPhone.",
+                message: "Open Headroom on your Mac to start syncing your usage to this device.",
                 isWaiting: true,
+                onExploreDemo: enterDemo,
                 onRefresh: refresh
             )
             .navigationTitle("Headroom")
@@ -80,6 +111,7 @@ struct IOSCompanionView: View {
             StatusScreen(
                 title: "Snapshot Unreadable",
                 message: "Open Headroom on your Mac to publish a fresh snapshot.",
+                onExploreDemo: enterDemo,
                 onRefresh: refresh
             )
             .navigationTitle("Headroom")
@@ -87,6 +119,7 @@ struct IOSCompanionView: View {
             StatusScreen(
                 title: "Update Needed",
                 message: "Update Headroom on your Mac and iPhone so their snapshot formats match.",
+                onExploreDemo: enterDemo,
                 onRefresh: refresh
             )
             .navigationTitle("Headroom")
@@ -94,7 +127,18 @@ struct IOSCompanionView: View {
     }
 
     private var currentEnvelope: WidgetSnapshotEnvelope? {
-        if case .content(let envelope) = state { envelope } else { nil }
+        switch state {
+        case .content(let envelope), .demo(let envelope): envelope
+        default: nil
+        }
+    }
+
+    private var isDemoMode: Bool {
+        if case .demo = state { true } else { false }
+    }
+
+    private var canExitDemo: Bool {
+        isDemoMode && !DemoScreenshotData.isEnabled
     }
 
     private func refresh() async {
@@ -102,6 +146,37 @@ struct IOSCompanionView: View {
             try? await Task.sleep(for: .milliseconds(550))
         }
         #if DEBUG
+        if CompanionPreviewSeed.shouldResetDemoForUITest && !didApplyUITestReset {
+            sessionDemoEnabled = false
+            demoWidgetUnavailable = false
+            suppressPersistedDemoForUITest = true
+            demoModeStore.setEnabled(false)
+            didApplyUITestReset = true
+        }
+        #endif
+        if DemoScreenshotData.isEnabled
+            || sessionDemoEnabled
+            || (!suppressPersistedDemoForUITest && demoModeStore.isEnabled) {
+            // Demo state is resolved before cache/iCloud and never enters either persistence path.
+            state = .demo(DemoScreenshotData.envelope)
+            syncInfo = nil
+            diagnostics = IOSSyncDiagnostics(cacheGeneratedAt: nil, syncRead: .missing, origin: .demo)
+            await floor.value
+            return
+        }
+        #if DEBUG
+        if let uiTestState = CompanionPreviewSeed.uiTestState {
+            if let envelope = CompanionPreviewSeed.envelope(for: uiTestState, now: Date()) {
+                state = .content(envelope)
+                syncInfo = IOSCompanionSyncInfo(publishedAt: envelope.generatedAt, sourceID: "UI Test", sourcePlatform: .macOS)
+            } else {
+                state = .waitingForMac
+                syncInfo = nil
+            }
+            diagnostics = IOSSyncDiagnostics(cacheGeneratedAt: nil, syncRead: .missing, origin: nil)
+            await floor.value
+            return
+        }
         if CompanionPreviewSeed.isEnabled {
             let envelope = CompanionPreviewSeed.envelope(now: Date())
             state = .content(envelope)
@@ -113,13 +188,6 @@ struct IOSCompanionView: View {
             return
         }
         #endif
-        if DemoScreenshotData.isEnabled {
-            // Screenshot demo mode: show the fixed mirror snapshot directly, no iCloud round-trip.
-            state = .content(DemoScreenshotData.envelope)
-            syncInfo = IOSCompanionSyncInfo(publishedAt: Date(), sourceID: "Headroom", sourcePlatform: .macOS)
-            await floor.value
-            return
-        }
         let cache = WidgetSnapshotCache.appGroup()
         let sync = iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore())
         let read = sync.read()
@@ -151,6 +219,26 @@ struct IOSCompanionView: View {
             origin: resolution.origin
         )
         await floor.value
+    }
+
+    private func enterDemo() {
+        sessionDemoEnabled = true
+        let result = demoModeStore.setEnabled(true)
+        demoWidgetUnavailable = result == .unavailable
+        if result == .changed {
+            WidgetCenter.shared.reloadTimelines(ofKind: HeadroomIOSWidgetConfiguration.kind)
+        }
+        Task { await refresh() }
+    }
+
+    private func exitDemo() {
+        sessionDemoEnabled = false
+        demoWidgetUnavailable = false
+        let result = demoModeStore.setEnabled(false)
+        if result == .changed {
+            WidgetCenter.shared.reloadTimelines(ofKind: HeadroomIOSWidgetConfiguration.kind)
+        }
+        Task { await refresh() }
     }
 
     /// A remote snapshot is worth writing to the local cache when the cache holds nothing,

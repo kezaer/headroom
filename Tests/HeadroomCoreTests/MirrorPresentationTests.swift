@@ -71,6 +71,27 @@ struct MirrorPresentationTests {
         #expect(MirrorPresentation.showsLowChip(severity: .healthy, dimmed: false) == false)
     }
 
+    @Test func companionRendersEveryWindowRetainedByTheProjector() {
+        let fable = WidgetWindowSummary(
+            kind: .other("Weekly (Fable)"),
+            label: "Weekly (Fable)",
+            percentRemaining: 54,
+            resetsAt: now,
+            resetLabel: "Resets Jul 9",
+            severity: .healthy
+        )
+        let provider = WidgetProviderSummary(
+            id: "claude",
+            displayName: "Claude",
+            planLabel: "Max",
+            freshness: .live,
+            windows: [window(resetLabel: nil), fable],
+            renewalDate: nil
+        )
+
+        #expect(MirrorPresentation.windows(for: provider).map(\.label) == ["Session", "Weekly (Fable)"])
+    }
+
     private func window(
         resetLabel: String?,
         resetsAt: Date? = nil,

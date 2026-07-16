@@ -9,10 +9,8 @@ struct HeadroomIOSWidgets: WidgetBundle {
 }
 
 struct HeadroomIOSUsageWidget: Widget {
-    private let kind = "HeadroomIOSUnifiedUsageWidget"
-
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: HeadroomIOSTimelineProvider()) { entry in
+        StaticConfiguration(kind: HeadroomIOSWidgetConfiguration.kind, provider: HeadroomIOSTimelineProvider()) { entry in
             HeadroomIOSWidgetView(entry: entry)
         }
         .configurationDisplayName("Headroom")

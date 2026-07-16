@@ -30,6 +30,19 @@ public enum APISpendPresentation {
         }
     }
 
+    /// Companion rows follow the current macOS popover: the screen header owns the live
+    /// freshness stamp, while only pending/stale rows carry a secondary status line.
+    public static func companionStatusText(freshness: WidgetProviderFreshness) -> String? {
+        switch freshness {
+        case .pending:
+            "Waiting for cost data"
+        case .live:
+            nil
+        case .stale(_, let needsAttention):
+            needsAttention ? "Needs setup" : "Stale"
+        }
+    }
+
     public static func amountText(_ summary: WidgetAPISpendSummary) -> String? {
         amountText(amount: summary.amount, currency: summary.currency)
     }
