@@ -29,6 +29,32 @@ private struct NoopAccountStorage: AccountStorageManaging {
     func removeDirectories(for account: ProviderAccount) {}
 }
 
+private actor FetchConcurrencyProbe {
+    private var active = 0
+    private(set) var maximum = 0
+
+    func begin() {
+        active += 1
+        maximum = max(maximum, active)
+    }
+
+    func end() { active -= 1 }
+}
+
+private struct ProbedAccountProvider: UsageProvider {
+    let id: ProviderID
+    let accountID: AccountID
+    let displayName = "P"
+    let probe: FetchConcurrencyProbe
+
+    func fetchSnapshot() async -> UsageSnapshot {
+        await probe.begin()
+        try? await Task.sleep(for: .milliseconds(40))
+        await probe.end()
+        return .live(id, windows: [window(.weekly, used: 20)])
+    }
+}
+
 // MARK: - Registry
 
 @Suite struct AccountRegistryTests {
@@ -86,6 +112,35 @@ private struct NoopAccountStorage: AccountStorageManaging {
         let accounts = AccountRegistry(defaults: defaults).accounts(for: .claude)
         #expect(accounts[0].isBuiltIn)
         #expect(accounts[0].label == "Personal")
+    }
+
+    @Test func malformedPersistedCatalogIsCanonicalized() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        let duplicate = AccountID("work")
+        registry.seed([
+            ProviderAccount(id: duplicate, providerID: .claude, label: "Work"),
+            ProviderAccount(id: duplicate, providerID: .claude, label: "Duplicate"),
+            ProviderAccount(id: .primary, providerID: .claude, label: "Personal"),
+            ProviderAccount(id: AccountID("other-built-in"), providerID: .claude,
+                            label: "Wrong built-in", isBuiltIn: true),
+        ])
+
+        let accounts = registry.accounts(for: .claude)
+        #expect(accounts.map(\.id) == [.primary, duplicate])
+        #expect(accounts[0].isBuiltIn)
+        #expect(accounts[0].label == "Personal")
+        #expect(accounts[1].label == "Work")
+    }
+
+    @Test func storageComponentsCannotTraverseOutOfAccountRoot() {
+        #expect(AccountStorage.safePathComponent("../victim") == "%2E%2E%2Fvictim")
+        #expect(AccountStorage.safePathComponent("normal-id_1") == "normal-id_1")
+        let account = ProviderAccount(
+            id: AccountID("../victim"), providerID: ProviderID("../../provider"), label: "Bad"
+        )
+        let base = AccountStorage.baseDirectoryURL.standardizedFileURL.path + "/"
+        let resolved = AccountStorage.accountDirectoryURL(for: account).standardizedFileURL.path
+        #expect(resolved.hasPrefix(base))
     }
 }
 
@@ -312,6 +367,31 @@ private struct NoopAccountStorage: AccountStorageManaging {
         // The targeted account is live; its sibling was never fetched and stays pending.
         #expect(store.snapshot(for: workKey).freshness == .live)
         #expect(store.snapshot(for: AccountKey(providerID: .claude, accountID: .primary)).freshness == .pending)
+    }
+
+    @Test func claudeAccountProbesAreSequenced() async {
+        let probe = FetchConcurrencyProbe()
+        let accountIDs: [AccountID] = [.primary, AccountID("work"), AccountID("client")]
+        let accounts = accountIDs.enumerated().map { index, id in
+            ProviderAccount(
+                id: id, providerID: .claude, label: index == 0 ? "Main" : "Account \(index + 1)",
+                isBuiltIn: index == 0
+            )
+        }
+        let store = UsageStore(
+            providers: accountIDs.map {
+                ProbedAccountProvider(id: .claude, accountID: $0, probe: probe)
+            },
+            preferences: Preferences(defaults: freshDefaults()),
+            accounts: accounts
+        )
+
+        await store.refreshAll()
+
+        #expect(await probe.maximum == 1)
+        #expect(accountIDs.allSatisfy {
+            store.snapshot(for: AccountKey(providerID: .claude, accountID: $0)).freshness == .live
+        })
     }
 
     @Test func widgetExportUsesPrimaryAccountOnly() async {

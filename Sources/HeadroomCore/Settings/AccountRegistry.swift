@@ -21,8 +21,22 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
     /// after upgrade needs no migration step.
     public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
         let stored = load().filter { $0.providerID == providerID }
-        if stored.contains(where: { $0.isBuiltIn }) { return ordered(stored) }
-        return ordered([.builtIn(for: providerID)] + stored)
+        // Treat persisted metadata as untrusted input: older builds, manual defaults
+        // edits, or a torn write must not create duplicate rows or multiple built-ins.
+        // Rebuild the provider slice in its canonical order while preserving the
+        // stored creation order of valid extras.
+        let persistedBuiltIn = stored.first { $0.isBuiltIn || $0.id == .primary }
+        let builtIn = persistedBuiltIn.map {
+            ProviderAccount(id: .primary, providerID: providerID, label: $0.label, isBuiltIn: true)
+        } ?? .builtIn(for: providerID)
+        var seen: Set<AccountID> = [.primary]
+        let extras = stored.compactMap { account -> ProviderAccount? in
+            guard !account.isBuiltIn, account.id != .primary,
+                  seen.insert(account.id).inserted
+            else { return nil }
+            return account
+        }
+        return Array(([builtIn] + extras).prefix(Self.maxPerProvider))
     }
 
     public func canAddAccount(for providerID: ProviderID) -> Bool {
@@ -89,13 +103,6 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
             all.append(.builtIn(for: providerID))
         }
         return all
-    }
-
-    private func ordered(_ accounts: [ProviderAccount]) -> [ProviderAccount] {
-        accounts.sorted { a, b in
-            if a.isBuiltIn != b.isBuiltIn { return a.isBuiltIn }
-            return false // stable: keeps stored (creation) order for extras
-        }
     }
 
     private func normalizedLabel(_ label: String?) -> String? {

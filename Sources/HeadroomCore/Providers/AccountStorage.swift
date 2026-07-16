@@ -21,8 +21,19 @@ public enum AccountStorage {
 
     public static func accountDirectoryURL(for account: ProviderAccount) -> URL {
         baseDirectoryURL
-            .appendingPathComponent(account.providerID.raw, isDirectory: true)
-            .appendingPathComponent(account.id.raw, isDirectory: true)
+            .appendingPathComponent(safePathComponent(account.providerID.raw), isDirectory: true)
+            .appendingPathComponent(safePathComponent(account.id.raw), isDirectory: true)
+    }
+
+    /// Encode arbitrary persisted identifiers into one literal filesystem component.
+    /// Production IDs are UUIDs and pass through unchanged; encoding keeps malformed
+    /// metadata such as `..` or `a/b` contained beneath the Accounts directory.
+    static func safePathComponent(_ raw: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".utf8)
+        guard !raw.isEmpty else { return "%00" }
+        return raw.utf8.map { byte in
+            allowed.contains(byte) ? String(UnicodeScalar(byte)) : String(format: "%%%02X", byte)
+        }.joined()
     }
 
     /// `CLAUDE_CONFIG_DIR` for an extra Claude account.

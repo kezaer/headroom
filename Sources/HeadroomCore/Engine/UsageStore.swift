@@ -435,14 +435,29 @@ public final class UsageStore {
     }
 
     private func refreshSubscriptions(source: RefreshSource = .manual, exportAfter: Bool = true) async {
-        let results = await withTaskGroup(of: (AccountKey, UsageSnapshot).self) { group in
-            for provider in providers {
-                guard enabledSurfaces.contains(subscriptionSurface(for: provider.id)) else { continue }
-                guard !shouldSkipOnTimer(provider: provider, source: source) else { continue }
-                group.addTask { (provider.accountKey, await provider.fetchSnapshot()) }
+        let candidates = providers.filter { provider in
+            enabledSurfaces.contains(subscriptionSurface(for: provider.id))
+                && !shouldSkipOnTimer(provider: provider, source: source)
+        }
+        let results = await withTaskGroup(of: [(AccountKey, UsageSnapshot)].self) { group in
+            // Each Claude fetch owns a full interactive CLI/PTY process for up to 30s.
+            // Sequence those probes so five configured accounts cannot create a process
+            // storm. Other providers remain concurrent with that serial Claude lane.
+            let claudeProviders = candidates.filter { $0.id == .claude }
+            if !claudeProviders.isEmpty {
+                group.addTask {
+                    var results: [(AccountKey, UsageSnapshot)] = []
+                    for provider in claudeProviders {
+                        results.append((provider.accountKey, await provider.fetchSnapshot()))
+                    }
+                    return results
+                }
+            }
+            for provider in candidates where provider.id != .claude {
+                group.addTask { [(provider.accountKey, await provider.fetchSnapshot())] }
             }
             var acc: [(AccountKey, UsageSnapshot)] = []
-            for await pair in group { acc.append(pair) }
+            for await batch in group { acc.append(contentsOf: batch) }
             return acc
         }
         for (key, fresh) in results { merge(key: key, fresh: fresh) }

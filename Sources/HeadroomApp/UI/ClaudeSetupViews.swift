@@ -124,7 +124,12 @@ enum ClaudeSetupSession {
             """
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
-            NSWorkspace.shared.open(scriptURL)
+            guard NSWorkspace.shared.open(scriptURL) else {
+                setOpenedSetupAt(nil, for: account.id)
+                cancelRetries(for: account.id)
+                copyCommand(for: account)
+                return
+            }
             scheduleRetries(for: account.id, onRetry)
         } catch {
             // Failed to stage the handoff: clear the waiting flag (no Terminal ever
