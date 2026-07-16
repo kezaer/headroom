@@ -7,8 +7,16 @@
 /// `Sendable` because the engine fetches providers concurrently (KTD10).
 public protocol UsageProvider: Sendable {
     var id: ProviderID { get }
+    /// Which configured account this instance fetches for. Defaults to `.primary` so
+    /// single-account providers (and tests) don't have to know accounts exist.
+    var accountID: AccountID { get }
     var displayName: String { get }
     func fetchSnapshot() async -> UsageSnapshot
+}
+
+public extension UsageProvider {
+    var accountID: AccountID { .primary }
+    var accountKey: AccountKey { AccountKey(providerID: id, accountID: accountID) }
 }
 
 /// Money-based API cost providers are intentionally separate from subscription quota

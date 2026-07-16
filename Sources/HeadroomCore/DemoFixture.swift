@@ -103,11 +103,13 @@ public enum DemoFixture {
 /// A `UsageProvider` that returns a fixed snapshot — screenshot demo mode only.
 public struct DemoUsageProvider: UsageProvider {
     public let id: ProviderID
+    public let accountID: AccountID
     public let displayName: String
     private let snapshot: UsageSnapshot
 
-    public init(id: ProviderID, displayName: String, snapshot: UsageSnapshot) {
+    public init(id: ProviderID, displayName: String, snapshot: UsageSnapshot, accountID: AccountID = .primary) {
         self.id = id
+        self.accountID = accountID
         self.displayName = displayName
         self.snapshot = snapshot
     }

@@ -101,6 +101,7 @@ struct SettingsView: View {
             menuBarTile
             widgetsTile
             subscriptionTile
+            AccountsSettingsTile(store: store)
             apiSpendTile
         }
     }

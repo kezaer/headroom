@@ -144,6 +144,28 @@ struct ClaudeProviderTests {
         #expect(reason.isPermanent)    // needsReauth
     }
 
+    @Test func loginRequiredResultReadsAsNeedsSignIn() async {
+        // A fresh CLAUDE_CONFIG_DIR (extra account before its first sign-in) boots into
+        // a first-run screen; the probe bails there before typing (an Enter on the
+        // login selector would start a browser sign-in) and types the result. Must be
+        // permanent — a transient blip would hide the account's Sign in affordance.
+        let snap = await provider(.loginRequired).fetchSnapshot()
+        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
+        #expect(reason.isPermanent)
+    }
+
+    @Test func probeClassifiesFirstRunScreens() {
+        #expect(ClaudeUsageCLIProbe.isFirstRunScreen("Welcome!\nChoose the text style that looks best with your terminal"))
+        #expect(ClaudeUsageCLIProbe.isFirstRunScreen("Select login method: 1. Claude account with subscription"))
+        #expect(!ClaudeUsageCLIProbe.isFirstRunScreen("Current session\n38% used\nResets 2:15pm"))
+    }
+
+    @Test func loginMethodSelectorReadsAsNeedsSignIn() async {
+        let snap = await provider(.panel("Select login method: 1. Claude account with subscription")).fetchSnapshot()
+        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
+        #expect(reason.isPermanent)
+    }
+
     @Test func trustPromptAsksUserToOpenClaude() async {
         let snap = await provider(.panel("Quick safety check: Is this a project you created or one you trust?")).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }

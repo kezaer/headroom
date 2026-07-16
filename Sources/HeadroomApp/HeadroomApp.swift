@@ -36,11 +36,25 @@ enum Entry {
             let path = ClaudeUsageCLIProbe.resolveClaudePath() ?? "(not found)"
             print("claude path: \(path)")
             print("working directory: \(claudeWorkingDirectory())")
-            switch await ClaudeUsageCLIProbe(workingDirectory: claudeWorkingDirectory()).capturePanel() {
+            // `--claude-config <dir>`: probe an alternate account home (multi-account
+            // diagnostic) — exercises the same CLAUDE_CONFIG_DIR override the extra
+            // accounts use in production.
+            var overrides: [String: String] = [:]
+            if let flagIndex = CommandLine.arguments.firstIndex(of: "--claude-config"),
+               CommandLine.arguments.indices.contains(flagIndex + 1) {
+                overrides["CLAUDE_CONFIG_DIR"] = CommandLine.arguments[flagIndex + 1]
+                print("CLAUDE_CONFIG_DIR: \(CommandLine.arguments[flagIndex + 1])")
+            }
+            switch await ClaudeUsageCLIProbe(
+                workingDirectory: claudeWorkingDirectory(),
+                environmentOverrides: overrides
+            ).capturePanel() {
             case .cliNotFound:
                 print("RESULT: CLI not found")
             case .failed:
                 print("RESULT: capture failed (no panel text)")
+            case .loginRequired:
+                print("RESULT: login required (first-run screen — no account signed into this config home)")
             case .panel(let text):
                 let windows = ClaudeUsageParser.parse(text)
                 print("RESULT: captured panel (\(text.count) chars), parsed \(windows.count) window(s):")
@@ -351,10 +365,13 @@ enum AppComposition {
     static func store(preferences: Preferences = Preferences()) -> UsageStore {
         if DemoFixture.isEnabled { return demoStore() }
         let credentials = CredentialStore()
+        let registry = AccountRegistry()
         return UsageStore(
-            providers: providers(credentials: credentials),
+            providers: providers(credentials: credentials, registry: registry),
             apiSpendProviders: apiSpendProviders(credentials: credentials),
             preferences: preferences,
+            accountRegistry: registry,
+            providerFactory: { account in provider(for: account, credentials: credentials) },
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
         )
@@ -390,15 +407,43 @@ enum AppComposition {
         )
     }
 
-    static func providers() -> [any UsageProvider] {
-        providers(credentials: CredentialStore())
+    /// One provider instance per configured account, in registry order (built-in first).
+    @MainActor
+    private static func providers(credentials: CredentialStore, registry: AccountRegistry) -> [any UsageProvider] {
+        [ProviderID.claude, .codex].flatMap { id in
+            registry.accounts(for: id).map { provider(for: $0, credentials: credentials) }
+        }
     }
 
-    private static func providers(credentials: CredentialStore) -> [any UsageProvider] {
-        return [
-            ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory())),
-            CodexProvider(credentials: credentials), // reads ~/.codex/auth.json + wham/usage
-        ]
+    /// The concrete provider for one account. Built-in accounts read the CLI's default
+    /// config (`~/.claude` / `~/.codex`) exactly as before; extra accounts route the
+    /// same compliant paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
+    /// `CODEX_HOME`) that the user signed into via the official CLI.
+    @MainActor
+    static func provider(for account: ProviderAccount, credentials: CredentialStore) -> any UsageProvider {
+        switch account.providerID {
+        case .codex:
+            guard !account.isBuiltIn else {
+                return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
+            }
+            let reader = CodexAuthFileReader(path: AccountStorage.codexAuthFileURL(for: account))
+            return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
+        default: // .claude
+            // ProviderID is open by design (R13); a third provider must register its
+            // own account factory here, never fall through to a Claude probe.
+            assert(account.providerID == .claude, "No account provider registered for \(account.providerID)")
+            guard !account.isBuiltIn else {
+                return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory()))
+            }
+            _ = try? AccountStorage.ensureDirectories(for: account)
+            return ClaudeProvider(
+                source: ClaudeUsageCLIProbe(
+                    workingDirectory: AccountStorage.claudeWorkspaceDirectoryURL(for: account).path,
+                    environmentOverrides: ["CLAUDE_CONFIG_DIR": AccountStorage.claudeConfigDirectoryURL(for: account).path]
+                ),
+                accountID: account.id
+            )
+        }
     }
 
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {

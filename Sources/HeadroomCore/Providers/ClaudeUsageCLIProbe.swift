@@ -13,6 +13,10 @@ public protocol ClaudeUsageSource: Sendable {
 /// transient read failure so it can show the right degrade message.
 public enum ClaudePanelResult: Sendable, Equatable {
     case panel(String)
+    /// The CLI booted into a first-run screen (theme picker / login-method selector) —
+    /// this config home has no signed-in account. Typed here, at the layer that saw
+    /// the screen, so the provider never re-derives it from marker strings.
+    case loginRequired
     case cliNotFound
     case failed
 }
@@ -30,17 +34,23 @@ public enum ClaudePanelResult: Sendable, Equatable {
 public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     public let claudePath: String?
     public let workingDirectory: String
+    /// Extra environment applied over the inherited env — how additional accounts
+    /// route the CLI at their own config home (`CLAUDE_CONFIG_DIR`). Empty for the
+    /// built-in account, which uses the user's default `~/.claude` login.
+    public let environmentOverrides: [String: String]
     public let bootTimeout: TimeInterval
     public let panelTimeout: TimeInterval
 
     public init(
         claudePath: String? = ClaudeUsageCLIProbe.resolveClaudePath(),
         workingDirectory: String = FileManager.default.currentDirectoryPath,
+        environmentOverrides: [String: String] = [:],
         bootTimeout: TimeInterval = 30,
         panelTimeout: TimeInterval = 26
     ) {
         self.claudePath = claudePath
         self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
         self.bootTimeout = bootTimeout
         self.panelTimeout = panelTimeout
     }
@@ -51,17 +61,22 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         }
         // Run the blocking pty work off the cooperative pool.
         return await withCheckedContinuation { continuation in
-            Thread.detachNewThread {
+            Thread.detachNewThread { [environmentOverrides] in
                 let raw = Self.runBlocking(
                     claudePath: claudePath,
                     workingDirectory: workingDirectory,
+                    environmentOverrides: environmentOverrides,
                     boot: bootTimeout,
                     panel: panelTimeout
                 )
                 guard let raw, !raw.isEmpty else {
                     continuation.resume(returning: .failed); return
                 }
-                continuation.resume(returning: .panel(ANSI.strip(raw)))
+                let stripped = ANSI.strip(raw)
+                if Self.isFirstRunScreen(stripped) {
+                    continuation.resume(returning: .loginRequired); return
+                }
+                continuation.resume(returning: .panel(stripped))
             }
         }
     }
@@ -90,6 +105,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     private static func runBlocking(
         claudePath: String,
         workingDirectory: String,
+        environmentOverrides: [String: String],
         boot: TimeInterval,
         panel: TimeInterval
     ) -> String? {
@@ -129,6 +145,8 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         envDict["LANG"] = envDict["LANG"] ?? "en_US.UTF-8"
         envDict["PATH"] = loginPath()
         envDict["PWD"] = workingDirectory
+        // Applied last so an account's CLAUDE_CONFIG_DIR always wins over any inherited value.
+        for (key, value) in environmentOverrides { envDict[key] = value }
         let env = envDict.map { "\($0.key)=\($0.value)" }
         var pid: pid_t = 0
         let argv = [claudePath]
@@ -162,10 +180,20 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         var buffer = Data()
         drain(master: master, maxSeconds: boot, quiet: 2.5, into: &buffer) // boot + prompt
-        if let bootText = String(data: buffer, encoding: .utf8),
-           ANSI.strip(bootText).localizedCaseInsensitiveContains("Quick safety check") {
-            teardown()
-            return bootText
+        if let bootText = String(data: buffer, encoding: .utf8) {
+            let stripped = ANSI.strip(bootText)
+            if stripped.localizedCaseInsensitiveContains("Quick safety check") {
+                teardown()
+                return bootText
+            }
+            // First-run screens (fresh CLAUDE_CONFIG_DIR on an extra account): theme
+            // picker and the login-method selector. Bail before typing — an Enter on the
+            // login selector *starts a browser sign-in*, which a background poll must
+            // never do. `capturePanel` types the returned text as `.loginRequired`.
+            if isFirstRunScreen(stripped) {
+                teardown()
+                return bootText
+            }
         }
         usleep(800_000) // let the input box settle before typing
         _ = "/usage".withCString { write(master, $0, strlen($0)) }
@@ -185,6 +213,14 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         teardown()
 
         return String(data: buffer, encoding: .utf8) ?? String(decoding: buffer, as: UTF8.self)
+    }
+
+    /// The one marker list for the CLI's first-run screens — shared by the boot bail
+    /// (don't type into them) and the result typing (classify as `.loginRequired`),
+    /// so the two can never drift apart.
+    static func isFirstRunScreen(_ strippedText: String) -> Bool {
+        strippedText.localizedCaseInsensitiveContains("Select login method")
+            || strippedText.localizedCaseInsensitiveContains("Choose the text style")
     }
 
     /// Read from the pty until `quiet` seconds pass with no new bytes, or `maxSeconds`

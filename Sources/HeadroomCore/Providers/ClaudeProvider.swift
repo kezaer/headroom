@@ -6,6 +6,7 @@ import Foundation
 /// a missing CLI or unreadable panel degrades to a typed stale state (KTD7).
 public struct ClaudeProvider: UsageProvider {
     public let id = ProviderID.claude
+    public let accountID: AccountID
     public let displayName = "Claude"
 
     private let source: ClaudeUsageSource
@@ -13,9 +14,11 @@ public struct ClaudeProvider: UsageProvider {
 
     public init(
         source: ClaudeUsageSource = ClaudeUsageCLIProbe(),
+        accountID: AccountID = .primary,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.source = source
+        self.accountID = accountID
         self.now = now
     }
 
@@ -23,6 +26,8 @@ public struct ClaudeProvider: UsageProvider {
         switch await source.capturePanel() {
         case .cliNotFound:
             return stale(.notLoggedIn("Install Claude Code to show usage"))
+        case .loginRequired:
+            return stale(.needsReauth("Run `claude` and log in"))
         case .failed:
             return stale(.transient("Couldn't read Claude usage — will retry"))
         case .panel(let text):
@@ -33,6 +38,8 @@ public struct ClaudeProvider: UsageProvider {
                     return stale(.needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
                 }
                 // Panel captured but no windows found: most often "not logged in".
+                // (First-run screens arrive typed as `.loginRequired`; this string
+                // check covers logged-out wording inside an otherwise normal session.)
                 if text.lowercased().contains("log in") || text.lowercased().contains("login") {
                     return stale(.needsReauth("Run `claude` and log in"))
                 }
