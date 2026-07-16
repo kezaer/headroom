@@ -172,10 +172,22 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         var buffer = Data()
         drain(master: master, maxSeconds: boot, quiet: 2.5, into: &buffer) // boot + prompt
-        if let bootText = String(data: buffer, encoding: .utf8),
-           ANSI.strip(bootText).localizedCaseInsensitiveContains("Quick safety check") {
-            teardown()
-            return bootText
+        if let bootText = String(data: buffer, encoding: .utf8) {
+            let stripped = ANSI.strip(bootText)
+            if stripped.localizedCaseInsensitiveContains("Quick safety check") {
+                teardown()
+                return bootText
+            }
+            // First-run screens (fresh CLAUDE_CONFIG_DIR on an extra account): theme
+            // picker and the login-method selector. Bail before typing — an Enter on the
+            // login selector *starts a browser sign-in*, which a background poll must
+            // never do. The returned text carries the login markers, so the provider
+            // degrades to the typed needs-sign-in state.
+            if stripped.localizedCaseInsensitiveContains("Select login method")
+                || stripped.localizedCaseInsensitiveContains("Choose the text style") {
+                teardown()
+                return bootText
+            }
         }
         usleep(800_000) // let the input box settle before typing
         _ = "/usage".withCString { write(master, $0, strlen($0)) }

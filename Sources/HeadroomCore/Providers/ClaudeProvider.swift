@@ -36,7 +36,11 @@ public struct ClaudeProvider: UsageProvider {
                     return stale(.needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
                 }
                 // Panel captured but no windows found: most often "not logged in".
-                if text.lowercased().contains("log in") || text.lowercased().contains("login") {
+                // "Choose the text style" is the fresh-config first-run screen (extra
+                // accounts before their first sign-in) — the probe bails there before
+                // typing, so it reaches us with no login wording of its own.
+                if text.lowercased().contains("log in") || text.lowercased().contains("login")
+                    || text.localizedCaseInsensitiveContains("Choose the text style") {
                     return stale(.needsReauth("Run `claude` and log in"))
                 }
                 return stale(.transient("Couldn't read Claude usage — will retry"))

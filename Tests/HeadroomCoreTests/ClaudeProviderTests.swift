@@ -144,6 +144,22 @@ struct ClaudeProviderTests {
         #expect(reason.isPermanent)    // needsReauth
     }
 
+    @Test func firstRunThemePickerReadsAsNeedsSignIn() async {
+        // A fresh CLAUDE_CONFIG_DIR (extra account before its first sign-in) boots into
+        // the theme picker; the probe bails there before typing (an Enter on the next
+        // screen would start a browser sign-in). Must classify as permanent sign-in
+        // needed — not a transient blip that hides the account's Sign in affordance.
+        let snap = await provider(.panel("Welcome to Claude Code\nChoose the text style that looks best with your terminal")).fetchSnapshot()
+        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
+        #expect(reason.isPermanent)
+    }
+
+    @Test func loginMethodSelectorReadsAsNeedsSignIn() async {
+        let snap = await provider(.panel("Select login method: 1. Claude account with subscription")).fetchSnapshot()
+        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
+        #expect(reason.isPermanent)
+    }
+
     @Test func trustPromptAsksUserToOpenClaude() async {
         let snap = await provider(.panel("Quick safety check: Is this a project you created or one you trust?")).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }

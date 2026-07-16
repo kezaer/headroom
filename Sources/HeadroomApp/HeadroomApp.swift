@@ -36,7 +36,19 @@ enum Entry {
             let path = ClaudeUsageCLIProbe.resolveClaudePath() ?? "(not found)"
             print("claude path: \(path)")
             print("working directory: \(claudeWorkingDirectory())")
-            switch await ClaudeUsageCLIProbe(workingDirectory: claudeWorkingDirectory()).capturePanel() {
+            // `--claude-config <dir>`: probe an alternate account home (multi-account
+            // diagnostic) — exercises the same CLAUDE_CONFIG_DIR override the extra
+            // accounts use in production.
+            var overrides: [String: String] = [:]
+            if let flagIndex = CommandLine.arguments.firstIndex(of: "--claude-config"),
+               CommandLine.arguments.indices.contains(flagIndex + 1) {
+                overrides["CLAUDE_CONFIG_DIR"] = CommandLine.arguments[flagIndex + 1]
+                print("CLAUDE_CONFIG_DIR: \(CommandLine.arguments[flagIndex + 1])")
+            }
+            switch await ClaudeUsageCLIProbe(
+                workingDirectory: claudeWorkingDirectory(),
+                environmentOverrides: overrides
+            ).capturePanel() {
             case .cliNotFound:
                 print("RESULT: CLI not found")
             case .failed:
