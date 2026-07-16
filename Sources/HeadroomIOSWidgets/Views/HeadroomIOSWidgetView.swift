@@ -28,7 +28,7 @@ struct HeadroomIOSWidgetView: View {
                 HeadroomWidgetContainerBackground()
             }
             stateContent
-                .padding(contentMargins)
+                .padding(expandedContentMargins)
         }
         .overlay(alignment: .topTrailing) {
             if isDemoMode {
@@ -48,6 +48,19 @@ struct HeadroomIOSWidgetView: View {
         }
         .widgetURL(URL(string: "headroom://usage"))
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+    }
+
+    /// WidgetKit's stock margins are deliberately generous. Reclaim four points on the
+    /// top and horizontal edges so the usage cards occupy more of the iPhone widget while
+    /// preserving the system bottom inset for the trailing freshness label.
+    private var expandedContentMargins: EdgeInsets {
+        let reduction: CGFloat = 4
+        return EdgeInsets(
+            top: max(0, contentMargins.top - reduction),
+            leading: max(0, contentMargins.leading - reduction),
+            bottom: contentMargins.bottom,
+            trailing: max(0, contentMargins.trailing - reduction)
+        )
     }
 
     @ViewBuilder
@@ -225,7 +238,9 @@ struct HeadroomIOSWidgetView: View {
                 }
             }
             HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", compact: true)
-            HeadroomWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", compact: true)
+            if let fiveHourWindow = window(.fiveHour, in: provider) {
+                HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", compact: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -269,7 +284,9 @@ struct HeadroomIOSWidgetView: View {
         VStack(alignment: .leading, spacing: 9) {
             largeSectionHeader(provider)
             HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, prominent: true)
-            HeadroomWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
+            if let fiveHourWindow = window(.fiveHour, in: provider) {
+                HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
