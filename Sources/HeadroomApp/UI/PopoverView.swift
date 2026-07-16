@@ -28,6 +28,12 @@ struct PopoverView: View {
     /// Content extends past the scroll cap and isn't scrolled to the bottom — gates
     /// the bottom fade so it never softens a fully visible last card.
     @State private var scrollContinuesBelow = false
+    /// Measured height of the card stack. `MenuBarExtra(.window)` sizes its window to the
+    /// content's ideal height, and a `ScrollView` has no ideal height of its own — left to
+    /// self-size it collapsed to zero and the popover opened at 127pt with no cards
+    /// (`maxHeight` only sets a ceiling, never a floor). Measuring the stack and pinning an
+    /// explicit height is what keeps the window honest; the cap still applies above it.
+    @State private var cardsHeight: CGFloat = 0
 
     private static let titleFont = NSFont.systemFont(ofSize: 20, weight: .bold)
     private static let statusFont = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
@@ -41,7 +47,7 @@ struct PopoverView: View {
                     // each other.
                     .padding(.bottom, -6)
                 // Cards scroll once many accounts push past a comfortable popover
-                // height; below the cap the ScrollView sizes to its content, so the
+                // height; below the cap the height tracks the measured stack, so the
                 // common case is untouched. Header and footer stay pinned.
                 ScrollView(.vertical) {
                     VStack(spacing: 20) {
@@ -64,6 +70,10 @@ struct PopoverView: View {
                         }
                         APISpendSectionView(store: store, now: context.date, onOpenSettings: openSettingsDismissingPopover)
                     }
+                    // Scroll content is laid out at its ideal height regardless of the
+                    // ScrollView's own frame, so this reports the true stack height even
+                    // on the first pass while the frame below is still zero.
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardsHeight = $0 }
                 }
                 .scrollIndicators(.automatic)
                 .scrollBounceBehavior(.basedOnSize)
@@ -87,7 +97,7 @@ struct PopoverView: View {
                     }
                 }
                 .animation(reduceMotion ? nil : HeadroomMotion.settle, value: scrollContinuesBelow)
-                .frame(maxHeight: 640)
+                .frame(height: min(cardsHeight, 640))
                 footer
             }
             // One quick content fade on open — no per-row stagger or vertical travel.
