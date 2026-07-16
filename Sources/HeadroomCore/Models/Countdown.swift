@@ -28,9 +28,9 @@ public enum Countdown {
     /// Deliberately derives from `resetsAt` instead of `resetLabel`, so Claude and Codex
     /// use the same compact relative grammar while source labels remain available to
     /// diagnostics and snapshot consumers.
-    public static func resetText(for window: UsageWindow, now: Date) -> String {
-        guard window.resetsAt > now else { return "Resets now" }
-        return "Resets in \(string(to: window.resetsAt, now: now))"
+    public static func resetText(resetsAt: Date, now: Date) -> String {
+        guard resetsAt > now else { return "Resets now" }
+        return "Resets in \(string(to: resetsAt, now: now))"
     }
 
     /// Relative "updated" label for a captured snapshot, e.g. "just now",
