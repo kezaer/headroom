@@ -21,6 +21,12 @@ struct APISpendPresentationTests {
         #expect(APISpendPresentation.amountText(amount: 12.3, currency: nil) == nil)
     }
 
+    @Test func addCreditsURLTargetsProviderBillingPages() {
+        #expect(APISpendPresentation.addCreditsURL(for: .claude)?.absoluteString == "https://platform.claude.com/settings/billing")
+        #expect(APISpendPresentation.addCreditsURL(for: .codex)?.absoluteString == "https://platform.openai.com/settings/organization/billing/overview")
+        #expect(APISpendPresentation.addCreditsURL(for: ProviderID("someday")) == nil)
+    }
+
     @Test func statusTextUsesFreshness() {
         #expect(APISpendPresentation.statusText(freshness: WidgetProviderFreshness.pending, capturedAt: nil, now: now) == "Waiting for cost data")
         #expect(APISpendPresentation.statusText(freshness: WidgetProviderFreshness.live, capturedAt: now.addingTimeInterval(-60), now: now) == "Updated 1 min ago")
