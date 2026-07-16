@@ -12,6 +12,32 @@ official `claude` CLI's `/usage` panel instead.
   the signed-in account email and organization name before the `/usage` content. Redact
   email/organization strings before printing or make raw output an explicit opt-in that
   warns about PII; never include the raw preview in shared logs.
+- **The per-model weekly row ("Weekly (Fable)") disappeared from `/usage` — source-side, not
+  a parser bug (2026-07-16).** The panel now emits only `Current session` and
+  `Current week (all models)`, followed by a new "What's contributing to your limits usage?"
+  attribution section. `ClaudeUsageParser` is **correct and unchanged** — `parsesSettledWindows`
+  still passes against a fixture containing `Current week (Fable)` → `.other("Weekly (Fable)")`,
+  so the meter will light back up on its own if the line returns. Don't "fix" the parser.
+  - **The limit still exists.** claude.ai shows Weekly limits → All models 1%, Fable 1%,
+    both resetting Thu 9:59 AM, matching the CLI's session 61% / all-models 1% exactly. So
+    this is not a low-usage or fresh-week-reset artifact.
+  - **It's server-side; downgrading is not a workaround.** Verified against all three cached
+    binaries (2.1.209 / 2.1.210 / 2.1.211, each confirmed by its version banner) — none emit
+    the row. 2.1.210 is what was running when the meter last worked, and it doesn't produce
+    the row now either, so the client is not the variable. Also ruled out: model selection
+    (forcing `ANTHROPIC_MODEL=claude-fable-5` changes nothing but the header) and viewport
+    truncation (tested 24×80, 45×140, 100×200 — the tall run captures well past the `↓` fold
+    and still has no Fable row; the only "Fable" string anywhere is the model name in the
+    banner).
+  - **No alternate CLI surface exists.** There is no `claude usage` subcommand and no JSON
+    output for limits; the interactive `/usage` panel is the only source. The only way to
+    recover the value would be the usage endpoint / claude.ai session directly — prohibited
+    and server-side-blocked (see the hard constraint in AGENTS.md). Not an option.
+  - **Open product question:** the row currently just vanishes silently, which reads as a
+    Headroom bug to users (independently reported by a second user). Decide whether to
+    surface "unavailable" or stay silent. Possibly moot — Anthropic is reportedly narrowing
+    this to API spend after 2026-07-19 (user-reported, unverified, and their plans have
+    shifted before), so prefer waiting over building anything elaborate here.
 - **Parser is pinned to the current `/usage` layout.** `ClaudeUsageParser` keys on stable
   shapes ("Current session", "Current week (…)", "N% used", "Resets …") rather than line
   positions, but a future Claude Code redesign of the panel could still break it. It fails
