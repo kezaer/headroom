@@ -46,4 +46,20 @@ public enum APISpendPresentation {
     public static func amountText(_ summary: WidgetAPISpendSummary) -> String? {
         amountText(amount: summary.amount, currency: summary.currency)
     }
+
+    /// The exact page where a user tops up prepaid API credits — the billing screen that
+    /// hosts Anthropic's "Buy credits" / OpenAI's "Add to credit balance" control, not a
+    /// docs or marketing page. Anthropic's console moved to platform.claude.com (late
+    /// 2025), so we link there directly instead of riding the console.anthropic.com
+    /// redirect. Kept in Core so the mapping is unit-tested.
+    public static func addCreditsURL(for providerID: ProviderID) -> URL? {
+        switch providerID {
+        case .claude:
+            URL(string: "https://platform.claude.com/settings/billing")
+        case .codex:
+            URL(string: "https://platform.openai.com/settings/organization/billing/overview")
+        default:
+            nil
+        }
+    }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import HeadroomCore
 
 struct APISpendSectionView: View {
@@ -85,10 +86,29 @@ struct APISpendSectionView: View {
 
     @ViewBuilder private func amountView(_ snapshot: APISpendSnapshot) -> some View {
         if let amount = APISpendPresentation.amountText(amount: snapshot.amount, currency: snapshot.currency) {
-            Text(amount)
-                .font(.system(size: 17, weight: .semibold).monospacedDigit())
-                .foregroundStyle(snapshot.freshness == .live ? .primary : .secondary)
-                .privacySensitive()
+            HStack(spacing: 3) {
+                Text(amount)
+                    .font(.system(size: 17, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(snapshot.freshness == .live ? .primary : .secondary)
+                    .privacySensitive()
+                // Quiet escape hatch to top up: opens the provider's billing page (the
+                // screen with the actual "Buy credits" control) — we never run the
+                // purchase ourselves. Bare glyph per the popover's control language;
+                // hover pill announces clickability.
+                if let url = APISpendPresentation.addCreditsURL(for: snapshot.providerID) {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 18, height: 18)
+                    }
+                    .buttonStyle(HoverButtonStyle(horizontalPadding: 0, verticalPadding: 0))
+                    .help("Add \(snapshot.displayName) credits")
+                    .accessibilityLabel("Add \(snapshot.displayName) credits")
+                }
+            }
         } else {
             Button("Add key", action: onOpenSettings)
                 .buttonStyle(HoverButtonStyle(horizontalPadding: 7, verticalPadding: 3))
