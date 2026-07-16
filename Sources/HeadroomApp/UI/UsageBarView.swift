@@ -15,9 +15,19 @@ struct UsageBarView: View {
     let percentageMode: UsagePercentageMode
     let now: Date
     var dimmed: Bool = false
+    /// Denser recipe for stacked multi-account cards (3+ accounts): one type step down
+    /// across the row and a 6pt bar, so five accounts stay scannable without scrolling.
+    var compact: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
+
+    private var labelSize: CGFloat { compact ? 12 : 13 }
+    private var resetSize: CGFloat { compact ? 10.5 : 11 }
+    private var percentSize: CGFloat { compact ? 15 : 18 }
+    private var termSize: CGFloat { compact ? 10.5 : 11 }
+    private var barHeight: CGFloat { compact ? 6 : 8 }
+    private var rowSpacing: CGFloat { compact ? 4 : 5 }
 
     private var pct: Int { percentageMode.roundedPercentage(for: window) }
     private var fraction: Double { percentageMode.fraction(for: window) }
@@ -60,14 +70,14 @@ struct UsageBarView: View {
     }
 
     private func meter(inlineReset: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: rowSpacing) {
             // Row recipe aligned with the large widget's meter (Jul 2026): 13pt medium
             // label + "· reset" in the shared WCAG-tuned widget grays (system .tertiary
             // sat at ~2.3:1 on the dark tile). Percent stays 18pt medium — the popover's
             // larger canvas earns the bigger numeral; weight ladder 400/500/600/700.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(label)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: labelSize, weight: .medium))
                     .foregroundStyle(ProviderStyle.secondaryText(scheme: scheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -76,7 +86,7 @@ struct UsageBarView: View {
                     // inline candidate must be rejected (dropping to the sub-line) rather
                     // than accepted by silently compressing the reset.
                     Text("· \(resetText)")
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.system(size: resetSize).monospacedDigit())
                         .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
                         .lineLimit(1)
                         .fixedSize()
@@ -89,18 +99,18 @@ struct UsageBarView: View {
                 Text("\(pct)%")
                     // Semibold, matching the widgets' bold numerals — the glance payload
                     // leads the row.
-                    .font(.system(size: 18, weight: .semibold).monospacedDigit())
+                    .font(.system(size: percentSize, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.primary)
                     .contentTransition(.numericText())
                     .animation(valueAnimation, value: pct)
                 Text(percentageMode.term)
-                    .font(.system(size: 11))
+                    .font(.system(size: termSize))
                     .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
             }
             bar
             if !inlineReset {
                 Text(resetText)
-                    .font(.system(size: 11).monospacedDigit())
+                    .font(.system(size: resetSize).monospacedDigit())
                     .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
             }
         }
@@ -120,7 +130,7 @@ struct UsageBarView: View {
                     .animation(valueAnimation, value: fraction)
             }
         }
-        .frame(height: 8)
+        .frame(height: barHeight)
     }
 
     /// Small static "Low" flag shown only for the critical band (≤15% left) — a word

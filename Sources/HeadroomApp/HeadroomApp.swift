@@ -351,10 +351,13 @@ enum AppComposition {
     static func store(preferences: Preferences = Preferences()) -> UsageStore {
         if DemoFixture.isEnabled { return demoStore() }
         let credentials = CredentialStore()
+        let registry = AccountRegistry()
         return UsageStore(
-            providers: providers(credentials: credentials),
+            providers: providers(credentials: credentials, registry: registry),
             apiSpendProviders: apiSpendProviders(credentials: credentials),
             preferences: preferences,
+            accountRegistry: registry,
+            providerFactory: { account in provider(for: account, credentials: credentials) },
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
         )
@@ -390,15 +393,40 @@ enum AppComposition {
         )
     }
 
-    static func providers() -> [any UsageProvider] {
-        providers(credentials: CredentialStore())
+    /// One provider instance per configured account, in registry order (built-in first).
+    @MainActor
+    private static func providers(credentials: CredentialStore, registry: AccountRegistry) -> [any UsageProvider] {
+        [ProviderID.claude, .codex].flatMap { id in
+            registry.accounts(for: id).map { provider(for: $0, credentials: credentials) }
+        }
     }
 
-    private static func providers(credentials: CredentialStore) -> [any UsageProvider] {
-        return [
-            ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory())),
-            CodexProvider(credentials: credentials), // reads ~/.codex/auth.json + wham/usage
-        ]
+    /// The concrete provider for one account. Built-in accounts read the CLI's default
+    /// config (`~/.claude` / `~/.codex`) exactly as before; extra accounts route the
+    /// same compliant paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
+    /// `CODEX_HOME`) that the user signed into via the official CLI.
+    @MainActor
+    static func provider(for account: ProviderAccount, credentials: CredentialStore) -> any UsageProvider {
+        switch account.providerID {
+        case .codex:
+            guard !account.isBuiltIn else {
+                return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
+            }
+            let reader = CodexAuthFileReader(path: AccountStorage.codexAuthFileURL(for: account))
+            return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
+        default: // .claude
+            guard !account.isBuiltIn else {
+                return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory()))
+            }
+            _ = try? AccountStorage.ensureDirectories(for: account)
+            return ClaudeProvider(
+                source: ClaudeUsageCLIProbe(
+                    workingDirectory: AccountStorage.claudeWorkspaceDirectoryURL(for: account).path,
+                    environmentOverrides: ["CLAUDE_CONFIG_DIR": AccountStorage.claudeConfigDirectoryURL(for: account).path]
+                ),
+                accountID: account.id
+            )
+        }
     }
 
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {

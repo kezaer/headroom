@@ -19,17 +19,33 @@ public enum CodexCLI {
         )
     }
 
-    /// Static, redaction-safe Terminal content. The only runtime value is an absolute
-    /// executable path returned by `CLIExecutableResolver`, quoted as one shell token.
-    public static func loginScript(executablePath: String?) -> String {
+    /// The manual login command for an account. Extra accounts route the CLI at their
+    /// Headroom-owned home via `CODEX_HOME`; the built-in account (nil home) is the
+    /// plain official command.
+    public static func accountLoginCommand(codexHome: String?) -> String {
+        guard let codexHome else { return loginCommand }
+        return "CODEX_HOME=\(shellQuoted(codexHome)) \(loginCommand)"
+    }
+
+    /// Static, redaction-safe Terminal content. The only runtime values are an absolute
+    /// executable path returned by `CLIExecutableResolver` and a Headroom-owned account
+    /// home directory, each quoted as one shell token.
+    public static func loginScript(executablePath: String?, codexHome: String? = nil) -> String {
+        let accountExport = codexHome.map { "export CODEX_HOME=\(shellQuoted($0))\n" } ?? ""
+        let accountNote = codexHome == nil ? "" : """
+        echo "Sign in with the ChatGPT account you want to add — this login is kept separate"
+        echo "from your main Codex CLI account."
+        echo
+        """
         let introduction = """
         #!/bin/zsh
         clear
         export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-        echo "Headroom is opening the official Codex sign-in flow."
+        \(accountExport)echo "Headroom is opening the official Codex sign-in flow."
         echo "Complete sign-in in the browser, then return to Headroom."
         echo "Headroom never receives your password or sign-in details."
         echo
+        \(accountNote)
         """
 
         guard let executablePath else {

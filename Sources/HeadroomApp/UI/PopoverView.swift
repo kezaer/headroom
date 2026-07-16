@@ -37,17 +37,32 @@ struct PopoverView: View {
                     // title belongs to the content below it more than cards belong to
                     // each other.
                     .padding(.bottom, -6)
-                ForEach(Array(store.providerOrder.enumerated()), id: \.element) { _, id in
-                    ProviderCardView(
-                        providerID: id,
-                        displayName: store.displayNames[id] ?? id.raw,
-                        snapshot: store.appDisplaySnapshot(for: id),
-                        percentageMode: store.usagePercentageMode,
-                        now: context.date,
-                        onRetrySetup: { store.refreshNow() }
-                    )
+                // Cards scroll once many accounts push past a comfortable popover
+                // height; below the cap the ScrollView sizes to its content, so the
+                // common case is untouched. Header and footer stay pinned.
+                ScrollView(.vertical) {
+                    VStack(spacing: 20) {
+                        ForEach(Array(store.providerOrder.enumerated()), id: \.element) { _, id in
+                            ProviderCardView(
+                                providerID: id,
+                                displayName: store.displayNames[id] ?? id.raw,
+                                entries: store.accounts(for: id).map { account in
+                                    ProviderAccountEntry(
+                                        account: account,
+                                        snapshot: store.appDisplaySnapshot(for: account.key)
+                                    )
+                                },
+                                percentageMode: store.usagePercentageMode,
+                                now: context.date,
+                                onRetrySetup: { store.refreshNow() }
+                            )
+                        }
+                        APISpendSectionView(store: store, now: context.date, onOpenSettings: openSettingsDismissingPopover)
+                    }
                 }
-                APISpendSectionView(store: store, now: context.date, onOpenSettings: openSettingsDismissingPopover)
+                .scrollIndicators(.automatic)
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: 640)
                 footer
             }
             // One quick content fade on open — no per-row stagger or vertical travel.
@@ -160,9 +175,12 @@ struct PopoverView: View {
         if codexNeedsConnection {
             return CodexSetupSession.openedSetupAt != nil ? "Watching for Codex sign-in…" : "Connect Codex to begin"
         }
-        let liveCaptures = store.providerOrder.compactMap { id -> Date? in
-            guard case .live = store.snapshot(for: id).freshness else { return nil }
-            return store.snapshot(for: id).capturedAt
+        let liveCaptures = store.providerOrder.flatMap { id -> [Date] in
+            store.accounts(for: id).compactMap { account in
+                let snapshot = store.snapshot(for: account.key)
+                guard case .live = snapshot.freshness else { return nil }
+                return snapshot.capturedAt
+            }
         }
         guard let oldest = liveCaptures.min() else { return nil }
         return Countdown.updatedLabel(capturedAt: oldest, now: now).map { "Updated \($0)" }

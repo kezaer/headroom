@@ -6,28 +6,58 @@ import SwiftUI
 /// from Claude setup so either provider can wait or recover without canceling the other.
 @MainActor
 enum CodexSetupSession {
-    static var openedSetupAt: Date?
-    private static var openingTask: Task<Void, Never>?
+    private static var openedAt: [AccountID: Date] = [:]
+    private static var retryTasks: [AccountID: [Task<Void, Never>]] = [:]
+    private static var openingTasks: [AccountID: Task<Void, Never>] = [:]
 
-    static func copyCommand() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(CodexCLI.loginCommand, forType: .string)
+    static func openedSetupAt(for accountID: AccountID) -> Date? { openedAt[accountID] }
+
+    static func setOpenedSetupAt(_ date: Date?, for accountID: AccountID) {
+        openedAt[accountID] = date
     }
 
-    static func openSetup(onRetry: @escaping () -> Void) {
-        guard openingTask == nil else { return }
-        openingTask = Task { @MainActor in
-            defer { openingTask = nil }
+    /// Built-in-account accessor kept for the single-account flow (popover header,
+    /// render harness).
+    static var openedSetupAt: Date? {
+        get { openedAt[.primary] }
+        set { openedAt[.primary] = newValue }
+    }
+
+    /// `CODEX_HOME` for an extra account; nil for the built-in (default `~/.codex`).
+    static func codexHome(for account: ProviderAccount) -> String? {
+        account.isBuiltIn ? nil : AccountStorage.codexHomeDirectoryURL(for: account).path
+    }
+
+    static func loginCommand(for account: ProviderAccount = .builtIn(for: .codex)) -> String {
+        CodexCLI.accountLoginCommand(codexHome: codexHome(for: account))
+    }
+
+    static func copyCommand(for account: ProviderAccount = .builtIn(for: .codex)) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(loginCommand(for: account), forType: .string)
+    }
+
+    static func copyCommand() { copyCommand(for: .builtIn(for: .codex)) }
+
+    static func openSetup(for account: ProviderAccount = .builtIn(for: .codex), onRetry: @escaping () -> Void) {
+        guard openingTasks[account.id] == nil else { return }
+        openingTasks[account.id] = Task { @MainActor in
+            defer { openingTasks[account.id] = nil }
+            if !account.isBuiltIn {
+                _ = try? AccountStorage.ensureDirectories(for: account)
+            }
+            let codexHome = codexHome(for: account)
+            let scriptName = account.isBuiltIn ? "Open Codex Login.command" : "Add Codex Account.command"
             let preparation = await Task.detached(priority: .userInitiated) { () -> (scriptURL: URL, hasExecutable: Bool)? in
                 let supportDirectory = ClaudeUsageWorkspace.defaultDirectoryURL.deletingLastPathComponent()
-                let scriptURL = supportDirectory.appendingPathComponent("Open Codex Login.command")
+                let scriptURL = supportDirectory.appendingPathComponent(scriptName)
                 let executablePath = CodexCLI.resolveExecutable()
                 do {
                     try FileManager.default.createDirectory(
                         at: supportDirectory,
                         withIntermediateDirectories: true
                     )
-                    try CodexCLI.loginScript(executablePath: executablePath)
+                    try CodexCLI.loginScript(executablePath: executablePath, codexHome: codexHome)
                         .write(to: scriptURL, atomically: true, encoding: .utf8)
                     try FileManager.default.setAttributes(
                         [.posixPermissions: 0o755],
@@ -40,34 +70,34 @@ enum CodexSetupSession {
             }.value
 
             guard let preparation else {
-                copyCommand()
+                copyCommand(for: account)
                 return
             }
             guard NSWorkspace.shared.open(preparation.scriptURL) else {
-                copyCommand()
+                copyCommand(for: account)
                 return
             }
             guard preparation.hasExecutable else {
-                openedSetupAt = nil
-                cancelRetries()
-                copyCommand()
+                openedAt[account.id] = nil
+                cancelRetries(for: account.id)
+                copyCommand(for: account)
                 return
             }
-            openedSetupAt = Date()
-            scheduleRetries(onRetry)
+            openedAt[account.id] = Date()
+            scheduleRetries(for: account.id, onRetry)
         }
     }
 
-    private static var retryTasks: [Task<Void, Never>] = []
-
-    static func cancelRetries() {
-        retryTasks.forEach { $0.cancel() }
-        retryTasks.removeAll()
+    static func cancelRetries(for accountID: AccountID) {
+        retryTasks[accountID]?.forEach { $0.cancel() }
+        retryTasks[accountID] = nil
     }
 
-    private static func scheduleRetries(_ onRetry: @escaping () -> Void) {
-        cancelRetries()
-        retryTasks = [8.0, 20.0, 45.0, 90.0].map { delay in
+    static func cancelRetries() { cancelRetries(for: .primary) }
+
+    private static func scheduleRetries(for accountID: AccountID, _ onRetry: @escaping () -> Void) {
+        cancelRetries(for: accountID)
+        retryTasks[accountID] = [8.0, 20.0, 45.0, 90.0].map { delay in
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(delay))
                 guard !Task.isCancelled else { return }

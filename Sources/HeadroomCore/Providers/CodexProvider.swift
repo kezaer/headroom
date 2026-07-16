@@ -5,6 +5,7 @@ import Foundation
 /// degrades to the official CLI login handoff (KTD3). Never throws (KTD7 isolation).
 public struct CodexProvider: UsageProvider {
     public let id = ProviderID.codex
+    public let accountID: AccountID
     public let displayName = "Codex"
 
     private let credentials: CredentialStore
@@ -15,10 +16,12 @@ public struct CodexProvider: UsageProvider {
 
     public init(
         credentials: CredentialStore,
+        accountID: AccountID = .primary,
         http: UsageFetching = RedirectBlockingHTTPClient(),
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.credentials = credentials
+        self.accountID = accountID
         self.http = http
         self.now = now
     }

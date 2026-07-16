@@ -10,43 +10,102 @@ import HeadroomCore
 /// mockup (.context/headroom-claude-onboarding.html) and are transferred 1:1.
 @MainActor
 enum ClaudeSetupSession {
-    /// Set when the user opens the setup Terminal this app session. Drives the
-    /// Connect → Waiting swap and the one-session "Connected" payoff chip; cleared
+    /// Set when the user opens the setup Terminal this app session, per account. Drives
+    /// the Connect → Waiting swap and the one-session "Connected" payoff chip; cleared
     /// on app relaunch, so the chip never becomes permanent UI.
-    static var openedSetupAt: Date?
+    private static var openedAt: [AccountID: Date] = [:]
+    private static var retryTasks: [AccountID: [Task<Void, Never>]] = [:]
 
-    static var command: String {
-        "cd \(shellQuoted(ClaudeUsageWorkspace.defaultDirectoryURL.path)) && claude"
+    static func openedSetupAt(for accountID: AccountID) -> Date? { openedAt[accountID] }
+
+    static func setOpenedSetupAt(_ date: Date?, for accountID: AccountID) {
+        openedAt[accountID] = date
     }
+
+    /// Built-in-account accessor kept for the single-account flow (popover header,
+    /// render harness).
+    static var openedSetupAt: Date? {
+        get { openedAt[.primary] }
+        set { openedAt[.primary] = newValue }
+    }
+
+    /// The Claude workspace the probe drives for an account. Built-in keeps the
+    /// original shared folder; extras get their own home under `AccountStorage`.
+    static func workspaceURL(for account: ProviderAccount) -> URL {
+        account.isBuiltIn
+            ? ClaudeUsageWorkspace.defaultDirectoryURL
+            : AccountStorage.claudeWorkspaceDirectoryURL(for: account)
+    }
+
+    /// Extra accounts prefix the CLI with their isolated `CLAUDE_CONFIG_DIR`; the
+    /// built-in account keeps the plain command against the user's own `~/.claude`.
+    private static func commandPrefix(for account: ProviderAccount) -> String {
+        account.isBuiltIn
+            ? ""
+            : "CLAUDE_CONFIG_DIR=\(shellQuoted(AccountStorage.claudeConfigDirectoryURL(for: account).path)) "
+    }
+
+    static func command(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
+        "cd \(shellQuoted(workspaceURL(for: account).path)) && \(commandPrefix(for: account))claude"
+    }
+
+    static var command: String { command() }
 
     /// Tilde-abbreviated command for display; `command` (absolute) is what's copied.
-    static var displayCommand: String {
-        let tilde = (ClaudeUsageWorkspace.defaultDirectoryURL.path as NSString).abbreviatingWithTildeInPath
-        return "cd \(tilde.replacingOccurrences(of: " ", with: "\\ ")) && claude"
+    static func displayCommand(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
+        let tilde = (workspaceURL(for: account).path as NSString).abbreviatingWithTildeInPath
+        return "cd \(tilde.replacingOccurrences(of: " ", with: "\\ ")) && \(commandPrefix(for: account))claude"
     }
 
-    static func copyCommand() {
+    static var displayCommand: String { displayCommand() }
+
+    static func copyCommand(for account: ProviderAccount = .builtIn(for: .claude)) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
+        NSPasteboard.general.setString(command(for: account), forType: .string)
     }
+
+    static func copyCommand() { copyCommand(for: .builtIn(for: .claude)) }
 
     /// Writes and opens the guided `.command` script (same mechanism as before the
     /// redesign), marks the session as waiting, and schedules the auto-retries.
-    static func openSetup(onRetry: @escaping () -> Void) {
-        openedSetupAt = Date()
+    /// Extra accounts additionally export their `CLAUDE_CONFIG_DIR` and walk the user
+    /// through signing in with the account being added.
+    static func openSetup(for account: ProviderAccount = .builtIn(for: .claude), onRetry: @escaping () -> Void) {
+        openedAt[account.id] = Date()
         do {
-            let workspace = try ClaudeUsageWorkspace.ensureDefaultDirectory()
-            let scriptURL = workspace.deletingLastPathComponent()
-                .appendingPathComponent("Open Claude Setup.command")
+            let workspace: URL
+            if account.isBuiltIn {
+                workspace = try ClaudeUsageWorkspace.ensureDefaultDirectory()
+            } else {
+                try AccountStorage.ensureDirectories(for: account)
+                workspace = AccountStorage.claudeWorkspaceDirectoryURL(for: account)
+            }
+            let scriptURL = ClaudeUsageWorkspace.defaultDirectoryURL.deletingLastPathComponent()
+                .appendingPathComponent(account.isBuiltIn ? "Open Claude Setup.command" : "Add Claude Account.command")
+            let configExport = account.isBuiltIn
+                ? ""
+                : "export CLAUDE_CONFIG_DIR=\(shellQuoted(AccountStorage.claudeConfigDirectoryURL(for: account).path))\n"
+            let intro = account.isBuiltIn
+                ? """
+                echo "Headroom needs Claude Code to trust this empty folder before it can read /usage."
+                echo
+                echo "When Claude asks, choose: Yes, I trust this folder"
+                echo "After approving, return to Headroom. It will retry automatically."
+                """
+                : """
+                echo "Adding another Claude account to Headroom."
+                echo
+                echo "1. Log in when Claude asks — use the account you want to add."
+                echo "   (This login is kept separate from your main Claude Code account.)"
+                echo "2. If Claude asks about this folder, choose: Yes, I trust this folder"
+                echo "3. Return to Headroom. It will pick the account up automatically."
+                """
             let script = """
             #!/bin/zsh
             clear
             export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-            cd \(shellQuoted(workspace.path)) || exit 1
-            echo "Headroom needs Claude Code to trust this empty folder before it can read /usage."
-            echo
-            echo "When Claude asks, choose: Yes, I trust this folder"
-            echo "After approving, return to Headroom. It will retry automatically."
+            \(configExport)cd \(shellQuoted(workspace.path)) || exit 1
+            \(intro)
             echo
             if ! command -v claude >/dev/null 2>&1; then
               echo "Claude Code CLI was not found. Install Claude Code, then reopen Headroom."
@@ -60,25 +119,25 @@ enum ClaudeSetupSession {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
             NSWorkspace.shared.open(scriptURL)
-            scheduleRetries(onRetry)
+            scheduleRetries(for: account.id, onRetry)
         } catch {
-            copyCommand()
+            copyCommand(for: account)
         }
     }
-
-    private static var retryTasks: [Task<Void, Never>] = []
 
     /// Stop pending auto-retries. Called once the connection goes live — otherwise the
     /// 35s/75s retries keep spawning full 20–30s Claude CLI cycles after success, and
     /// the popover footer reads "Refreshing…" for minutes.
-    static func cancelRetries() {
-        retryTasks.forEach { $0.cancel() }
-        retryTasks.removeAll()
+    static func cancelRetries(for accountID: AccountID) {
+        retryTasks[accountID]?.forEach { $0.cancel() }
+        retryTasks[accountID] = nil
     }
 
-    private static func scheduleRetries(_ onRetry: @escaping () -> Void) {
-        cancelRetries()
-        retryTasks = [12.0, 35.0, 75.0].map { delay in
+    static func cancelRetries() { cancelRetries(for: .primary) }
+
+    private static func scheduleRetries(for accountID: AccountID, _ onRetry: @escaping () -> Void) {
+        cancelRetries(for: accountID)
+        retryTasks[accountID] = [12.0, 35.0, 75.0].map { delay in
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(delay))
                 guard !Task.isCancelled else { return }

@@ -6,6 +6,7 @@ import Foundation
 /// a missing CLI or unreadable panel degrades to a typed stale state (KTD7).
 public struct ClaudeProvider: UsageProvider {
     public let id = ProviderID.claude
+    public let accountID: AccountID
     public let displayName = "Claude"
 
     private let source: ClaudeUsageSource
@@ -13,9 +14,11 @@ public struct ClaudeProvider: UsageProvider {
 
     public init(
         source: ClaudeUsageSource = ClaudeUsageCLIProbe(),
+        accountID: AccountID = .primary,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.source = source
+        self.accountID = accountID
         self.now = now
     }
 

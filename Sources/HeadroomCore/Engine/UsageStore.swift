@@ -67,10 +67,16 @@ private struct ResolvedMenuBarWindow {
 /// and `@Observable`: snapshots are published on the main actor; providers are
 /// fetched concurrently off-main (KTD10). Per-provider isolation — one provider's
 /// failure updates only its own snapshot (KTD7).
+///
+/// Multi-account (Jul 2026): snapshots are keyed by `AccountKey` — one provider can
+/// carry up to `AccountRegistry.maxPerProvider` signed-in accounts. The menu bar and
+/// widgets follow each provider's *primary* (built-in) account so those compact
+/// surfaces keep meaning one thing; the popover shows every account.
 @MainActor
 @Observable
 public final class UsageStore {
-    public private(set) var snapshots: [ProviderID: UsageSnapshot]
+    public private(set) var snapshots: [AccountKey: UsageSnapshot]
+    public private(set) var accountsByProvider: [ProviderID: [ProviderAccount]]
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
@@ -88,9 +94,13 @@ public final class UsageStore {
     /// coalesces overlapping triggers into one cycle.
     public private(set) var isRefreshing = false
 
-    private let providers: [any UsageProvider]
+    private var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
     private let preferences: Preferences
+    private let accountRegistry: AccountRegistry?
+    /// Builds the concrete provider for a newly added account. Lives in the composition
+    /// root (R13) and is injected so the store never names concrete provider types.
+    private let providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)?
     private let widgetExporter: (any WidgetSnapshotExporting)?
     private let phoneSyncExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
@@ -100,17 +110,23 @@ public final class UsageStore {
         providers: [any UsageProvider],
         apiSpendProviders: [any APISpendProvider] = [],
         preferences: Preferences = Preferences(),
+        accounts: [ProviderAccount]? = nil,
+        accountRegistry: AccountRegistry? = nil,
+        providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)? = nil,
         widgetExporter: (any WidgetSnapshotExporting)? = nil,
         phoneSyncExporter: (any WidgetSnapshotExporting)? = nil
     ) {
         self.providers = providers
         self.apiSpendProviders = apiSpendProviders
         self.preferences = preferences
+        self.accountRegistry = accountRegistry
+        self.providerFactory = providerFactory
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
-        self.displayNames = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0.displayName) })
+        self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
-        self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, .pending(for: $0.id)) })
+        self.snapshots = Dictionary(uniqueKeysWithValues: providers.map { ($0.accountKey, .pending(for: $0.id)) })
+        self.accountsByProvider = Self.accountsIndex(providers: providers, accounts: accounts, registry: accountRegistry)
         self.apiSpendSnapshots = Dictionary(uniqueKeysWithValues: apiSpendProviders.map {
             ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
         })
@@ -126,12 +142,101 @@ public final class UsageStore {
         self.enabledSurfaces = Set(UsageSurface.allCases.filter { preferences.isSurfaceEnabled($0) })
     }
 
+    /// Account metadata for every provider instance. Explicit `accounts` (render
+    /// harness/tests) wins, then the registry, then a synthesized built-in per provider
+    /// so plain single-account construction keeps working with no extra wiring.
+    private static func accountsIndex(
+        providers: [any UsageProvider],
+        accounts: [ProviderAccount]?,
+        registry: AccountRegistry?
+    ) -> [ProviderID: [ProviderAccount]] {
+        var index: [ProviderID: [ProviderAccount]] = [:]
+        for id in providers.map(\.id).uniqued() {
+            let known: [ProviderAccount]
+            if let accounts {
+                known = accounts.filter { $0.providerID == id }
+            } else if let registry {
+                known = registry.accounts(for: id)
+            } else {
+                known = []
+            }
+            let instanceIDs = providers.filter { $0.id == id }.map(\.accountID)
+            index[id] = instanceIDs.map { accountID in
+                known.first(where: { $0.id == accountID })
+                    ?? ProviderAccount(id: accountID, providerID: id, label: "Main", isBuiltIn: accountID == .primary)
+            }
+        }
+        return index
+    }
+
     public var providerOrder: [ProviderID] {
-        providers.map(\.id).filter { enabledSurfaces.contains(subscriptionSurface(for: $0)) }
+        providers.map(\.id).uniqued().filter { enabledSurfaces.contains(subscriptionSurface(for: $0)) }
     }
 
     public var apiSpendProviderOrder: [ProviderID] {
         apiSpendProviders.map(\.id).filter { enabledSurfaces.contains(apiSurface(for: $0)) }
+    }
+
+    // MARK: - Accounts
+
+    /// Accounts for a provider in display order: built-in first, extras after.
+    public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
+        accountsByProvider[providerID] ?? []
+    }
+
+    /// The account compact surfaces (menu bar, widgets) follow for a provider.
+    public func primaryAccount(for providerID: ProviderID) -> ProviderAccount? {
+        accounts(for: providerID).first
+    }
+
+    public func canAddAccount(for providerID: ProviderID) -> Bool {
+        guard accountRegistry != nil, providerFactory != nil else { return false }
+        return accounts(for: providerID).count < AccountRegistry.maxPerProvider
+    }
+
+    /// Create a new account: registry entry, on-disk config home, provider instance,
+    /// and an immediate "finish sign-in" snapshot so the UI reflects it without waiting
+    /// for a poll. Returns nil at the per-provider cap.
+    @discardableResult
+    public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
+        guard let accountRegistry, let providerFactory,
+              let account = accountRegistry.addAccount(for: providerID, label: label)
+        else { return nil }
+        _ = try? AccountStorage.ensureDirectories(for: account)
+        providers.append(providerFactory(account))
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        snapshots[account.key] = .stale(
+            for: providerID,
+            reason: .notLoggedIn(Self.finishSignInMessage)
+        )
+        return account
+    }
+
+    /// Preset failure for a just-added account so its row appears instantly instead of
+    /// waiting out a full (possibly 20–30s) probe of an account that isn't signed in yet.
+    public static let finishSignInMessage = "Finish sign-in to add this account"
+
+    public func renameAccount(_ key: AccountKey, to label: String) {
+        guard let accountRegistry else { return }
+        accountRegistry.renameAccount(key, to: label)
+        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+    }
+
+    /// Remove an extra account: registry entry, provider instance, snapshot, and its
+    /// on-disk config home (the account's CLI session with it). Built-ins are kept —
+    /// they are the user's own CLI login; hide the provider via its surface instead.
+    public func removeAccount(_ key: AccountKey) {
+        guard let accountRegistry,
+              let account = accounts(for: key.providerID).first(where: { $0.key == key }),
+              !account.isBuiltIn
+        else { return }
+        accountRegistry.removeAccount(key)
+        providers.removeAll { $0.accountKey == key }
+        snapshots.removeValue(forKey: key)
+        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+        AccountStorage.removeDirectories(for: account)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
     }
 
     /// Begin polling: an immediate refresh, then the interval loop. Idempotent — a
@@ -289,16 +394,16 @@ public final class UsageStore {
     }
 
     private func refreshSubscriptions(exportAfter: Bool = true) async {
-        let results = await withTaskGroup(of: (ProviderID, UsageSnapshot).self) { group in
+        let results = await withTaskGroup(of: (AccountKey, UsageSnapshot).self) { group in
             for provider in providers {
                 guard enabledSurfaces.contains(subscriptionSurface(for: provider.id)) else { continue }
-                group.addTask { (provider.id, await provider.fetchSnapshot()) }
+                group.addTask { (provider.accountKey, await provider.fetchSnapshot()) }
             }
-            var acc: [(ProviderID, UsageSnapshot)] = []
+            var acc: [(AccountKey, UsageSnapshot)] = []
             for await pair in group { acc.append(pair) }
             return acc
         }
-        for (id, fresh) in results { merge(id: id, fresh: fresh) }
+        for (key, fresh) in results { merge(key: key, fresh: fresh) }
         if exportAfter {
             exportWidgetSnapshot()
             exportPhoneSyncSnapshot()
@@ -324,19 +429,22 @@ public final class UsageStore {
     }
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
-    /// shown dimmed rather than blanking the card; it never touches another provider.
-    private func merge(id: ProviderID, fresh: UsageSnapshot) {
+    /// shown dimmed rather than blanking the card; it never touches another account.
+    private func merge(key: AccountKey, fresh: UsageSnapshot) {
+        // The account may have been removed while its fetch was in flight — a late
+        // result must not resurrect the row.
+        guard accounts(for: key.providerID).contains(where: { $0.key == key }) else { return }
         let next: UsageSnapshot
         if case .stale(let reason) = fresh.freshness,
            fresh.windows.isEmpty,
-           let prior = snapshots[id], !prior.windows.isEmpty {
+           let prior = snapshots[key], !prior.windows.isEmpty {
             next = prior.markedStale(reason)
         } else {
             next = fresh
         }
         // Skip the assignment when nothing changed so an unchanging state (e.g. a
         // provider that stays logged-out) doesn't invalidate observers every cycle.
-        if snapshots[id] != next { snapshots[id] = next }
+        if snapshots[key] != next { snapshots[key] = next }
     }
 
     private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {
@@ -351,17 +459,30 @@ public final class UsageStore {
         if apiSpendSnapshots[id] != next { apiSpendSnapshots[id] = next }
     }
 
-    public func snapshot(for id: ProviderID) -> UsageSnapshot {
-        snapshots[id] ?? .pending(for: id)
+    public func snapshot(for key: AccountKey) -> UsageSnapshot {
+        snapshots[key] ?? .pending(for: key.providerID)
     }
 
-    public func appDisplaySnapshot(for id: ProviderID) -> UsageSnapshot {
+    /// Primary-account snapshot — the single-account view compact surfaces use.
+    public func snapshot(for id: ProviderID) -> UsageSnapshot {
+        snapshot(for: primaryKey(for: id))
+    }
+
+    public func appDisplaySnapshot(for key: AccountKey) -> UsageSnapshot {
         weeklyFirst(
             filterCodexSparkCounters(
-                from: snapshot(for: id),
+                from: snapshot(for: key),
                 shouldShow: preferences.showCodexSparkCountersInApp
             )
         )
+    }
+
+    public func appDisplaySnapshot(for id: ProviderID) -> UsageSnapshot {
+        appDisplaySnapshot(for: primaryKey(for: id))
+    }
+
+    private func primaryKey(for id: ProviderID) -> AccountKey {
+        AccountKey(providerID: id, accountID: primaryAccount(for: id)?.id ?? .primary)
     }
 
     /// Popover display order matches the widgets: weekly leads, 5-hour second, unknown
@@ -405,9 +526,12 @@ public final class UsageStore {
         phoneSyncExporter.export(widgetSnapshot(widgetsEnabled: preferences.syncToIPhoneEnabled, generatedAt: generatedAt))
     }
 
+    /// Widgets mirror each provider's *primary* account — the widget schema and the
+    /// iPhone mirror stay single-account (a glanceable tile can't rank five logins).
     private func widgetSnapshot(widgetsEnabled: Bool, generatedAt: Date) -> WidgetSnapshotEnvelope {
-        WidgetSnapshotProjector.project(
-            snapshots: snapshots,
+        let primarySnapshots = Dictionary(uniqueKeysWithValues: providerOrder.map { ($0, snapshot(for: $0)) })
+        return WidgetSnapshotProjector.project(
+            snapshots: primarySnapshots,
             providerOrder: providerOrder,
             displayNames: displayNames,
             renewalDate: { [preferences] in preferences.renewalDate(for: $0) },
@@ -437,12 +561,9 @@ public final class UsageStore {
     /// lowest enabled balance while the vessel level stays decorative. Neutral until
     /// data exists.
     public var menuBarSummary: MenuBarSummary {
-        // A provider stuck in a permanent failure (needs the user to re-auth) should
+        // Any account stuck in a permanent failure (needs the user to re-auth) should
         // flag the glyph even when there is no live number to show yet.
-        let needsAttention = providerOrder.contains { id in
-            if case .stale(let reason) = snapshots[id]?.freshness { return reason.isPermanent }
-            return false
-        }
+        let needsAttention = providerOrder.contains { providerNeedsAttention($0) }
         let best = menuBarBestWindow()
         guard let best else { return MenuBarSummary.neutral.withAttention(needsAttention) }
         let pct = usagePercentageMode.roundedPercentage(for: best.window)
@@ -500,18 +621,19 @@ public final class UsageStore {
     }
 
     private func providerNeedsAttention(_ id: ProviderID) -> Bool {
-        if case .stale(let reason) = snapshots[id]?.freshness { return reason.isPermanent }
-        return false
+        accounts(for: id).contains { account in
+            if case .stale(let reason) = snapshots[account.key]?.freshness { return reason.isPermanent }
+            return false
+        }
     }
 
     /// Resolve one provider's preferred window. If the provider temporarily stops
     /// reporting that window, use the other supported window while retaining the saved
     /// preference so it resumes automatically when the data returns.
     private func menuBarWindow(for id: ProviderID) -> ResolvedMenuBarWindow? {
-        guard providerOrder.contains(id),
-              let snapshot = snapshots[id],
-              snapshot.freshness != .pending
-        else { return nil }
+        guard providerOrder.contains(id) else { return nil }
+        let snapshot = snapshot(for: id)
+        guard snapshot.freshness != .pending else { return nil }
 
         let preferred = menuBarWindowSource(for: id)
         let candidates = [preferred] + MenuBarWindowSource.allCases.filter { $0 != preferred }
@@ -529,5 +651,14 @@ public final class UsageStore {
 
     private func apiSurface(for id: ProviderID) -> UsageSurface {
         id == .claude ? .anthropicAPI : .openAIAPI
+    }
+}
+
+private extension Array where Element == ProviderID {
+    /// Order-preserving de-dupe: multiple accounts of one provider collapse to one
+    /// entry wherever the UI iterates providers.
+    func uniqued() -> [ProviderID] {
+        var seen = Set<ProviderID>()
+        return filter { seen.insert($0).inserted }
     }
 }

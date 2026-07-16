@@ -30,17 +30,23 @@ public enum ClaudePanelResult: Sendable, Equatable {
 public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     public let claudePath: String?
     public let workingDirectory: String
+    /// Extra environment applied over the inherited env — how additional accounts
+    /// route the CLI at their own config home (`CLAUDE_CONFIG_DIR`). Empty for the
+    /// built-in account, which uses the user's default `~/.claude` login.
+    public let environmentOverrides: [String: String]
     public let bootTimeout: TimeInterval
     public let panelTimeout: TimeInterval
 
     public init(
         claudePath: String? = ClaudeUsageCLIProbe.resolveClaudePath(),
         workingDirectory: String = FileManager.default.currentDirectoryPath,
+        environmentOverrides: [String: String] = [:],
         bootTimeout: TimeInterval = 30,
         panelTimeout: TimeInterval = 26
     ) {
         self.claudePath = claudePath
         self.workingDirectory = workingDirectory
+        self.environmentOverrides = environmentOverrides
         self.bootTimeout = bootTimeout
         self.panelTimeout = panelTimeout
     }
@@ -51,10 +57,11 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         }
         // Run the blocking pty work off the cooperative pool.
         return await withCheckedContinuation { continuation in
-            Thread.detachNewThread {
+            Thread.detachNewThread { [environmentOverrides] in
                 let raw = Self.runBlocking(
                     claudePath: claudePath,
                     workingDirectory: workingDirectory,
+                    environmentOverrides: environmentOverrides,
                     boot: bootTimeout,
                     panel: panelTimeout
                 )
@@ -90,6 +97,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     private static func runBlocking(
         claudePath: String,
         workingDirectory: String,
+        environmentOverrides: [String: String],
         boot: TimeInterval,
         panel: TimeInterval
     ) -> String? {
@@ -129,6 +137,8 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         envDict["LANG"] = envDict["LANG"] ?? "en_US.UTF-8"
         envDict["PATH"] = loginPath()
         envDict["PWD"] = workingDirectory
+        // Applied last so an account's CLAUDE_CONFIG_DIR always wins over any inherited value.
+        for (key, value) in environmentOverrides { envDict[key] = value }
         let env = envDict.map { "\($0.key)=\($0.value)" }
         var pid: pid_t = 0
         let argv = [claudePath]

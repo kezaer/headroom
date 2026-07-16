@@ -31,19 +31,38 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
 
 - `Sources/HeadroomCore` — all testable logic (no SwiftUI):
   - `Models/` — `UsageSnapshot`/`UsageWindow` (with `resetLabel`), `FailureReason`,
-    `Freshness` (`.pending`/`.live`/`.stale`), `UsageProvider` protocol, `Countdown`.
+    `Freshness` (`.pending`/`.live`/`.stale`), `UsageProvider` protocol, `Countdown`,
+    `Account` (`AccountID`/`AccountKey`/`ProviderAccount`).
   - `Providers/` — `ClaudeProvider` (via `ClaudeUsageSource`), `ClaudeUsageCLIProbe`
     (openpty + posix_spawn), `ClaudeUsageParser`, `CodexProvider` (+ `UsageHTTPClient`,
-    DTOs), `CodexConnection`, shared login-shell `CLIExecutableResolver`, `RedirectBlocker`.
+    DTOs), `CodexConnection`, shared login-shell `CLIExecutableResolver`, `RedirectBlocker`,
+    `AccountStorage` (per-account config homes).
   - `Credentials/` — `CredentialStore` (Codex-only), `CodexAuthReader`, `Redaction`.
   - `Engine/` — `PollingEngine`, `UsageStore` (`@MainActor @Observable`).
-  - `Settings/` — `Preferences` (UserDefaults), `LaunchAtLogin` (SMAppService).
+  - `Settings/` — `Preferences` (UserDefaults), `AccountRegistry` (persisted account
+    catalog, max 5 per provider), `LaunchAtLogin` (SMAppService).
 - `Sources/HeadroomApp` — SwiftUI `MenuBarExtra(.window)` shell + adaptive popover (Liquid
   Glass on Tahoe, native material on Sequoia), cards, settings, menu bar label.
   `AppComposition` is the one place providers are wired.
 
 Data flow: `PollingEngine` → `UsageStore.refreshAll()` fetches providers concurrently →
 merges with continuity → menu bar label + popover bind to the `@Observable` store.
+
+### Multi-account (Jul 2026)
+
+One provider can carry up to 5 signed-in accounts. Snapshots are keyed by `AccountKey`
+(provider + account); one `UsageProvider` instance exists per account. The **built-in**
+`.primary` account reads the CLI's default config (`~/.claude`, `~/.codex`) exactly as
+before — zero migration for existing installs. **Extra** accounts get Headroom-owned
+config homes under `~/Library/Application Support/Headroom/Accounts/…` and route the
+same compliant paths there: the Claude probe runs with `CLAUDE_CONFIG_DIR` set, and
+Codex reads the `auth.json` that official `codex login` wrote under that account's
+`CODEX_HOME`. Sign-in is always a Terminal handoff to the official CLI
+(`ClaudeSetupSession`/`CodexSetupSession`, both keyed per account) — the OAuth
+constraint above applies to every account. The menu bar and widgets follow each
+provider's primary account; the popover shows all accounts (compact meter density from
+3 accounts up; the card list scrolls past a 640pt cap). Account management lives in
+Settings → Accounts (`AccountsSettingsTile`); removal deletes the account's config home.
 
 ## Commands
 
@@ -109,7 +128,12 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
 - **ANSI stripping uses ICU escapes (`\x1B`), not Swift's `\u{1B}`** — the latter silently
   fails inside `.regularExpression`.
 - Each Claude poll spawns a full `claude` session (~20–30s). Fine at the 5-min default; don't
-  poll aggressively.
+  poll aggressively. **Every configured Claude account spawns its own session per poll**
+  (concurrently) — another reason the account cap and the 2-min interval floor exist.
+- **Per-account isolation is env-var based and verified**: a fresh `CLAUDE_CONFIG_DIR`
+  reports "Not logged in · Please run /login" and a fresh `CODEX_HOME` reports "Not
+  logged in" — the CLIs never fall back to the default login. Don't "simplify" account
+  probes by dropping the env override; that would silently read the wrong account.
 
 ## Follow-ups
 
