@@ -10,6 +10,7 @@ DerivedData/
 /.xcode-derived*/
 /.xcode-*-derived/
 /.ios-derived/
+/.derivedData-ios/
 /.xcode-managed-signing/
 /.codex/
 /scratchpad

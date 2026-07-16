@@ -4,7 +4,12 @@ struct SettingsSheetView: View {
     let envelope: WidgetSnapshotEnvelope?
     let syncInfo: IOSCompanionSyncInfo?
     var diagnostics: IOSSyncDiagnostics? = nil
+    let isDemoMode: Bool
+    let canExitDemo: Bool
+    let demoWidgetUnavailable: Bool
     @Binding var appearance: AppearanceSetting
+    let onEnterDemo: () -> Void
+    let onExitDemo: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
@@ -18,6 +23,31 @@ struct SettingsSheetView: View {
                             .listRowInsets(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
                     }
 
+                    Section("Demo") {
+                        if isDemoMode {
+                            Label(
+                                demoWidgetUnavailable
+                                    ? "You are viewing sample data in the app. Widgets could not join Demo Mode on this install. Your synced snapshot is unchanged."
+                                    : "You are viewing sample data. Your synced snapshot is unchanged.",
+                                systemImage: "sparkles"
+                            )
+                                .font(.footnote)
+                            if canExitDemo {
+                                Button("Exit Demo", role: .destructive) {
+                                    dismiss()
+                                    onExitDemo()
+                                }
+                                .accessibilityIdentifier("headroom.demo.exit")
+                            }
+                        } else {
+                            Button("Explore Demo") {
+                                dismiss()
+                                onEnterDemo()
+                            }
+                            .accessibilityIdentifier("headroom.demo.enter.settings")
+                        }
+                    }
+
                     Section("Appearance") {
                         Picker("Appearance", selection: $appearance) {
                             ForEach(AppearanceSetting.allCases) { setting in
@@ -29,9 +59,14 @@ struct SettingsSheetView: View {
                     }
 
                     Section("Sync") {
-                        row("Status", value: syncStatus(now: context.date))
-                        row("Source", value: syncInfo?.sourceDescription ?? "Mac snapshot")
-                        row("Widgets", value: envelope?.status == .enabled ? "Enabled" : "Paused")
+                        row("Status", value: isDemoMode ? "Demo data" : syncStatus(now: context.date))
+                        row("Source", value: isDemoMode ? "Built-in sample" : (syncInfo?.sourceDescription ?? "Mac snapshot"))
+                        row(
+                            "Widgets",
+                            value: isDemoMode
+                                ? (demoWidgetUnavailable ? "Unavailable" : "Demo data")
+                                : (envelope?.status == .enabled ? "Enabled" : "Paused")
+                        )
                     }
 
                     Section("Managed on Mac") {
@@ -89,7 +124,7 @@ struct SettingsSheetView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Headroom")
                     .font(.title3.weight(.semibold))
-                Text("iPhone companion")
+                Text("iPhone & iPad companion")
                     .font(.subheadline)
                     .foregroundStyle(HeadroomTheme.secondaryText(scheme))
             }
@@ -153,6 +188,7 @@ struct IOSSyncDiagnostics: Equatable {
 
     var originText: String {
         switch origin {
+        case .demo: "Demo data"
         case .cache: "Local cache"
         case .sync: "iCloud sync"
         case nil: "No content"

@@ -3,11 +3,15 @@ import WidgetKit
 
 struct HeadroomIOSTimelineProvider: TimelineProvider {
     func placeholder(in context: Context) -> HeadroomIOSWidgetEntry {
-        HeadroomIOSWidgetEntry(date: .now, state: .content(DemoScreenshotData.envelope))
+        HeadroomIOSWidgetEntry(date: .now, state: .demo(DemoScreenshotData.envelope))
     }
 
     func getSnapshot(in context: Context, completion: @escaping (HeadroomIOSWidgetEntry) -> Void) {
-        completion(entry(date: .now))
+        if context.isPreview {
+            completion(HeadroomIOSWidgetEntry(date: .now, state: .demo(DemoScreenshotData.envelope)))
+        } else {
+            completion(entry(date: .now))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<HeadroomIOSWidgetEntry>) -> Void) {
@@ -24,6 +28,9 @@ struct HeadroomIOSTimelineProvider: TimelineProvider {
     }
 
     private func resolvedState() -> IOSWidgetSnapshotState {
+        if CompanionDemoModeStore.appGroup().isEnabled {
+            return .demo(DemoScreenshotData.envelope)
+        }
         let cache = WidgetSnapshotCache.appGroup()
         let sync = iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore())
         let syncRead = sync.read()

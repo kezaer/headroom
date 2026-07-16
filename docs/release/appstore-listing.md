@@ -4,10 +4,12 @@ Paste-ready fields for the `com.kylezantos.headroom.ios` 1.0 submission.
 
 ## Submission log
 
-- 2026-07-08: Submitted iOS 1.0 build 12 to App Review. App Store Connect
-  status: **Waiting for Review**.
-- 2026-07-09: Uploaded iOS 1.0 build 13 to App Store Connect for processing.
-  App Review resubmission still needs build 13 selected after processing completes.
+- 2026-07-15: App Review rejected iOS 1.0 build 14 under Guideline 2.1(a)
+  because reviewers could not access connected functionality without Kyle's Mac/iCloud
+  setup. Submission ID: `3472c833-11a3-4815-82d0-816b291dab60`.
+- 2026-07-15: Prepared universal iPhone/iPad build 21 with a production demonstration
+  mode shared by the companion and widgets. Select build 21 only after processing and
+  the clean TestFlight acceptance gate in `ios-app-review-testflight.md` pass.
 
 ## Name (30 chars max)
 
@@ -28,10 +30,10 @@ Primary: **Developer Tools** · Secondary: **Utilities**
 ## Description (4000 chars max)
 
 ```
-Headroom for iPhone is the pocket companion to Headroom for Mac — the menu bar
+Headroom for iPhone and iPad is the pocket companion to Headroom for Mac — the menu bar
 app that shows how much of your Claude and Codex subscription usage remains.
 
-Your Mac reads the numbers. Your iPhone shows them. Glance at your Home Screen
+Your Mac reads the numbers. Your iPhone or iPad shows them. Glance at your Home Screen
 and know whether you have room for one more session before the weekly window
 resets.
 
@@ -39,8 +41,7 @@ WHAT YOU SEE
 • Claude and Codex side by side, as equals — session and weekly windows with
   percentage remaining
 • Reset times, exactly as the providers report them
-• Plan renewal dates, plus optional API spend totals if you track them on
-  the Mac
+• Model-specific limits, plus optional API spend totals if you track them on the Mac
 • Freshness at a glance: every screen says when the numbers last updated
 
 WIDGETS THAT RESPECT A GLANCE
@@ -55,11 +56,11 @@ never credentials, API keys, or account details. Headroom has no servers, no
 accounts, no analytics, and nothing to sell. The full policy is one page:
 headroom.zantos.co/privacy
 
-REQUIRES THE MAC APP
-Headroom for iPhone is a companion display. It needs Headroom for Mac
+CONNECTED USE REQUIRES THE MAC APP
+Headroom is a companion display. Live data needs Headroom for Mac
 (free download at headroom.zantos.co) running on a Mac signed into the same
-iCloud account, with "Sync snapshot to iPhone" switched on. Without it, the
-app will wait politely — but it will wait.
+iCloud account, with "Sync snapshot to iPhone" switched on. A clearly labeled
+built-in demo lets anyone explore the complete app and widgets before connecting.
 
 Built for people who live in Claude Code and Codex all day and just want to
 know: how much headroom is left?
@@ -99,31 +100,31 @@ Already declared in the binary: `ITSAppUsesNonExemptEncryption = NO`
 1. `ios-usage-dark-6.9.png` — dark mode, both providers live
 2. `ios-usage-light-6.9.png` — light mode
 
-(Same build's demo fixture; values are representative. Add widget shots later
-if desired — not required for first submission.)
+13" iPad (2064 × 2752), from `~/Desktop/headroom-shots/appstore-13/`:
+
+1. `ios-usage-dark-13.png` — native two-column iPad demo
+2. `ios-usage-light-13.png` — native two-column iPad demo
+
+All images use the same labeled representative demo data as the reviewed binary.
 
 ## Notes for App Review (paste into "App Review Information → Notes")
 
 ```
-Headroom for iPhone is a companion display for Headroom for Mac, a macOS menu
-bar app distributed at https://headroom.zantos.co. The Mac app reads the
-user's Claude/Codex subscription usage locally and publishes a redaction-safe
-summary (percentages, reset times, timestamps — never credentials) through
-the user's own iCloud Key-Value Store. This iOS app and its widgets are
-read-only views of that summary.
+Headroom has no login or Headroom account. Please leave "Sign-in required" off.
 
-WHAT YOU WILL SEE IN REVIEW
-Without a Mac running the companion, the app launches to a clear "Waiting for
-your Mac" state that explains the setup steps. This is the intended
-first-run experience for a companion app; there is no login, no account, and
-no server — data arrives only from the reviewer's/user's own Mac via their
-own iCloud account.
+To review every display feature without a Mac or provider account:
+1. Launch Headroom on iPhone or iPad.
+2. Tap "Explore Demo" on the Waiting for Mac screen.
+3. Review Claude, Codex, Weekly (Fable), API Spend, reset times, and Settings.
+4. Add a small, medium, or large Headroom widget. It uses the same clearly
+   labeled demo data while Demo Mode is active.
+5. In Settings, tap "Exit Demo" to return to the real companion state.
 
-The App Store screenshots were captured using the app's built-in demo
-fixture (fixed sample data rendered by the real UI) so they accurately
-represent a connected state.
+Demo Mode uses bundled representative data, makes no provider or Headroom
+server request, and never overwrites a real synced snapshot. Live connected
+data is a redaction-safe summary published by Headroom for Mac through the
+user's own iCloud Key-Value Store. The iOS app and widgets are read-only.
 
-There is no hidden functionality; no dynamic code; no data collection of any
-kind. Contact kylezantos@gmail.com for anything at all — happy to provide a
-demo video of the Mac-to-iPhone sync working end to end if useful.
+There is no hidden functionality, dynamic code, analytics, or data collection.
+Contact kylezantos@gmail.com if any assistance is needed.
 ```

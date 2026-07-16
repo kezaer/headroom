@@ -40,4 +40,15 @@ struct APISpendPresentationTests {
             now: now
         ) == "Not updated")
     }
+
+    @Test func companionStatusMatchesCurrentMacRows() {
+        #expect(APISpendPresentation.companionStatusText(freshness: .pending) == "Waiting for cost data")
+        #expect(APISpendPresentation.companionStatusText(freshness: .live) == nil)
+        #expect(APISpendPresentation.companionStatusText(
+            freshness: .stale(message: "Add API key", needsAttention: true)
+        ) == "Needs setup")
+        #expect(APISpendPresentation.companionStatusText(
+            freshness: .stale(message: "Temporary issue", needsAttention: false)
+        ) == "Stale")
+    }
 }

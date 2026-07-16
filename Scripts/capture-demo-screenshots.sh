@@ -6,8 +6,7 @@
 # `--demo` swaps the live providers for fixed sample data (Claude Max 72/38,
 # Codex Prolite 91/64, API spend $142.67 / $58.90, renewals Jul 28 / Jul 15) across
 # every surface, so the popover, macOS widgets, and iPhone mirror all agree. Demo
-# preferences live in a private UserDefaults suite, so this never touches your real
-# settings, keys, or usage.
+# content stays in memory, so this never touches your real settings, keys, or usage.
 #
 # The iOS captures are fully automated and headless (no Simulator GUI, no screen
 # takeover). The macOS captures (popover / menu bar / widgets) need the app live in
@@ -16,6 +15,7 @@
 #
 # Usage:  Scripts/capture-demo-screenshots.sh [output-dir]
 #         (default output dir: ~/Desktop/headroom-shots)
+#         HEADROOM_IOS_ONLY=1 skips the interactive macOS capture handoff.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -23,56 +23,86 @@ cd "$(dirname "$0")/.."
 OUT="${1:-$HOME/Desktop/headroom-shots}"
 IOS_BUNDLE="com.kylezantos.headroom.ios"
 mkdir -p "$OUT"
+mkdir -p "$OUT/appstore-6.9" "$OUT/appstore-13"
 
 # The app targets iOS 26 (macOS 26 era), so an iOS-26 simulator is required. iPhone 16
 # Pro (Dynamic Island, Pro) fits the portfolio's MagicUI iPhone frame with a negligible
 # object-cover crop. Create a dedicated device on the newest installed iOS-26 runtime.
-DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"
-SIM_NAME="Headroom 16 Pro"
+PHONE_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max"
+PHONE_SIM_NAME="Headroom 16 Pro Max"
+IPAD_DEVICE_TYPE="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB"
+IPAD_SIM_NAME="Headroom iPad Pro 13"
 RUNTIME="$(xcrun simctl list runtimes 2>/dev/null | grep -oE 'com.apple.CoreSimulator.SimRuntime.iOS-26[0-9-]*' | tail -1)"
 [ -z "$RUNTIME" ] && { echo "✗ No iOS 26 simulator runtime installed (needed for Headroom's iOS target)." >&2; exit 1; }
+command -v ffmpeg >/dev/null 2>&1 \
+  || { echo "✗ ffmpeg is required to remove the PNG alpha channel for App Store upload." >&2; exit 1; }
 
 echo "▸ Output → $OUT"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # iOS — automated, headless: build → install → 9:41 status bar → --demo → shoot
 # ─────────────────────────────────────────────────────────────────────────────
-UDID="$(xcrun simctl list devices | grep "$SIM_NAME (" | grep -oE '[0-9A-Fa-f-]{36}' | head -1 || true)"
-if [ -z "$UDID" ]; then
-  UDID="$(xcrun simctl create "$SIM_NAME" "$DEVICE_TYPE" "$RUNTIME")"
-  echo "▸ iOS: created $SIM_NAME ($UDID) on $RUNTIME"
-fi
+ensure_device() {
+  local name="$1"
+  local type="$2"
+  local udid
+  udid="$(xcrun simctl list devices | grep "$name (" | grep -oE '[0-9A-Fa-f-]{36}' | head -1 || true)"
+  if [ -z "$udid" ]; then
+    udid="$(xcrun simctl create "$name" "$type" "$RUNTIME")"
+    echo "▸ iOS: created $name ($udid) on $RUNTIME" >&2
+  fi
+  echo "$udid"
+}
+
+PHONE_UDID="$(ensure_device "$PHONE_SIM_NAME" "$PHONE_DEVICE_TYPE")"
+IPAD_UDID="$(ensure_device "$IPAD_SIM_NAME" "$IPAD_DEVICE_TYPE")"
 
 echo "▸ iOS: building HeadroomIOS…"
 xcodebuild build \
   -project Headroom.xcodeproj \
   -scheme HeadroomIOS \
-  -destination "id=$UDID" \
+  -destination "id=$PHONE_UDID" \
   -derivedDataPath .build/ios-demo \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
   -quiet
 APP_PATH="$(find .build/ios-demo/Build/Products -maxdepth 3 -name 'HeadroomIOS.app' | head -1)"
 
-xcrun simctl boot "$UDID" 2>/dev/null || true
-xcrun simctl bootstatus "$UDID" -b || true
-xcrun simctl install "$UDID" "$APP_PATH"
+xcrun simctl boot "$PHONE_UDID" 2>/dev/null || true
+xcrun simctl boot "$IPAD_UDID" 2>/dev/null || true
+xcrun simctl bootstatus "$PHONE_UDID" -b || true
+xcrun simctl bootstatus "$IPAD_UDID" -b || true
+xcrun simctl install "$PHONE_UDID" "$APP_PATH"
+xcrun simctl install "$IPAD_UDID" "$APP_PATH"
 
-shoot_ios() {   # $1 = light|dark
-  xcrun simctl ui "$UDID" appearance "$1" 2>/dev/null || true
-  xcrun simctl terminate "$UDID" "$IOS_BUNDLE" 2>/dev/null || true
+shoot_ios() {   # $1 = udid, $2 = light|dark, $3 = output path
+  local udid="$1"
+  local appearance="$2"
+  local output="$3"
+  xcrun simctl ui "$udid" appearance "$appearance" 2>/dev/null || true
+  xcrun simctl terminate "$udid" "$IOS_BUNDLE" 2>/dev/null || true
   sleep 1
-  xcrun simctl status_bar "$UDID" override \
-    --time "9:41" --batteryState charged --batteryLevel 100 \
-    --cellularBars 4 --wifiBars 3 --operatorName " "
-  xcrun simctl launch "$UDID" "$IOS_BUNDLE" --demo
+  xcrun simctl status_bar "$udid" override \
+    --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3
+  xcrun simctl launch "$udid" "$IOS_BUNDLE" --demo
   sleep 8   # let the first-boot "Apple Intelligence" system banner auto-dismiss
-  xcrun simctl io "$UDID" screenshot "$OUT/ios-usage-$1.png"
-  echo "  ✓ $OUT/ios-usage-$1.png"
+  xcrun simctl io "$udid" screenshot "$output"
+  local opaque="${output%.png}-opaque.png"
+  ffmpeg -loglevel error -i "$output" -vf format=rgb24 -y "$opaque"
+  mv "$opaque" "$output"
+  echo "  ✓ $output"
 }
-echo "▸ iOS: capturing light + dark…"
-shoot_ios dark
-shoot_ios light
+echo "▸ iOS: capturing App Store iPhone + iPad sets…"
+shoot_ios "$PHONE_UDID" dark "$OUT/appstore-6.9/ios-usage-dark-6.9.png"
+shoot_ios "$PHONE_UDID" light "$OUT/appstore-6.9/ios-usage-light-6.9.png"
+shoot_ios "$IPAD_UDID" dark "$OUT/appstore-13/ios-usage-dark-13.png"
+shoot_ios "$IPAD_UDID" light "$OUT/appstore-13/ios-usage-light-13.png"
+cp "$OUT/appstore-6.9/ios-usage-dark-6.9.png" "$OUT/ios-usage-dark.png"
+cp "$OUT/appstore-6.9/ios-usage-light-6.9.png" "$OUT/ios-usage-light.png"
 echo "  (drop into the MagicUI Iphone frame; keep the default Dynamic Island)"
+
+if [ "${HEADROOM_IOS_ONLY:-0}" = "1" ]; then
+  exit 0
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # macOS — build the real .app (with widget extension) and launch it in --demo

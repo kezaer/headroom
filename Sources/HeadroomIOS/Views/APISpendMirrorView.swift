@@ -11,20 +11,11 @@ struct APISpendMirrorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("API Spend")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(HeadroomTheme.secondaryText(scheme))
-                    .textCase(.uppercase)
-                    .tracking(0.4)
-                Spacer(minLength: 8)
-                if let periodLabel = summaries.first?.periodLabel {
-                    Text(periodLabel)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
-                        .lineLimit(1)
-                }
-            }
+            Text("API Spend")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(HeadroomTheme.secondaryText(scheme))
+                .textCase(.uppercase)
+                .tracking(0.4)
 
             VStack(spacing: 0) {
                 ForEach(Array(summaries.enumerated()), id: \.element.id) { index, summary in
@@ -52,15 +43,20 @@ struct APISpendMirrorView: View {
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("headroom.api-spend")
     }
 
     private func spendRow(_ summary: WidgetAPISpendSummary) -> some View {
         HStack(alignment: .center, spacing: 10) {
-            ProviderLogoView(providerID: summary.id, size: 20)
+            ProviderLogoView(providerID: summary.id, size: 24, visualScale: 0.75)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(summary.displayName)
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text("· \(summary.periodLabel)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
                         .lineLimit(1)
                 }
                 statusLine(summary)
@@ -71,11 +67,7 @@ struct APISpendMirrorView: View {
     }
 
     @ViewBuilder private func statusLine(_ summary: WidgetAPISpendSummary) -> some View {
-        if let status = APISpendPresentation.statusText(
-            freshness: summary.freshness,
-            capturedAt: summary.capturedAt,
-            now: now
-        ) {
+        if let status = APISpendPresentation.companionStatusText(freshness: summary.freshness) {
             HStack(spacing: 6) {
                 Text(status)
                     .font(.caption)

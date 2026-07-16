@@ -47,7 +47,7 @@ struct UsageBarView: View {
     }
 
     private var resetText: String {
-        Countdown.resetText(for: window, now: now)
+        Countdown.resetText(resetsAt: window.resetsAt, now: now)
     }
 
     private func fillWidth(in availableWidth: Double) -> Double {

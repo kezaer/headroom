@@ -16,12 +16,21 @@ UPLOAD="${HEADROOM_IOS_UPLOAD:-0}"
 ASC_KEY_PATH="${HEADROOM_ASC_KEY_PATH:-}"
 ASC_KEY_ID="${HEADROOM_ASC_KEY_ID:-}"
 ASC_ISSUER_ID="${HEADROOM_ASC_ISSUER_ID:-}"
+LAST_UPLOADED_BUILD="${HEADROOM_IOS_LAST_UPLOADED_BUILD:-}"
+
+if [[ "${CONFIGURATION}" != "Release" ]]; then
+  echo "TestFlight archives must use the Release configuration." >&2
+  exit 64
+fi
 
 if [[ "${UPLOAD}" == "1" ]]; then
   EXPORT_DESTINATION="upload"
 else
   EXPORT_DESTINATION="export"
 fi
+
+HEADROOM_IOS_LAST_UPLOADED_BUILD="${LAST_UPLOADED_BUILD}" \
+  Scripts/verify-ios-release.sh --source
 
 auth_args=()
 if [[ -n "${ASC_KEY_PATH}" || -n "${ASC_KEY_ID}" || -n "${ASC_ISSUER_ID}" ]]; then
@@ -57,6 +66,9 @@ if [[ ${#auth_args[@]} -gt 0 ]]; then
   archive_command+=("${auth_args[@]}")
 fi
 "${archive_command[@]}"
+
+HEADROOM_IOS_LAST_UPLOADED_BUILD="${LAST_UPLOADED_BUILD}" \
+  Scripts/verify-ios-release.sh --archive --archive-path "${ARCHIVE_PATH}"
 
 echo "→ exporting archive (${EXPORT_DESTINATION})"
 export_command=(

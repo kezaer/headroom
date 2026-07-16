@@ -28,7 +28,20 @@ struct HeadroomIOSWidgetView: View {
                 HeadroomWidgetContainerBackground()
             }
             stateContent
-                .padding(contentMargins)
+                .padding(expandedContentMargins)
+        }
+        .overlay(alignment: .topTrailing) {
+            if isDemoMode {
+                Text("DEMO")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.tint, in: Capsule())
+                    .padding(contentMargins)
+                    .accessibilityLabel("Demo data")
+            }
         }
         .containerBackground(for: .widget) {
             HeadroomWidgetContainerBackground()
@@ -37,9 +50,24 @@ struct HeadroomIOSWidgetView: View {
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 
+    /// WidgetKit's stock margins are deliberately generous. Reclaim four points on the
+    /// top and horizontal edges so the usage cards occupy more of the iPhone widget while
+    /// preserving the system bottom inset for the trailing freshness label.
+    private var expandedContentMargins: EdgeInsets {
+        let reduction: CGFloat = 4
+        return EdgeInsets(
+            top: max(0, contentMargins.top - reduction),
+            leading: max(0, contentMargins.leading - reduction),
+            bottom: contentMargins.bottom,
+            trailing: max(0, contentMargins.trailing - reduction)
+        )
+    }
+
     @ViewBuilder
     private var stateContent: some View {
         switch entry.state {
+        case .demo(let envelope):
+            content(envelope)
         case .content(let envelope):
             content(envelope)
         case .disabled:
@@ -53,6 +81,10 @@ struct HeadroomIOSWidgetView: View {
         case .incompatibleSchema:
             IOSWidgetStatusView(title: "Update Needed", message: "Update Headroom on both devices.")
         }
+    }
+
+    private var isDemoMode: Bool {
+        if case .demo = entry.state { true } else { false }
     }
 
     @ViewBuilder
@@ -133,7 +165,7 @@ struct HeadroomIOSWidgetView: View {
                 Spacer(minLength: 0)
                 mediumProviderColumns(envelope.providers)
                 Spacer(minLength: 0)
-                mediumFooter(generatedAt: envelope.generatedAt, prefix: "from Mac · ")
+                mediumFooter(generatedAt: envelope.generatedAt, prefix: freshnessPrefix)
             } else {
                 mediumProviderColumns(envelope.providers)
                 Spacer(minLength: 6)
@@ -206,7 +238,9 @@ struct HeadroomIOSWidgetView: View {
                 }
             }
             HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", compact: true)
-            HeadroomWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", compact: true)
+            if let fiveHourWindow = window(.fiveHour, in: provider) {
+                HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", compact: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -233,7 +267,7 @@ struct HeadroomIOSWidgetView: View {
             }
             Spacer(minLength: 0)
             if let updated = Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date) {
-                Text("from Mac · \(updated)")
+                Text("\(freshnessPrefix)\(updated)")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
                     .lineLimit(1)
@@ -250,7 +284,9 @@ struct HeadroomIOSWidgetView: View {
         VStack(alignment: .leading, spacing: 9) {
             largeSectionHeader(provider)
             HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, prominent: true)
-            HeadroomWidgetUsageMeter(window: window(.fiveHour, in: provider), fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
+            if let fiveHourWindow = window(.fiveHour, in: provider) {
+                HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -298,5 +334,9 @@ struct HeadroomIOSWidgetView: View {
     private func percent(_ window: WidgetWindowSummary?) -> String {
         guard let window else { return "--" }
         return "\(Int(window.percentRemaining.rounded()))%"
+    }
+
+    private var freshnessPrefix: String {
+        isDemoMode ? "sample · " : "from Mac · "
     }
 }
