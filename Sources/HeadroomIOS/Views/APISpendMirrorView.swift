@@ -7,6 +7,7 @@ struct APISpendMirrorView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var appeared = false
 
     var body: some View {
@@ -46,47 +47,55 @@ struct APISpendMirrorView: View {
         .accessibilityIdentifier("headroom.api-spend")
     }
 
-    private func spendRow(_ summary: WidgetAPISpendSummary) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            ProviderLogoView(providerID: summary.id, size: 24, visualScale: 0.75)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(summary.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text("· \(summary.periodLabel)")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
-                        .lineLimit(1)
+    @ViewBuilder private func spendRow(_ summary: WidgetAPISpendSummary) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 4) {
+                titleLine(summary)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    statusLine(summary)
+                    Spacer(minLength: 8)
+                    amountView(summary)
                 }
-                statusLine(summary)
             }
-            Spacer(minLength: 8)
-            amountView(summary)
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    titleLine(summary)
+                    statusLine(summary)
+                }
+                Spacer(minLength: 8)
+                amountView(summary)
+                    .layoutPriority(1)
+            }
+        }
+    }
+
+    private func titleLine(_ summary: WidgetAPISpendSummary) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(summary.displayName)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Text("· \(summary.periodLabel)")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
+                .lineLimit(1)
         }
     }
 
     @ViewBuilder private func statusLine(_ summary: WidgetAPISpendSummary) -> some View {
         if let status = APISpendPresentation.companionStatusText(freshness: summary.freshness) {
-            HStack(spacing: 6) {
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(statusColor(for: summary.freshness))
-                    .lineLimit(1)
-                if case .stale(let message, _) = summary.freshness {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
-                        .lineLimit(1)
-                }
-            }
+            Text(status)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(statusColor(for: summary.freshness))
+                .lineLimit(1)
         }
     }
 
     @ViewBuilder private func amountView(_ summary: WidgetAPISpendSummary) -> some View {
         if let amount = APISpendPresentation.amountText(summary) {
             Text(amount)
-                .font(.title3.weight(.semibold).monospacedDigit())
+                .font(.headline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(summary.freshness == .live ? .primary : HeadroomTheme.secondaryText(scheme))
                 .privacySensitive()
                 .lineLimit(1)
@@ -94,7 +103,7 @@ struct APISpendMirrorView: View {
                 .allowsTightening(true)
         } else {
             Text("—")
-                .font(.title3.weight(.semibold).monospacedDigit())
+                .font(.headline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(HeadroomTheme.secondaryText(scheme))
                 .lineLimit(1)
                 .multilineTextAlignment(.trailing)

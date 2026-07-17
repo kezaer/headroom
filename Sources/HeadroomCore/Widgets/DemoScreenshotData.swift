@@ -80,7 +80,9 @@ public enum DemoScreenshotData {
             currency: "usd",
             periodLabel: "Current month",
             capturedAt: Date(),
-            freshness: .live
+            freshness: CommandLine.arguments.contains("--demo-stale-api-spend")
+                ? .stale(message: "Demo cost data is stale", needsAttention: false)
+                : .live
         )
     }
 
