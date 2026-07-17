@@ -38,8 +38,8 @@ struct ProviderTileView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            ProviderLogoView(providerID: provider.id, size: 24)
+        HStack(spacing: 8) {
+            ProviderLogoView(providerID: provider.id, size: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(provider.displayName)
                     .font(.headline.weight(.semibold))
