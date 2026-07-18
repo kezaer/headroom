@@ -7,8 +7,8 @@ Paste-ready fields for the `com.kylezantos.headroom.ios` 1.0 submission.
 - 2026-07-15: App Review rejected iOS 1.0 build 14 under Guideline 2.1(a)
   because reviewers could not access connected functionality without Kyle's Mac/iCloud
   setup. Submission ID: `3472c833-11a3-4815-82d0-816b291dab60`.
-- 2026-07-15: Prepared universal iPhone/iPad build 21 with a production demonstration
-  mode shared by the companion and widgets. Select build 21 only after processing and
+- 2026-07-18: Uploaded universal iPhone/iPad build 23 with the production demonstration
+  mode and the latest companion/widget fixes. Select build 23 only after processing and
   the clean TestFlight acceptance gate in `ios-app-review-testflight.md` pass.
 
 ## Name (30 chars max)

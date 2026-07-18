@@ -50,15 +50,15 @@ struct HeadroomIOSWidgetView: View {
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 
-    /// WidgetKit's stock margins are deliberately generous. Reclaim four points on the
-    /// top and horizontal edges so the usage cards occupy more of the iPhone widget while
-    /// preserving the system bottom inset for the trailing freshness label.
+    /// WidgetKit's stock margins are deliberately generous. Reclaim four points on every
+    /// edge so the provider cards occupy more of the iPhone widget without crowding the
+    /// container boundary.
     private var expandedContentMargins: EdgeInsets {
         let reduction: CGFloat = 4
         return EdgeInsets(
             top: max(0, contentMargins.top - reduction),
             leading: max(0, contentMargins.leading - reduction),
-            bottom: contentMargins.bottom,
+            bottom: max(0, contentMargins.bottom - reduction),
             trailing: max(0, contentMargins.trailing - reduction)
         )
     }
@@ -278,9 +278,9 @@ struct HeadroomIOSWidgetView: View {
                 .padding(.top, 12)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 13)
-        .padding(.bottom, 12)
+        // The system margins are already restored by `expandedContentMargins`; this is
+        // only the same small residual inset used by the medium family.
+        .padding(2)
     }
 
     private func largeFooterText(_ envelope: WidgetSnapshotEnvelope) -> String? {

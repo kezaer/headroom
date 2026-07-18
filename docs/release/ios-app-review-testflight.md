@@ -1,8 +1,8 @@
 # iOS App Review and TestFlight Runbook
 
-Release candidate: iOS 1.0 build 21 (`com.kylezantos.headroom.ios`) with widget
-extension build 21 (`com.kylezantos.headroom.ios.widgets`). Last known uploaded build
-baseline for this cut: 20.
+Release candidate: iOS 1.0 build 23 (`com.kylezantos.headroom.ios`) with widget
+extension build 23 (`com.kylezantos.headroom.ios.widgets`). Last known uploaded build
+baseline for this cut: 22.
 
 ## Why this resubmission exists
 
@@ -11,10 +11,11 @@ reviewer could not access connected functionality without a Mac/iCloud publisher
 Submission ID: `3472c833-11a3-4815-82d0-816b291dab60`. Apple explicitly accepted a
 demonstration mode as the resolution.
 
-Build 21 adds a production, one-tap demo that needs no login, Mac, iCloud payload, or
-provider account. It also makes the host and widget extension universal on iPhone/iPad.
-Demo data is bundled and read-only; a separate App Group flag coordinates the widget and
-never replaces the real snapshot cache.
+Build 23 includes the production, one-tap demo introduced in build 21, needs no login,
+Mac, iCloud payload, or provider account, and carries the latest companion/widget fixes.
+The host and widget extension remain universal on iPhone/iPad. Demo data is bundled and
+read-only; a separate App Group flag coordinates the widget and never replaces the real
+snapshot cache.
 
 ## Automated release gates
 
@@ -25,23 +26,23 @@ xcodegen generate
 # Run HeadroomIOSUITests on an iPhone and an iPad Air 11-inch simulator.
 # XcodeBuildMCP or xcodebuild may be used; both destinations must pass.
 
-HEADROOM_IOS_LAST_UPLOADED_BUILD=20 Scripts/verify-ios-release.sh --source
+HEADROOM_IOS_LAST_UPLOADED_BUILD=22 Scripts/verify-ios-release.sh --source
 ```
 
 The release script repeats source preflight, archives, validates the signed host and
 embedded widget, and only then exports/uploads:
 
 ```bash
-HEADROOM_IOS_LAST_UPLOADED_BUILD=20 ./Scripts/release-ios-testflight.sh
+HEADROOM_IOS_LAST_UPLOADED_BUILD=22 ./Scripts/release-ios-testflight.sh
 
-HEADROOM_IOS_LAST_UPLOADED_BUILD=20 \
+HEADROOM_IOS_LAST_UPLOADED_BUILD=22 \
 HEADROOM_IOS_UPLOAD=1 \
   ./Scripts/release-ios-testflight.sh
 ```
 
 If using API-key authentication, set all three `HEADROOM_ASC_KEY_PATH`,
 `HEADROOM_ASC_KEY_ID`, and `HEADROOM_ASC_ISSUER_ID` variables. Never paste their values
-into this document or command output. Build 21 must be confirmed unused in App Store
+into this document or command output. Build 23 must be confirmed unused in App Store
 Connect before upload; if a newer build already exists, increment host and widget
 together and use the actual highest uploaded build as the baseline.
 
@@ -119,3 +120,6 @@ until those facts are verified in App Store Connect.
 - 2026-07-15: Fresh reviewed build 21 signed archive and archive preflight passed. Xcode
   Organizer uploaded the host app and embedded widget to App Store Connect at 12:31 PM PT;
   processing, internal-group assignment, and clean TestFlight acceptance remain pending.
+- 2026-07-18: Build 23 passed the source, signed-archive, iPhone, and iPad release gates.
+  Xcode Organizer uploaded the host app and embedded widget to App Store Connect at
+  1:22 PM PT; App Store Connect processing and TestFlight group assignment remain pending.
