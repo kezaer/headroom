@@ -376,6 +376,11 @@ private struct HeadroomWidgetLargeProviderCardModifier: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.widgetRenderingMode) private var renderingMode
 
+    // Card corners follow `ContainerRelativeShape`: the widget's own container shape, inset
+    // by the card's margin. That keeps them concentric automatically on every geometry —
+    // iPhone's ~33pt continuous container and macOS's own radius alike — instead of a fixed
+    // radius that only nests on one device. It's the concentric rule (outer = inner + inset)
+    // delegated to the system, and it matches the container's corner style, not just its size.
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, 10)
@@ -394,20 +399,20 @@ private struct HeadroomWidgetLargeProviderCardModifier: ViewModifier {
             // and keep only a hairline ring, matching how the medium widget reads in the
             // same state — separated surfaces, no glow. (Mirrors the containerBackground
             // gate in HeadroomWidgetView.)
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
+            ContainerRelativeShape()
                 .strokeBorder(HeadroomWidgetStyle.cardRing(scheme: scheme), lineWidth: 1)
         }
     }
 
     private var fullColorCard: some View {
-        RoundedRectangle(cornerRadius: 13, style: .continuous)
+        ContainerRelativeShape()
             .fill(HeadroomWidgetStyle.cardFill(scheme: scheme))
             .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                ContainerRelativeShape()
                     .strokeBorder(HeadroomWidgetStyle.cardRing(scheme: scheme), lineWidth: 1)
             }
             .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                ContainerRelativeShape()
                     .fill(HeadroomWidgetStyle.cardTopRim(scheme: scheme))
                     .frame(height: 1)
                     .padding(.horizontal, 7)
@@ -420,6 +425,9 @@ private struct HeadroomWidgetLargeProviderCardModifier: ViewModifier {
 }
 
 public extension View {
+    /// Wraps a provider section in the large-widget card surface. The corner radius follows
+    /// the widget's container shape (see `HeadroomWidgetLargeProviderCardModifier`) so the
+    /// cards nest concentrically on both iOS and macOS.
     func headroomWidgetLargeProviderCard() -> some View {
         modifier(HeadroomWidgetLargeProviderCardModifier())
     }

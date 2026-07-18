@@ -61,7 +61,7 @@ private struct LargeProviderSection: View {
         HStack(spacing: 6) {
             WidgetProviderIcon(providerID: provider.id, size: 20)
             Text(provider.displayName)
-                .font(.subheadline.weight(.semibold))
+                .font(.callout.weight(.bold))
                 .foregroundStyle(WidgetProviderStyle.textAccent(for: provider.id, scheme: scheme))
                 .widgetAccentable()
                 .lineLimit(1)

@@ -302,7 +302,7 @@ struct HeadroomIOSWidgetView: View {
         HStack(spacing: 6) {
             HeadroomWidgetProviderIcon(providerID: provider.id, size: 20)
             Text(provider.displayName)
-                .font(.subheadline.weight(.semibold))
+                .font(.callout.weight(.bold))
                 .foregroundStyle(HeadroomWidgetStyle.textAccent(for: provider.id, scheme: scheme))
                 .widgetAccentable()
                 .lineLimit(1)
