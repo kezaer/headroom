@@ -57,6 +57,54 @@ struct UsageStoreTests {
         if case .stale = after.freshness {} else { Issue.record("should be stale") }
     }
 
+    @Test func partialClaudeLiveCaptureKeepsCurrentWeeklySubLimit() async {
+        let initialCapture = Date(timeIntervalSince1970: 2_000_000)
+        let partialCapture = Date(timeIntervalSince1970: 2_050_000)
+        let nextCycleCapture = Date(timeIntervalSince1970: 2_200_000)
+        let currentReset = Date(timeIntervalSince1970: 2_100_000)
+        let nextReset = Date(timeIntervalSince1970: 2_700_000)
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 5, resetsAt: reset),
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: currentReset, resetLabel: "Resets Jul 23 at 9:59am"),
+                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 39, resetsAt: currentReset, resetLabel: "Resets Jul 23 at 9:59am"),
+            ], at: initialCapture)
+        )
+        let phoneExporter = SpyWidgetExporter()
+        let preferences = freshPreferences()
+        preferences.syncToIPhoneEnabled = true
+        let store = UsageStore(
+            providers: [provider],
+            preferences: preferences,
+            phoneSyncExporter: phoneExporter
+        )
+
+        await store.refreshAll()
+        provider.set(.live(.claude, windows: [
+            UsageWindow(kind: .fiveHour, utilization: 0, resetsAt: reset),
+            UsageWindow(kind: .weekly, utilization: 25, resetsAt: currentReset, resetLabel: "Resets Jul 23 at 10am"),
+        ], at: partialCapture))
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [
+            .fiveHour,
+            .weekly,
+            .other("Weekly (Fable)"),
+        ])
+        #expect(store.snapshot(for: .claude).freshness == .stale(.transient("Partial Claude usage — will retry")))
+        #expect(phoneExporter.exports.last?.providers.first?.extraWeeklyWindows.map(\.compactLabel) == ["Fable"])
+
+        provider.set(.live(.claude, windows: [
+            UsageWindow(kind: .fiveHour, utilization: 0, resetsAt: reset),
+            UsageWindow(kind: .weekly, utilization: 0, resetsAt: nextReset, resetLabel: "Resets Jul 30 at 9:59am"),
+        ], at: nextCycleCapture))
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [.fiveHour, .weekly])
+    }
+
     @Test func startIsIdempotent() async {
         // A second start() (e.g. the popover re-appearing) must not re-fetch or restart
         // the loop — the guard keeps exactly one initial refresh.
