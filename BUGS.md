@@ -64,6 +64,11 @@ official `claude` CLI's `/usage` panel instead.
   The harness also announces Settings PNGs even when `screencapture` fails to create them.
   Fix the capture-only appearance propagation and only print success for files that exist;
   live app appearance is unaffected.
+- **The 3× `hero-popover-dark.png` render can omit the entire card stack.** The regular
+  connected render includes usage and API-spend cards, but `renderHero` currently exports
+  only the header and footer after the popover moved to a measured `ScrollView`. Fix the
+  offscreen height proposal/state settling before regenerating the website hero; the live
+  popover is unaffected.
 - ~~App icon — user to provide.~~ Done: Vessel `AppIcon.appiconset` (16–1024), wired via
   `ASSETCATALOG_COMPILER_APPICON_NAME`. The artwork is full-bleed square PNG output so iOS,
   iPadOS, and macOS can apply their native icon shape without a second baked-in frame.

@@ -38,21 +38,28 @@ struct SettingsHelpText: View {
     }
 }
 
-/// Compact saved-state chip for credential rows, reusing the Connected-chip recipe
-/// (`ProviderCardView`) so "key present" and "provider connected" speak one dialect.
-/// Makes the window's most stateful item — is a key stored? — visible at rest.
-struct KeySavedChip: View {
+/// Persistent configured state for credential rows. Only the checkmark carries the
+/// success treatment; the text stays quiet so this reads as status, not a celebratory
+/// badge competing with the provider title.
+struct SavedCredentialStatus: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
-            Text("Key saved")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(ClaudeSetupStyle.connectedInk(dark: scheme == .dark))
+                .frame(width: 16, height: 16)
+                .background(
+                    ClaudeSetupStyle.connectedBackground(dark: scheme == .dark),
+                    in: Circle()
+                )
+                .accessibilityHidden(true)
+            Text("Saved securely")
                 .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
         }
-        .foregroundStyle(ClaudeSetupStyle.connectedInk(dark: scheme == .dark))
-        .padding(.horizontal, 8).padding(.vertical, 2.5)
-        .background(ClaudeSetupStyle.connectedBackground(dark: scheme == .dark), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Key saved securely")
     }
 }

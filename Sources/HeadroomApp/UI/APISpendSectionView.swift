@@ -13,7 +13,7 @@ struct APISpendSectionView: View {
         if !ids.isEmpty {
             // One raised panel with the header inside and hairline-separated rows — mirrors
             // the settings "API Spend" panel so the two surfaces share one language.
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 9) {
                 Text("API Spend")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.secondary)
@@ -27,7 +27,6 @@ struct APISpendSectionView: View {
                                 .padding(.vertical, 7)
                         }
                         spendRow(store.apiSpendSnapshot(for: id))
-                            .padding(.vertical, 7)
                     }
                 }
             }
@@ -40,14 +39,13 @@ struct APISpendSectionView: View {
 
     @ViewBuilder private func spendRow(_ snapshot: APISpendSnapshot) -> some View {
         HStack(alignment: .center, spacing: 6) {
-            ProviderLogoView(providerID: snapshot.providerID, size: 19)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snapshot.displayName)
                         .font(.system(size: 14, weight: .semibold))
                     Text("· \(store.apiSpendPeriod.displayLabel(now: now))")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.tertiary)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
                 }
                 // The live "Updated N min ago" sub-line is dropped — the popover header
                 // already carries one consolidated stamp. Non-live states keep their
@@ -101,11 +99,14 @@ struct APISpendSectionView: View {
                     } label: {
                         Image(systemName: "plus")
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.secondary)
                             .frame(width: 18, height: 18)
                     }
-                    .buttonStyle(HoverButtonStyle(horizontalPadding: 0, verticalPadding: 0))
-                    .help("Add \(snapshot.displayName) credits")
+                    .buttonStyle(HoverButtonStyle(
+                        horizontalPadding: 0,
+                        verticalPadding: 0,
+                        hoverForegroundColor: ProviderStyle.textAccent(for: snapshot.providerID, scheme: scheme)
+                    ))
+                    .delayedHelp("Open \(snapshot.displayName) billing to add credits")
                     .accessibilityLabel("Add \(snapshot.displayName) credits")
                 }
             }

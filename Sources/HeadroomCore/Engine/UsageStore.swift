@@ -510,12 +510,50 @@ public final class UsageStore {
            fresh.windows.isEmpty,
            let prior = snapshots[key], !prior.windows.isEmpty {
             next = prior.markedStale(reason)
+        } else if key.providerID == .claude,
+                  fresh.freshness == .live,
+                  let prior = snapshots[key] {
+            next = preservingClaudeWeeklySubLimits(in: fresh, from: prior)
         } else {
             next = fresh
         }
         // Skip the assignment when nothing changed so an unchanging state (e.g. a
         // provider that stays logged-out) doesn't invalidate observers every cycle.
         if snapshots[key] != next { snapshots[key] = next }
+    }
+
+    /// Claude's `/usage` panel can finish one repaint before its model-specific weekly
+    /// limits arrive. That partial capture is otherwise valid and therefore `.live`, so
+    /// replacing the whole snapshot makes Fable disappear until a later complete poll.
+    /// Retain a missing sub-limit only until its prior reset time; a new cycle still
+    /// removes limits that Claude no longer reports. Use the parsed timestamp rather
+    /// than Claude's human label because TUI repaints can format that label differently.
+    /// Mark the mixed snapshot stale so retained values are never presented as newly read.
+    private func preservingClaudeWeeklySubLimits(
+        in fresh: UsageSnapshot,
+        from prior: UsageSnapshot
+    ) -> UsageSnapshot {
+        guard fresh.windows.contains(where: { $0.kind == .weekly }),
+              let capturedAt = fresh.capturedAt
+        else {
+            return fresh
+        }
+        let freshKinds = Set(fresh.windows.map(\.kind))
+        let retained = prior.windows.filter { window in
+            guard case .other(let label) = window.kind,
+                  label.localizedCaseInsensitiveContains("weekly"),
+                  !freshKinds.contains(window.kind)
+            else { return false }
+            return window.resetsAt > capturedAt
+        }
+        guard !retained.isEmpty else { return fresh }
+        return UsageSnapshot(
+            providerID: fresh.providerID,
+            windows: fresh.windows + retained,
+            planLabel: fresh.planLabel,
+            capturedAt: fresh.capturedAt,
+            freshness: .stale(.transient("Partial Claude usage — will retry"))
+        )
     }
 
     private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {
