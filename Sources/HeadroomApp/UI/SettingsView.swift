@@ -39,6 +39,7 @@ struct SettingsView: View {
     @State private var openAIKey = ""
     @State private var anthropicKey = ""
     @State private var savedKeyProviders: Set<APIKeyProvider> = []
+    @State private var replacingKeyProviders: Set<APIKeyProvider> = []
     @State private var credentialMessages: [APIKeyProvider: String] = [:]
     @State private var messageDismissals: [APIKeyProvider: Task<Void, Never>] = [:]
     @State private var removalCandidate: APIKeyProvider?
@@ -522,10 +523,10 @@ struct SettingsView: View {
 
     // MARK: - API spend rows
 
-    /// Master row (mark + name + saved-state chip + switch), then — only while the
-    /// surface is on — the key entry. Off means absent, not dimmed: the old treatment
-    /// kept sub-floor-contrast text and a dead credential field on screen at 0.4
-    /// opacity for a feature that was off.
+    /// Master row (mark + name + switch), then — only while the surface is on — either
+    /// a calm configured summary or the key editor. Credential state belongs beside
+    /// the credential controls; putting it in the master row crowded the provider name
+    /// enough to wrap at ordinary settings widths.
     @ViewBuilder private func apiProviderRows(
         surface: UsageSurface,
         provider: APIKeyProvider,
@@ -533,6 +534,9 @@ struct SettingsView: View {
         placeholder: String,
         text: Binding<String>
     ) -> some View {
+        let saved = savedKeyProviders.contains(provider)
+        let replacing = replacingKeyProviders.contains(provider)
+
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 HStack(spacing: 7) {
@@ -540,18 +544,25 @@ struct SettingsView: View {
                     Text(surface.displayName)
                 }
                 Spacer(minLength: 12)
-                if savedKeyProviders.contains(provider) {
-                    KeySavedChip()
-                        .transition(.opacity)
-                }
-                Toggle(surface.displayName, isOn: surfaceBinding(surface))
+                Toggle(surface.displayName, isOn: apiSurfaceBinding(surface, provider: provider))
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()
             }
             if store.isSurfaceEnabled(surface) {
-                apiKeyRow(provider: provider, title: title, placeholder: placeholder, text: text)
+                if saved && !replacing {
+                    configuredAPIKeyRow(provider: provider, title: title)
+                        .transition(.settingsReveal)
+                } else {
+                    apiKeyEditor(
+                        provider: provider,
+                        title: title,
+                        placeholder: placeholder,
+                        text: text,
+                        replacing: replacing
+                    )
                     .transition(.settingsReveal)
+                }
             }
             if let message = credentialMessages[provider] {
                 // Result feedback lives on the acted-on row (the old shared line
@@ -561,27 +572,66 @@ struct SettingsView: View {
             }
         }
         .animation(reduceMotion ? nil : Self.settleAnimation, value: savedKeyProviders)
+        .animation(reduceMotion ? nil : Self.settleAnimation, value: replacingKeyProviders)
         .animation(reduceMotion ? nil : Self.settleAnimation, value: credentialMessages)
     }
 
-    private func apiKeyRow(
+    private func apiSurfaceBinding(_ surface: UsageSurface, provider: APIKeyProvider) -> Binding<Bool> {
+        let binding = surfaceBinding(surface)
+        return Binding(
+            get: { binding.wrappedValue },
+            set: { isEnabled in
+                binding.wrappedValue = isEnabled
+                if !isEnabled {
+                    replacingKeyProviders.remove(provider)
+                    clearField(for: provider)
+                }
+            }
+        )
+    }
+
+    private func configuredAPIKeyRow(provider: APIKeyProvider, title: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                SavedCredentialStatus()
+                Spacer(minLength: 12)
+                Button("Replace key…") {
+                    credentialMessages[provider] = nil
+                    messageDismissals[provider]?.cancel()
+                    replacingKeyProviders.insert(provider)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button("Remove") { removalCandidate = provider }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func apiKeyEditor(
         provider: APIKeyProvider,
         title: String,
         placeholder: String,
-        text: Binding<String>
+        text: Binding<String>,
+        replacing: Bool
     ) -> some View {
-        let saved = savedKeyProviders.contains(provider)
         return VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     apiKeyField(provider: provider, placeholder: placeholder, text: text)
-                    apiKeyButtons(provider: provider, saved: saved, text: text)
+                    apiKeyEditorButtons(provider: provider, replacing: replacing, text: text)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     apiKeyField(provider: provider, placeholder: placeholder, text: text)
-                    apiKeyButtons(provider: provider, saved: saved, text: text)
+                    apiKeyEditorButtons(provider: provider, replacing: replacing, text: text)
                 }
             }
         }
@@ -597,24 +647,32 @@ struct SettingsView: View {
             }
     }
 
-    /// Native bordered commit action — one button vocabulary with the footer,
-    /// replacing the hover-only bare-text chips (whose extended hit areas also
-    /// overlapped at the old 8pt spacing). Save is disabled on an empty field;
-    /// Remove exists only when there is a key to remove, behind a confirmation.
-    private func apiKeyButtons(provider: APIKeyProvider, saved: Bool, text: Binding<String>) -> some View {
+    /// The editor is used for both first save and intentional replacement. Removal
+    /// stays in the configured summary so a replacement never presents three competing
+    /// actions beside a secure field.
+    private func apiKeyEditorButtons(
+        provider: APIKeyProvider,
+        replacing: Bool,
+        text: Binding<String>
+    ) -> some View {
         HStack(spacing: 8) {
-            Button(saved ? "Update" : "Save") {
+            Button(replacing ? "Update" : "Save") {
                 saveKey(text.wrappedValue, for: provider)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-            if saved {
-                Button("Remove") { removalCandidate = provider }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .foregroundStyle(.secondary)
+            if replacing {
+                Button("Cancel") {
+                    clearField(for: provider)
+                    credentialMessages[provider] = nil
+                    messageDismissals[provider]?.cancel()
+                    replacingKeyProviders.remove(provider)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .foregroundStyle(.secondary)
             }
         }
     }
@@ -672,9 +730,8 @@ struct SettingsView: View {
         launchAtLogin = launchControl.isEnabled
     }
 
-    /// Presence only (never the key material): drives the "Key saved" chip and the
-    /// Save/Update/Remove states, so a credentials UI can finally show whether a
-    /// credential exists.
+    /// Presence only (never the key material): selects the configured summary or the
+    /// first-save editor, so the UI can show whether a credential exists at rest.
     private func refreshSavedKeyPresence() async {
         for provider in APIKeyProvider.allCases {
             if case .success = await credentialStore.apiKey(for: provider) {
@@ -692,7 +749,10 @@ struct SettingsView: View {
                 // Clear only on success — a Keychain failure must not eat a pasted key.
                 clearField(for: provider)
                 savedKeyProviders.insert(provider)
-                showCredentialMessage("\(provider.displayName) API key saved", for: provider, autoDismiss: true)
+                replacingKeyProviders.remove(provider)
+                credentialMessages[provider] = nil
+                messageDismissals[provider]?.cancel()
+                AccessibilityNotification.Announcement("\(provider.displayName) API key saved").post()
                 store.refreshAPISpendNow()
             case .failure(let reason):
                 showCredentialMessage(reason.message, for: provider, autoDismiss: false)
@@ -706,6 +766,7 @@ struct SettingsView: View {
             case .success:
                 clearField(for: provider)
                 savedKeyProviders.remove(provider)
+                replacingKeyProviders.remove(provider)
                 showCredentialMessage("\(provider.displayName) API key removed", for: provider, autoDismiss: true)
                 store.refreshAPISpendNow()
             case .failure(let reason):
