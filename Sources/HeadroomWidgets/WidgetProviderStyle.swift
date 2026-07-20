@@ -5,8 +5,3 @@ import SwiftUI
 
 typealias WidgetProviderStyle = HeadroomWidgetStyle
 
-extension View {
-    func largeProviderCard() -> some View {
-        headroomWidgetLargeProviderCard()
-    }
-}

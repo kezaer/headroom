@@ -249,17 +249,24 @@ struct HeadroomIOSWidgetView: View {
     // and a trailing freshness footer. No "Usage"
     // title or app-icon mark (R3).
     private func large(_ envelope: WidgetSnapshotEnvelope) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(envelope.providers) { provider in
-                    largeProviderSection(provider)
-                        .headroomWidgetLargeProviderCard()
+        let density = LargeWidgetDensity(envelope: envelope)
+        // Equal flexible spacers (same minLength) own every vertical gap — top edge, between
+        // sections, and bottom edge — so SwiftUI distributes leftover height uniformly and
+        // the rhythm stays symmetric no matter how many rows this user's content produces.
+        // Density (a HeadroomCore tier computed from the row count) sets the floors and
+        // steps the meters down from prominent when content is heavy.
+        return VStack(alignment: .leading, spacing: 0) {
+            gap(density)
+            ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
+                largeProviderSection(provider, density: density)
+                gap(density)
+                if index < envelope.providers.count - 1 {
+                    Rectangle()
+                        .fill(HeadroomWidgetStyle.hairline(scheme: scheme))
+                        .frame(height: 1)
+                    gap(density)
                 }
             }
-            Spacer(minLength: 0)
-            // The full spend section (title + named rows) overflows the large tile with two
-            // provider cards above it, so spend gets the same one-line strip the medium
-            // widget uses; the companion app carries names, period, and status detail.
             if envelope.apiSpendProviders.isEmpty {
                 if let updated = largeFooterText(envelope) {
                     Text(updated)
@@ -267,7 +274,7 @@ struct HeadroomIOSWidgetView: View {
                         .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .trailing)
-                        .padding(.top, 8)
+                    gap(density)
                 }
             } else {
                 HeadroomWidgetAPISpendStrip(
@@ -275,45 +282,48 @@ struct HeadroomIOSWidgetView: View {
                     now: entry.date,
                     footerText: largeFooterText(envelope)
                 )
-                .padding(.top, 12)
+                gap(density)
             }
         }
-        // The system margins are already restored by `expandedContentMargins`; this is
-        // only the same small residual inset used by the medium family.
-        .padding(2)
+        .padding(.horizontal, 2)
     }
 
     private func largeFooterText(_ envelope: WidgetSnapshotEnvelope) -> String? {
         Countdown.updatedLabel(capturedAt: envelope.generatedAt, now: entry.date).map { "\(freshnessPrefix)\($0)" }
     }
 
-    private func largeProviderSection(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            largeSectionHeader(provider)
-            HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, prominent: true)
-            if let fiveHourWindow = window(.fiveHour, in: provider) {
-                HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, prominent: true)
+    private func gap(_ density: LargeWidgetDensity) -> some View {
+        Spacer(minLength: CGFloat(density.gapFloor))
+    }
+
+    private func largeProviderSection(_ provider: WidgetProviderSummary, density: LargeWidgetDensity) -> some View {
+        // Header sits one notch closer to its first readout than the meters sit to each
+        // other, so the provider name reads as a label for the block rather than a floating
+        // title.
+        VStack(alignment: .leading, spacing: CGFloat(density.headerSpacing)) {
+            largeSectionHeader(provider, density: density)
+            VStack(alignment: .leading, spacing: CGFloat(density.meterSpacing)) {
+                HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, scale: density.scale)
+                if let fiveHourWindow = window(.fiveHour, in: provider) {
+                    HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, scale: density.scale)
+                }
+                ForEach(provider.extraWeeklyWindows) { extraWindow in
+                    HeadroomWidgetUsageMeter(window: extraWindow, fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, scale: density.scale)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func largeSectionHeader(_ provider: WidgetProviderSummary) -> some View {
+    private func largeSectionHeader(_ provider: WidgetProviderSummary, density: LargeWidgetDensity) -> some View {
         HStack(spacing: 6) {
-            HeadroomWidgetProviderIcon(providerID: provider.id, size: 20)
+            HeadroomWidgetProviderIcon(providerID: provider.id, size: CGFloat(density.providerIconSize))
             Text(provider.displayName)
-                .font(.subheadline.weight(.semibold))
+                .font(providerHeaderFont(density))
                 .foregroundStyle(HeadroomWidgetStyle.textAccent(for: provider.id, scheme: scheme))
                 .widgetAccentable()
                 .lineLimit(1)
             Spacer(minLength: 4)
-            if let extraWindow = provider.limitingExtraWeeklyWindow {
-                Text("\(extraWindow.compactLabel) \(extraWindow.roundedPercentRemaining)%")
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(extraLimitColor(extraWindow))
-                    .lineLimit(1)
-                    .accessibilityLabel("\(extraWindow.compactLabel) limit, \(extraWindow.roundedPercentRemaining) percent left")
-            }
             if provider.freshness.needsAttention {
                 Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
                     .labelStyle(.iconOnly)
@@ -329,12 +339,10 @@ struct HeadroomIOSWidgetView: View {
         provider.subscriptionWindows.first { $0.kind == kind }
     }
 
-    private func extraLimitColor(_ window: WidgetWindowSummary) -> Color {
-        switch window.severity {
-        case .healthy:
-            HeadroomWidgetStyle.secondaryText(scheme: scheme)
-        case .low, .critical:
-            HeadroomWidgetStyle.severityColor(for: window.severity, scheme: scheme)
+    private func providerHeaderFont(_ density: LargeWidgetDensity) -> Font {
+        switch density.providerHeaderFontStep {
+        case .hero: return .headline.weight(.semibold)
+        case .standard, .dense: return .subheadline.weight(.semibold)
         }
     }
 

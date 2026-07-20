@@ -4,7 +4,7 @@ import Testing
 
 struct DemoScenarioParityTests {
     @Test func iOSDemoCoversCurrentMacScenario() {
-        let ios = DemoScreenshotData.envelope
+        let ios = DemoScreenshotData.envelope(for: "full")
         let projected = WidgetSnapshotProjector.project(
             snapshots: [
                 .claude: DemoFixture.claudeSnapshot,
@@ -26,7 +26,7 @@ struct DemoScenarioParityTests {
     }
 
     @Test func iOSDemoIncludesEveryReviewableSection() {
-        let envelope = DemoScreenshotData.envelope
+        let envelope = DemoScreenshotData.envelope(for: "full")
 
         #expect(envelope.status == .enabled)
         #expect(envelope.providers.map(\.id) == [ProviderID.claude.raw, ProviderID.codex.raw])
@@ -37,7 +37,7 @@ struct DemoScenarioParityTests {
     }
 
     @Test func encodedIOSDemoContainsNoSensitiveSentinels() throws {
-        let encoded = try JSONEncoder().encode(DemoScreenshotData.envelope)
+        let encoded = try JSONEncoder().encode(DemoScreenshotData.envelope(for: "full"))
         let text = String(decoding: encoded, as: UTF8.self).lowercased()
 
         for forbidden in [

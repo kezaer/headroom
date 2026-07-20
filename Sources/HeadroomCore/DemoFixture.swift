@@ -3,7 +3,7 @@ import Foundation
 /// Deterministic sample data for producing clean, repeatable product screenshots
 /// (the marketing site at headroom.zantos.co). Activated by the `--demo` launch
 /// argument. These numbers are the single source of truth for the mock, so the
-/// menu-bar popover, the macOS widgets, and the iPhone mirror all agree at one moment.
+/// menu-bar popover, the macOS widgets, and the iPhone all show the same moment.
 ///
 /// This exists because the real providers read live local state: Claude/Codex usage
 /// can't be posed on demand, and API spend needs admin keys the screenshot machine
@@ -19,8 +19,8 @@ public enum DemoFixture {
         UsageSnapshot(
             providerID: .claude,
             windows: [
-                UsageWindow(kind: .fiveHour, utilization: 28, resetsAt: soon(hours: 3, minutes: 15, seconds: 30), resetLabel: "Resets 2:15pm"),
                 UsageWindow(kind: .weekly, utilization: 62, resetsAt: soon(days: 4, minutes: 30), resetLabel: "Resets Jul 9"),
+                UsageWindow(kind: .fiveHour, utilization: 28, resetsAt: soon(hours: 3, minutes: 15, seconds: 30), resetLabel: "Resets 2:15pm"),
                 UsageWindow(kind: .other("Weekly (Fable)"), utilization: 46, resetsAt: soon(days: 4, minutes: 30), resetLabel: "Resets Jul 9"),
             ],
             planLabel: "Max",
@@ -35,7 +35,6 @@ public enum DemoFixture {
         UsageSnapshot(
             providerID: .codex,
             windows: [
-                UsageWindow(kind: .fiveHour, utilization: 9, resetsAt: soon(hours: 3, minutes: 12, seconds: 30), resetLabel: "Resets in 3h 12m"),
                 UsageWindow(kind: .weekly, utilization: 36, resetsAt: soon(days: 6, hours: 4, minutes: 30), resetLabel: "Resets in 6d 4h"),
             ],
             planLabel: "Prolite",

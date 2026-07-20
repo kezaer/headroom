@@ -35,4 +35,35 @@ struct CompanionDemoModeTests {
         #expect(store.setEnabled(true) == .unavailable)
         #expect(!store.isEnabled)
     }
+
+    @Test func variantDefaultsToFull() throws {
+        let suiteName = "CompanionDemoModeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = CompanionDemoModeStore(defaults: defaults)
+
+        #expect(store.variant == "full")
+    }
+
+    @Test func variantPersistsAndRoundTrips() throws {
+        let suiteName = "CompanionDemoModeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = CompanionDemoModeStore(defaults: defaults)
+
+        #expect(store.setVariant("heavy") == .changed)
+        #expect(store.variant == "heavy")
+        #expect(store.setVariant("heavy") == .unchanged)
+        #expect(store.setVariant("singleProviderFull") == .changed)
+        #expect(store.variant == "singleProviderFull")
+    }
+
+    @Test func variantUnavailableWhenDefaultsNil() {
+        let store = CompanionDemoModeStore(defaults: nil)
+
+        #expect(store.setVariant("heavy") == .unavailable)
+        #expect(store.variant == "full") // Still defaults to "full"
+    }
 }

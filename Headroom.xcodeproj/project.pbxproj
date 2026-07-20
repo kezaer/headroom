@@ -77,6 +77,9 @@
 		6E6624A86EDE896EC644B1A0 /* Countdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87284976C67D36ECE2DD747F /* Countdown.swift */; };
 		6EDF8E1CC04BF1DAD791D429 /* HeadroomWidgetContainerBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = F624981937860322BEFB6D9A /* HeadroomWidgetContainerBackground.swift */; };
 		70434629D911B9F410378109 /* APISpendPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CD411FF3CB3B7B9B5465F /* APISpendPresentation.swift */; };
+		C05CFC03CE368FABAD6BBA09 /* LargeWidgetDensity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LargeWidgetDensity.swift; sourceTree = "<group>"; };
+		1FC6184795639B8DA5EC115B /* LargeWidgetDensity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C05CFC03CE368FABAD6BBA09 /* LargeWidgetDensity.swift */; };
+		1F2A3B4C5D6E7F8A9B0C1D2E /* LargeWidgetDensity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* LargeWidgetDensity.swift */; };
 		7053F73F28A1EB28CEA9709A /* iCloudSnapshotSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 286C18406A7E80D0E42D1592 /* iCloudSnapshotSync.swift */; };
 		7137CC26FA0CC28953121570 /* UsageSeverityColorValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6FB36FA1D8A9F900DE5E146 /* UsageSeverityColorValues.swift */; };
 		728126D0D3BBA60E8D4D9B89 /* VesselGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE86E3CAB67CDE46DF18E438 /* VesselGlyph.swift */; };
@@ -88,6 +91,7 @@
 		7A415B4E9246C1CB4DF06150 /* HeadroomIOSWidgetConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C99BCBDD4738D8F88877765E /* HeadroomIOSWidgetConfiguration.swift */; };
 		7B70A94D4ED756E0FC690874 /* RaisedTile.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA92E8BACE2BD0885BADAA2F /* RaisedTile.swift */; };
 		7D53C5FE0A37FF614973C232 /* APISpendPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CD411FF3CB3B7B9B5465F /* APISpendPresentation.swift */; };
+		C7BACDAD87841AD5B18684D6 /* LargeWidgetDensity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C05CFC03CE368FABAD6BBA09 /* LargeWidgetDensity.swift */; };
 		80916D058A17FA99064557F0 /* DemoFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65084FF4FFAFB83B11B7601E /* DemoFixture.swift */; };
 		80F20CC2F1292AB610A972D5 /* UsageModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B25D0ABB800B858F720C7128 /* UsageModels.swift */; };
 		84BF1E0A9D00D681D45F2959 /* MirrorPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = E25CC17492F28F0E69876941 /* MirrorPresentation.swift */; };
@@ -127,6 +131,7 @@
 		C3780A7639B2B5A780402317 /* HeadroomSmallWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0ABF0C454123B6AAF8D2492 /* HeadroomSmallWidgetView.swift */; };
 		C52BF60996ACE1F4000874B1 /* BrandColorValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A2B2887C4F4FCD8B8DA8FDE /* BrandColorValues.swift */; };
 		C783F2F2706BC1861515E895 /* APISpendPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CD411FF3CB3B7B9B5465F /* APISpendPresentation.swift */; };
+		7736B780AE509886D841D8CC /* LargeWidgetDensity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C05CFC03CE368FABAD6BBA09 /* LargeWidgetDensity.swift */; };
 		C7E68A38A0A0E0D2CDC8A213 /* LaunchAtLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42F9263C0DCBF001A272FE49 /* LaunchAtLogin.swift */; };
 		C89159D02864CC6512B83D8C /* IOSWidgetTimelineMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = A604EE1523C858F595C5C118 /* IOSWidgetTimelineMapping.swift */; };
 		CD29C4379A86CAC8A03AF46A /* Countdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87284976C67D36ECE2DD747F /* Countdown.swift */; };
@@ -537,6 +542,7 @@
 			isa = PBXGroup;
 			children = (
 				3C5CD411FF3CB3B7B9B5465F /* APISpendPresentation.swift */,
+				C05CFC03CE368FABAD6BBA09 /* LargeWidgetDensity.swift */,
 				77A8213B7FFB5B4995CB983C /* DemoScreenshotData.swift */,
 				C99BCBDD4738D8F88877765E /* HeadroomIOSWidgetConfiguration.swift */,
 				E25CC17492F28F0E69876941 /* MirrorPresentation.swift */,
@@ -960,6 +966,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C783F2F2706BC1861515E895 /* APISpendPresentation.swift in Sources */,
+				7736B780AE509886D841D8CC /* LargeWidgetDensity.swift in Sources */,
 				93E3DBA60325FA9BA3B897F0 /* APISpendProviders.swift in Sources */,
 				01F5298BBF7958F27A848A8A /* Account.swift in Sources */,
 				A113A612C726C4102627D24C /* AccountRegistry.swift in Sources */,
@@ -1007,6 +1014,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				70434629D911B9F410378109 /* APISpendPresentation.swift in Sources */,
+				1FC6184795639B8DA5EC115B /* LargeWidgetDensity.swift in Sources */,
 				D68163551E31D133ED32CA8F /* BrandColorValues.swift in Sources */,
 				DC1870CA40E1A553BF305430 /* CompanionDemoModeStore.swift in Sources */,
 				4050D3B78E0AD7AC09CF5314 /* Countdown.swift in Sources */,
@@ -1099,6 +1107,7 @@
 			files = (
 				FC1910FB7A698BF47840498B /* APISpendMirrorView.swift in Sources */,
 				7D53C5FE0A37FF614973C232 /* APISpendPresentation.swift in Sources */,
+				C7BACDAD87841AD5B18684D6 /* LargeWidgetDensity.swift in Sources */,
 				D13E8EE9A513FB1311992870 /* AppearanceSetting.swift in Sources */,
 				C52BF60996ACE1F4000874B1 /* BrandColorValues.swift in Sources */,
 				5620F4F237849FCB69F90A1C /* CompanionDemoModeStore.swift in Sources */,

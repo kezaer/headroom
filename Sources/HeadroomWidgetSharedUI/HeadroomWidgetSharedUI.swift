@@ -55,37 +55,6 @@ public enum HeadroomWidgetStyle {
         Color(HeadroomWidgetColorValues.hairline(dark: scheme == .dark))
     }
 
-    public static func cardFill(scheme: ColorScheme) -> LinearGradient {
-        let dark = scheme == .dark
-        return LinearGradient(
-            colors: [
-                Color(HeadroomWidgetColorValues.tileFillTop(dark: dark)),
-                Color(HeadroomWidgetColorValues.tileFillBottom(dark: dark))
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-
-    public static func cardRing(scheme: ColorScheme) -> Color {
-        Color(HeadroomWidgetColorValues.tileRing(dark: scheme == .dark))
-    }
-
-    public static func cardTopRim(scheme: ColorScheme) -> Color {
-        Color(HeadroomWidgetColorValues.tileTopRim(dark: scheme == .dark))
-    }
-
-    public static func cardCloseShadow(scheme: ColorScheme) -> Color {
-        Color(HeadroomWidgetColorValues.tileCloseShadow(dark: scheme == .dark))
-    }
-
-    public static func cardAmbientShadow(scheme: ColorScheme) -> Color {
-        Color(HeadroomWidgetColorValues.tileAmbientShadow(dark: scheme == .dark))
-    }
-
-    public static func cardLongShadow(scheme: ColorScheme) -> Color {
-        Color(HeadroomWidgetColorValues.tileLongShadow(dark: scheme == .dark))
-    }
 }
 
 public struct HeadroomWidgetProviderIcon: View {
@@ -124,7 +93,7 @@ public struct HeadroomWidgetUsageMeter: View {
     private let now: Date?
     private let showsResetInline: Bool
     private let compact: Bool
-    private let prominent: Bool
+    private let scale: LargeWidgetDensity.Scale?
 
     @Environment(\.colorScheme) private var scheme
 
@@ -134,18 +103,18 @@ public struct HeadroomWidgetUsageMeter: View {
         now: Date? = nil,
         showsResetInline: Bool = false,
         compact: Bool = false,
-        prominent: Bool = false
+        scale: LargeWidgetDensity.Scale? = nil
     ) {
         self.window = window
         self.fallbackLabel = fallbackLabel
         self.now = now
         self.showsResetInline = showsResetInline
         self.compact = compact
-        self.prominent = prominent
+        self.scale = scale
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: prominent ? 5 : (compact ? 2 : 4)) {
+        VStack(alignment: .leading, spacing: vStackSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(labelText)
                     .font(labelFont)
@@ -182,7 +151,7 @@ public struct HeadroomWidgetUsageMeter: View {
                 percentRemaining: window?.percentRemaining ?? 0,
                 severity: window?.severity ?? .healthy,
                 dimmed: window == nil,
-                height: prominent ? 8 : 6
+                height: barHeight
             )
         }
         .accessibilityElement(children: .ignore)
@@ -190,19 +159,56 @@ public struct HeadroomWidgetUsageMeter: View {
         .accessibilityValue(accessibilityValue)
     }
 
+    private var vStackSpacing: CGFloat {
+        if let scale {
+            return CGFloat(scale.meterSpacing)
+        }
+        return compact ? 2 : 4
+    }
+
+    private var barHeight: CGFloat {
+        if let scale {
+            return CGFloat(scale.barHeight)
+        }
+        return 6
+    }
+
     private var labelFont: Font {
-        prominent ? .subheadline.weight(.medium) : (compact ? .caption.weight(.medium) : .caption)
+        if let scale {
+            switch scale {
+            case .hero: return .subheadline.weight(.medium)
+            case .standard: return .footnote.weight(.medium)
+            case .dense: return .caption.weight(.medium)
+            }
+        }
+        return compact ? .caption.weight(.medium) : .caption
     }
 
     private var resetFont: Font {
-        prominent ? .caption.monospacedDigit() : .caption2.monospacedDigit()
+        if let scale {
+            switch scale {
+            case .hero: return .caption.monospacedDigit()
+            case .standard: return .caption.monospacedDigit()
+            case .dense: return .caption2.monospacedDigit()
+            }
+        }
+        return compact ? .caption.monospacedDigit() : .caption2.monospacedDigit()
     }
 
     private var percentFont: Font {
-        // The percentage is the glance value, so it outsizes its label. compact (the medium
-        // widgets) was too timid at .subheadline — bump to .title3 so it reads at arm's length
-        // without crowding the "left" suffix or the bar. prominent/default left as-is.
-        prominent ? .title3.bold().monospacedDigit() : (compact ? .title3.bold().monospacedDigit() : .caption.bold().monospacedDigit())
+        if let scale {
+            switch scale {
+            case .hero: return .title3.bold().monospacedDigit()
+            case .standard: return .headline.bold().monospacedDigit()
+            case .dense: return .subheadline.bold().monospacedDigit()
+            }
+        }
+        // The percentage is the glance value, so it outsizes its label. scale (the large
+        // widget tiers) steps down from title3 (hero) through headline (standard) to subheadline (dense):
+        // with four meters stacked across two cards, a 20pt title3 in every row builds a loud, cramped
+        // right rail — stepping down per-tier keeps the number legible while the full-width bar already
+        // carries the glance at that size.
+        return compact ? .title3.bold().monospacedDigit() : .caption.bold().monospacedDigit()
     }
 
     private var percentText: String {
@@ -372,58 +378,6 @@ public struct HeadroomWidgetAPISpendStrip: View {
     }
 }
 
-private struct HeadroomWidgetLargeProviderCardModifier: ViewModifier {
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.widgetRenderingMode) private var renderingMode
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.horizontal, 10)
-            .padding(.vertical, 10)
-            .background(cardShape)
-    }
-
-    @ViewBuilder
-    private var cardShape: some View {
-        if renderingMode == .fullColor {
-            fullColorCard
-        } else {
-            // The macOS desktop de-emphasized (vibrant) pass maps the widget's luminance
-            // onto a monochrome material, so an opaque tile fill plus soft shadows blow
-            // out into a glowing white block with a halo. Drop the fill and shadows there
-            // and keep only a hairline ring, matching how the medium widget reads in the
-            // same state — separated surfaces, no glow. (Mirrors the containerBackground
-            // gate in HeadroomWidgetView.)
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(HeadroomWidgetStyle.cardRing(scheme: scheme), lineWidth: 1)
-        }
-    }
-
-    private var fullColorCard: some View {
-        RoundedRectangle(cornerRadius: 13, style: .continuous)
-            .fill(HeadroomWidgetStyle.cardFill(scheme: scheme))
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(HeadroomWidgetStyle.cardRing(scheme: scheme), lineWidth: 1)
-            }
-            .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(HeadroomWidgetStyle.cardTopRim(scheme: scheme))
-                    .frame(height: 1)
-                    .padding(.horizontal, 7)
-                    .allowsHitTesting(false)
-            }
-            .shadow(color: HeadroomWidgetStyle.cardCloseShadow(scheme: scheme), radius: 1.5, x: 0, y: 1)
-            .shadow(color: HeadroomWidgetStyle.cardAmbientShadow(scheme: scheme), radius: scheme == .dark ? 11 : 6, x: 0, y: scheme == .dark ? 9 : 3)
-            .shadow(color: HeadroomWidgetStyle.cardLongShadow(scheme: scheme), radius: 13, x: 0, y: 9)
-    }
-}
-
-public extension View {
-    func headroomWidgetLargeProviderCard() -> some View {
-        modifier(HeadroomWidgetLargeProviderCardModifier())
-    }
-}
 
 private extension Color {
     init(_ rgb: HeadroomRGBColor) {

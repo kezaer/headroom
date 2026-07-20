@@ -22,11 +22,12 @@ struct DemoFixtureTests {
         #expect(remaining(claude, .other("Weekly (Fable)")) == 54)
     }
 
-    /// Codex 5-hour 91% / Weekly 64% left.
-    @Test func codexDemoMatchesHeroScenario() {
+    /// Codex Jul 2026 reality: weekly only (no 5-hour gate), 36% used = 64% left.
+    @Test func codexDemoMatchesCurrentReality() {
         let codex = DemoFixture.codexSnapshot
-        #expect(remaining(codex, .fiveHour) == 91)
         #expect(remaining(codex, .weekly) == 64)
+        // Codex has no 5-hour window in current reality
+        #expect(remaining(codex, .fiveHour) == nil)
     }
 
     /// The popover renders reset text from `resetsAt` via `Countdown.resetText`, NOT
@@ -42,6 +43,5 @@ struct DemoFixtureTests {
         #expect(resetText(DemoFixture.claudeSnapshot, .fiveHour) == "Resets in 3h 15m")
         #expect(resetText(DemoFixture.claudeSnapshot, .other("Weekly (Fable)")) == "Resets in 4d")
         #expect(resetText(DemoFixture.codexSnapshot, .weekly) == "Resets in 6d 4h")
-        #expect(resetText(DemoFixture.codexSnapshot, .fiveHour) == "Resets in 3h 12m")
     }
 }

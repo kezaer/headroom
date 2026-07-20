@@ -9,7 +9,37 @@ public enum DemoScreenshotData {
     /// True when the app was launched with `--demo` (e.g. `simctl launch booted <id> --demo`).
     public static var isEnabled: Bool { CommandLine.arguments.contains("--demo") }
 
+    /// The current demo envelope variant, selecting from the named fixtures below.
+    /// Reads the `companionDemoVariant` key from the app-group defaults when available;
+    /// falls back to "full" if the variant is unset or unrecognized.
     public static var envelope: WidgetSnapshotEnvelope {
+        let variant = CompanionDemoModeStore.appGroup().variant
+        return self.envelope(for: variant)
+    }
+
+    /// Resolves a named demo fixture variant to its WidgetSnapshotEnvelope.
+    /// Unknown variants fall back to the `full` fixture.
+    public static func envelope(for variant: String) -> WidgetSnapshotEnvelope {
+        switch variant {
+        case "noSpend":
+            return noSpendEnvelope
+        case "claudeOnly":
+            return claudeOnlyEnvelope
+        case "claudeOnlyNoSpend":
+            return claudeOnlyNoSpendEnvelope
+        case "codexFiveHourReturns":
+            return codexFiveHourReturnsEnvelope
+        case "attention":
+            return attentionEnvelope
+        default:
+            return fullEnvelope
+        }
+    }
+
+    // MARK: - Named Fixtures
+
+    /// `full`: Claude weekly+5h+Fable, Codex weekly, spend on → 7 rows, regular tier
+    private static var fullEnvelope: WidgetSnapshotEnvelope {
         WidgetSnapshotEnvelope(
             generatedAt: Date(),
             status: .enabled,
@@ -20,8 +50,8 @@ public enum DemoScreenshotData {
                     planLabel: "Max",
                     freshness: .live,
                     windows: [
-                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
                         window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
                         window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
                     ],
                     renewalDate: day(month: 7, day: 28)
@@ -32,7 +62,180 @@ public enum DemoScreenshotData {
                     planLabel: "Prolite",
                     freshness: .live,
                     windows: [
+                        window(.weekly, label: "Weekly", percent: 64, reset: "Resets in 6d 4h", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 15)
+                ),
+            ],
+            apiSpendProviders: [
+                spend(
+                    id: ProviderID.claude.raw,
+                    displayName: "Anthropic API",
+                    amount: 142.67
+                ),
+                spend(
+                    id: ProviderID.codex.raw,
+                    displayName: "OpenAI API",
+                    amount: 58.90
+                ),
+            ]
+        )
+    }
+
+    /// `noSpend`: Claude weekly+5h+Fable, Codex weekly, spend off → 6 rows, regular tier
+    private static var noSpendEnvelope: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: Date(),
+            status: .enabled,
+            providers: [
+                WidgetProviderSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Claude",
+                    planLabel: "Max",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
+                        window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 28)
+                ),
+                WidgetProviderSummary(
+                    id: ProviderID.codex.raw,
+                    displayName: "Codex",
+                    planLabel: "Prolite",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 64, reset: "Resets in 6d 4h", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 15)
+                ),
+            ],
+            apiSpendProviders: []
+        )
+    }
+
+    /// `claudeOnly`: Claude weekly+5h+Fable, no Codex, spend on → 5 rows, roomy tier
+    private static var claudeOnlyEnvelope: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: Date(),
+            status: .enabled,
+            providers: [
+                WidgetProviderSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Claude",
+                    planLabel: "Max",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
+                        window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 28)
+                ),
+            ],
+            apiSpendProviders: [
+                spend(
+                    id: ProviderID.claude.raw,
+                    displayName: "Anthropic API",
+                    amount: 142.67
+                ),
+            ]
+        )
+    }
+
+    /// `claudeOnlyNoSpend`: Claude weekly+5h+Fable, no Codex, spend off → 4 rows, roomy tier
+    private static var claudeOnlyNoSpendEnvelope: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: Date(),
+            status: .enabled,
+            providers: [
+                WidgetProviderSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Claude",
+                    planLabel: "Max",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
+                        window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 28)
+                ),
+            ],
+            apiSpendProviders: []
+        )
+    }
+
+    /// `codexFiveHourReturns`: Claude weekly+5h+Fable, Codex weekly+5h, spend on → 8 rows, compact tier
+    private static var codexFiveHourReturnsEnvelope: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: Date(),
+            status: .enabled,
+            providers: [
+                WidgetProviderSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Claude",
+                    planLabel: "Max",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
+                        window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 28)
+                ),
+                WidgetProviderSummary(
+                    id: ProviderID.codex.raw,
+                    displayName: "Codex",
+                    planLabel: "Prolite",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 64, reset: "Resets in 6d 4h", severity: .healthy),
                         window(.fiveHour, label: "5h", percent: 91, reset: "Resets in 3h 12m", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 15)
+                ),
+            ],
+            apiSpendProviders: [
+                spend(
+                    id: ProviderID.claude.raw,
+                    displayName: "Anthropic API",
+                    amount: 142.67
+                ),
+                spend(
+                    id: ProviderID.codex.raw,
+                    displayName: "OpenAI API",
+                    amount: 58.90
+                ),
+            ]
+        )
+    }
+
+    /// `attention`: Claude weekly+5h+Fable (stale), Codex weekly, spend on → 7 rows, regular tier
+    private static var attentionEnvelope: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: Date(),
+            status: .enabled,
+            providers: [
+                WidgetProviderSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Claude",
+                    planLabel: "Max",
+                    freshness: .stale(message: "Data unavailable", needsAttention: true),
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
+                        window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 28)
+                ),
+                WidgetProviderSummary(
+                    id: ProviderID.codex.raw,
+                    displayName: "Codex",
+                    planLabel: "Prolite",
+                    freshness: .live,
+                    windows: [
                         window(.weekly, label: "Weekly", percent: 64, reset: "Resets in 6d 4h", severity: .healthy),
                     ],
                     renewalDate: day(month: 7, day: 15)

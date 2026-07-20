@@ -23,12 +23,24 @@ struct HeadroomWidgetView: View {
                 HeadroomWidgetContainerBackground()
             }
             content
-                .padding(contentMargins)
+                .padding(largeFamilyOwnsVerticalMargins ? horizontalOnlyContentMargins : contentMargins)
         }
         .containerBackground(for: .widget) {
             HeadroomWidgetContainerBackground()
         }
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+    }
+
+    // The large family distributes ALL vertical slack itself via equal flexible spacers
+    // (top edge, between sections, bottom edge) so the gaps stay symmetric for any
+    // content mix. That only works if the fixed vertical content margins get out of the
+    // way; horizontal margins still apply normally.
+    private var largeFamilyOwnsVerticalMargins: Bool {
+        family == .systemLarge
+    }
+
+    private var horizontalOnlyContentMargins: EdgeInsets {
+        EdgeInsets(top: 0, leading: contentMargins.leading, bottom: 0, trailing: contentMargins.trailing)
     }
 
     @ViewBuilder
