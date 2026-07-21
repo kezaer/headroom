@@ -9,6 +9,10 @@ Follow [docs/release/website-dmg-release.md](../../../docs/release/website-dmg-r
 the authoritative procedure. Use `Scripts/release-app.sh` for the signed/notarized artifact;
 do not recreate its signing, appcast, or packaging logic.
 
+For a coordinated request that also includes TestFlight or App Store work, first read
+[docs/release/release-operations.md](../../../docs/release/release-operations.md), then follow
+each platform runbook as a separate release lane. Report their states separately.
+
 ## Scope and safety
 
 - Treat `https://headroom.zantos.co` as the public site. Do not substitute a similarly named
@@ -20,6 +24,19 @@ do not recreate its signing, appcast, or packaging logic.
 - Perform external publishing only when the user explicitly asks to ship or publish. For a
   request to prepare/review the release process, stop before changing the portfolio repo or
   production site.
+- Preflight every required external environment before publishing: the runbook's isolated Sparkle
+  installation, physical TestFlight device, App Store Connect access, and macOS 15 hardware when
+  that compatibility gate is in scope. Resolve or explicitly record unavailable gates before
+  shipping.
+- Distinguish bundle copies from live processes. Before installed-app QA, verify exact process
+  paths and keep only the intended public app running. Never use `killall` or broad process matches.
+- Treat passwords, passkeys, two-factor codes, device unlocks, privacy prompts, and approval to
+  use a visible logged-in browser as explicit user handoffs.
+- If a menu-bar or transient system UI is not accessible after one fresh Computer Use state query,
+  stop automation and request the exact user click. Never brute-force menu-bar coordinates,
+  keyboard offsets, or hidden controls.
+- Do not use iPhone Mirroring as a TestFlight default or configure it during a release. Use it only
+  when already configured and explicitly chosen by the user.
 
 ## Required release sequence
 
@@ -40,8 +57,15 @@ do not recreate its signing, appcast, or packaging logic.
    documented `pnpm ship` path.
 6. Validate the live manifest, appcast, stable-DMG checksum, mounted DMG signature, and public
    diagnostic. Then run the runbook's installed-app update test from an older public release in
-   a dedicated macOS test user or VM. The release is not complete until Sparkle upgrades it to
-   the new version/build.
+   its isolated installation. The release is not complete until Sparkle upgrades it to the new
+   version/build.
+
+## Status discipline
+
+“Published,” “uploaded,” “processed,” “assigned,” and “accepted” are different states. Never call
+an App Store Connect upload available in TestFlight until processing and group assignment are
+verified. Never call a public DMG release fully accepted until the installed Sparkle update passes,
+unless the user explicitly waives that gate and the handoff records the residual.
 
 ## Handoff
 

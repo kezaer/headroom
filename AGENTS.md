@@ -82,6 +82,13 @@ For any request to prepare, publish, or ship a new public Headroom DMG, use the 
 Sparkle appcast, portfolio deployment, and the required installed-app update acceptance test.
 The public domain is `headroom.zantos.co`.
 
+For a coordinated release that also includes TestFlight or App Store work, begin with
+`docs/release/release-operations.md`. Keep macOS publication, Sparkle acceptance, TestFlight
+upload, TestFlight availability, device acceptance, and App Review submission as separate states;
+never collapse them into a generic “released.” Preflight dedicated test environments and manual
+security/browser handoffs before publishing. Do not brute-force menu-bar UI, configure iPhone
+Mirroring during a release, or use broad process termination to clean up QA copies.
+
 Building requires Xcode 26 / Swift 6.3. The app targets macOS 15+ on Apple silicon; a real
 macOS 15 Apple-silicon runtime smoke is required before advertising Sequoia support. Claude
 requires the `claude` CLI logged in; Codex requires its CLI-managed `~/.codex/auth.json`.
