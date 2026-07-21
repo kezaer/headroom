@@ -45,7 +45,10 @@ public protocol APIKeyStoring: Sendable {
 /// in / item absent" from "present but unreadable" (design + feasibility review).
 public enum CredentialError: Error, Equatable {
     case notLoggedIn          // Keychain item / auth.json absent (errSecItemNotFound / ENOENT)
+    case permissionDenied     // macOS denied access to an existing provider-owned file
+    case unsafePermissions    // credential file is group/world-accessible
     case malformed            // present but unparseable
+    case ioFailure            // present/unknown path state but another redacted read failure
     case keychainStatus(Int32)
 }
 

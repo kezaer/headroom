@@ -17,6 +17,10 @@ public final class PollingEngine {
         self.tick = tick
     }
 
+    nonisolated public static func clampedIntervalMinutes(_ minutes: Int) -> Int {
+        max(Preferences.minimumIntervalMinutes, minutes)
+    }
+
     /// Start (or restart) the loop. Reads the interval each cycle, so a preference
     /// change is picked up on the next tick without an explicit reschedule.
     public func start() {
@@ -24,7 +28,7 @@ public final class PollingEngine {
         task = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                let minutes = max(1, self.intervalMinutes())
+                let minutes = Self.clampedIntervalMinutes(self.intervalMinutes())
                 try? await Task.sleep(for: .seconds(Double(minutes) * 60))
                 if Task.isCancelled { break }
                 await self.tick()

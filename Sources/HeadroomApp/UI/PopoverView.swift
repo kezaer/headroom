@@ -18,6 +18,10 @@ struct PopoverView: View {
     /// marketing export forces the solid surface branch (a flat dark shell that also
     /// matches the design artboard). The live app leaves this off and keeps its glass.
     var forceSolidSurface: Bool = false
+    /// Render-harness only: `ImageRenderer` does not run the geometry callback that
+    /// normally measures the scroll stack. A fixed proposal keeps the marketing render
+    /// from collapsing the cards to zero height.
+    var forcedCardsHeight: CGFloat? = nil
 
     @State private var popoverWindow: NSWindow?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -97,7 +101,7 @@ struct PopoverView: View {
                     }
                 }
                 .animation(reduceMotion ? nil : HeadroomMotion.settle, value: scrollContinuesBelow)
-                .frame(height: min(cardsHeight, 640))
+                .frame(height: forcedCardsHeight ?? min(cardsHeight, 640))
                 footer
             }
             // One quick content fade on open — no per-row stagger or vertical travel.
@@ -211,11 +215,16 @@ struct PopoverView: View {
     /// are excluded (their own stale pill carries that story); nil on first run when
     /// nothing is live yet, so the header simply omits it.
     private func headerStatus(now: Date) -> String? {
-        if claudeNeedsTrustSetup {
-            return ClaudeSetupSession.openedSetupAt != nil ? "Watching for approval…" : "Set up Claude to begin"
+        if let outcome = claudeGuidedSetupOutcome {
+            let account = ProviderAccount.builtIn(for: .claude)
+            if SetupSessions.isWaiting(for: account) {
+                return outcome == .claudeLoginRequired ? "Watching for Claude sign-in…" : "Watching for approval…"
+            }
+            return outcome == .claudeLoginRequired ? "Sign in to Claude to begin" : "Set up Claude to begin"
         }
         if codexNeedsConnection {
-            return CodexSetupSession.openedSetupAt != nil ? "Watching for Codex sign-in…" : "Connect Codex to begin"
+            let account = ProviderAccount.builtIn(for: .codex)
+            return SetupSessions.isWaiting(for: account) ? "Watching for Codex sign-in…" : "Connect Codex to begin"
         }
         let liveCaptures = store.providerOrder.flatMap { id -> [Date] in
             store.accounts(for: id).compactMap { account in
@@ -228,10 +237,15 @@ struct PopoverView: View {
         return Countdown.updatedLabel(capturedAt: oldest, now: now).map { "Updated \($0)" }
     }
 
-    private var claudeNeedsTrustSetup: Bool {
+    private var claudeGuidedSetupOutcome: ProviderSetupOutcome? {
         guard store.providerOrder.contains(.claude),
-              case .stale(let reason) = store.appDisplaySnapshot(for: .claude).freshness else { return false }
-        return reason.isPermanent && reason.message == ClaudeUsageWorkspace.trustRequiredMessage
+              case .stale(let reason) = store.appDisplaySnapshot(for: .claude).freshness else { return nil }
+        switch reason.providerSetupOutcome {
+        case .claudeLoginRequired, .claudeTrustRequired:
+            return reason.providerSetupOutcome
+        default:
+            return nil
+        }
     }
 
     private var codexNeedsConnection: Bool {

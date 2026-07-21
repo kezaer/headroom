@@ -1,0 +1,260 @@
+import Foundation
+import Testing
+import HeadroomCore
+@testable import Headroom
+
+@MainActor
+@Suite(.serialized)
+struct AccountsSettingsInteractionTests {
+    @Test func addFlowReachesPreparingWaitingAndLiveForEachProviderWithoutMountedViews() async {
+        for providerID in [ProviderID.claude, .codex] {
+            let fixture = makeFixture()
+            defer { fixture.cleanup() }
+            let harness = AppSetupHarness(store: fixture.store)
+            let coordinator = harness.makeCoordinator()
+
+            guard let account = AccountsSettingsInteractions.addAccount(
+                for: providerID,
+                to: fixture.store,
+                openSetup: { coordinator.begin(for: $0) }
+            ) else {
+                Issue.record("Expected an additional \(providerID.raw) account")
+                continue
+            }
+
+            #expect(coordinator.state(for: account.key) == .preparing)
+            await settleTasks()
+            #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+            #expect(harness.preparedKeys == [account.key])
+            #expect(harness.openedKeys == [account.key])
+
+            coordinator.receive(
+                .init(
+                    providerID: providerID,
+                    windows: [],
+                    planLabel: nil,
+                    capturedAt: Date(),
+                    freshness: .live
+                ),
+                for: account.key
+            )
+            #expect(coordinator.state(for: account.key) == .connected)
+
+            let builtIn = fixture.store.accounts(for: providerID).first(where: \.isBuiltIn)!
+            #expect(coordinator.state(for: builtIn.key) == .idle)
+        }
+    }
+
+    @Test func addOpensOnlyTheCreatedAccountAndHonorsTheProviderCap() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        var opened: [AccountKey] = []
+
+        for _ in 0..<4 {
+            let added = AccountsSettingsInteractions.addAccount(
+                for: .claude,
+                to: fixture.store,
+                openSetup: { opened.append($0.key) }
+            )
+            #expect(added != nil)
+        }
+
+        #expect(fixture.store.accounts(for: .claude).count == AccountRegistry.maxPerProvider)
+        #expect(Set(opened).count == 4)
+        #expect(AccountsSettingsInteractions.addAccount(
+            for: .claude,
+            to: fixture.store,
+            openSetup: { opened.append($0.key) }
+        ) == nil)
+        #expect(opened.count == 4)
+    }
+
+    @Test func renameCommitsTrimmedFocusLossDraftAndRejectsBlankDraft() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        guard let account = AccountsSettingsInteractions.addAccount(
+            for: .codex,
+            to: fixture.store,
+            openSetup: { _ in }
+        ) else {
+            Issue.record("Expected an additional Codex account")
+            return
+        }
+
+        #expect(AccountsSettingsInteractions.commitLabel(
+            "  Work Account \n",
+            for: account,
+            in: fixture.store
+        ))
+        #expect(fixture.store.accounts(for: .codex).first(where: { $0.key == account.key })?.label == "Work Account")
+
+        let renamed = fixture.store.accounts(for: .codex).first(where: { $0.key == account.key })!
+        #expect(!AccountsSettingsInteractions.commitLabel("   ", for: renamed, in: fixture.store))
+        #expect(fixture.store.accounts(for: .codex).first(where: { $0.key == account.key })?.label == "Work Account")
+    }
+
+    @Test func removalFailureKeepsTheSelectedRowAndRetryRemovesOnlyThatAccount() async {
+        let storage = InteractionStorage(removals: [.failure(.removeFailed), .success(())])
+        let fixture = makeFixture(storage: storage)
+        defer { fixture.cleanup() }
+        guard let account = AccountsSettingsInteractions.addAccount(
+            for: .claude,
+            to: fixture.store,
+            openSetup: { _ in }
+        ) else {
+            Issue.record("Expected an additional Claude account")
+            return
+        }
+
+        #expect(await AccountsSettingsInteractions.removeAccount(account, from: fixture.store) == .failed)
+        #expect(fixture.store.accounts(for: .claude).contains(where: { $0.key == account.key }))
+        #expect(fixture.store.accountRemovalStates[account.key] == .failed)
+
+        #expect(await AccountsSettingsInteractions.removeAccount(account, from: fixture.store) == .removed)
+        #expect(!fixture.store.accounts(for: .claude).contains(where: { $0.key == account.key }))
+        #expect(fixture.store.accounts(for: .claude).contains(where: { $0.isBuiltIn }))
+        #expect(storage.removedKeys == [account.key, account.key])
+    }
+
+    @Test func everyRecoveryActionHasOneAppBoundaryRoute() {
+        let expected: [(SetupRecoveryAction, SetupSessions.RecoveryRoute)] = [
+            (.installClaudeCLI, .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!)),
+            (.copyManualCommand, .copyManualCommand(.standard)),
+            (.openClaudeSetup, .setup(.standard)),
+            (.installCodexCLI, .documentation(URL(string: "https://developers.openai.com/codex/cli/")!)),
+            (.connectCodex, .setup(.standard)),
+            (.connectCodexDeviceCode, .setup(.deviceCode)),
+            (.reconnectCodex, .setup(.standard)),
+            (.showPrivacyGuidance, .privacyGuidance(URL(string: "https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac")!)),
+            (.resolveCodexStorage, .setup(.standard)),
+            (.checkNow, .checkNow),
+        ]
+
+        for (action, route) in expected {
+            #expect(SetupSessions.recoveryRoute(for: action) == route)
+        }
+    }
+
+    @Test func checkNowRefreshesOnlyTheSelectedAccount() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let accounts = fixture.store.accounts(for: .claude)
+        guard let selected = AccountsSettingsInteractions.addAccount(
+            for: .claude,
+            to: fixture.store,
+            openSetup: { _ in }
+        ) else {
+            Issue.record("Expected an additional Claude account")
+            return
+        }
+        var refreshed: [AccountKey] = []
+
+        SetupSessions.performRecovery(
+            .checkNow,
+            for: selected,
+            onRetry: { refreshed.append(selected.key) }
+        )
+
+        #expect(refreshed == [selected.key])
+        #expect(!accounts.contains(where: { refreshed.contains($0.key) }))
+    }
+
+    private func makeFixture(
+        storage: InteractionStorage = InteractionStorage()
+    ) -> InteractionFixture {
+        let suiteName = "co.zantos.headroom.app-interactions.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let registry = AccountRegistry(defaults: defaults)
+        let store = UsageStore(
+            providers: [
+                DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
+                DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: storage,
+            providerFactory: { account in
+                DemoUsageProvider(
+                    id: account.providerID,
+                    displayName: account.providerID == .claude ? "Claude" : "Codex",
+                    snapshot: .pending(for: account.providerID),
+                    accountID: account.id
+                )
+            }
+        )
+        return InteractionFixture(store: store, suiteName: suiteName)
+    }
+
+    private func settleTasks() async {
+        for _ in 0..<20 { await Task.yield() }
+    }
+}
+
+@MainActor
+private struct InteractionFixture {
+    let store: UsageStore
+    let suiteName: String
+
+    func cleanup() {
+        UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
+    }
+}
+
+private final class InteractionStorage: AccountStorageManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var removals: [Result<Void, AccountStorageFailure>]
+    private var _removedKeys: [AccountKey] = []
+
+    init(removals: [Result<Void, AccountStorageFailure>] = []) {
+        self.removals = removals
+    }
+
+    var removedKeys: [AccountKey] { lock.withLock { _removedKeys } }
+
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> {
+        .success(())
+    }
+
+    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { false }
+
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
+        lock.withLock {
+            _removedKeys.append(account.key)
+            return removals.isEmpty ? .success(()) : removals.removeFirst()
+        }
+    }
+}
+
+@MainActor
+private final class AppSetupHarness {
+    let store: UsageStore
+    var preparedKeys: [AccountKey] = []
+    var openedKeys: [AccountKey] = []
+    var refreshedKeys: [AccountKey] = []
+
+    init(store: UsageStore) {
+        self.store = store
+    }
+
+    func makeCoordinator() -> SetupSessionCoordinator {
+        SetupSessionCoordinator(
+            retryDelays: [.seconds(60)],
+            prepare: { [weak self] account, mode in
+                self?.preparedKeys.append(account.key)
+                await Task.yield()
+                return .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { [weak self] handoff in
+                self?.openedKeys.append(handoff.accountKey)
+                return .success(())
+            },
+            accountExists: { [weak self] key in
+                self?.store.accounts(for: key.providerID).contains(where: { $0.key == key }) == true
+            },
+            requestRefresh: { [weak self] key in
+                self?.refreshedKeys.append(key)
+            }
+        )
+    }
+}

@@ -63,6 +63,19 @@ private struct ResolvedMenuBarWindow {
     let source: MenuBarWindowSource
 }
 
+public enum AccountRemovalState: Sendable, Equatable {
+    case removing
+    case setupActive
+    case failed
+}
+
+public enum AccountRemovalResult: Sendable, Equatable {
+    case removed
+    case setupActive
+    case failed
+    case notAllowed
+}
+
 /// The observable view model the UI and menu bar label bind to (U6). `@MainActor`
 /// and `@Observable`: snapshots are published on the main actor; providers are
 /// fetched concurrently off-main (KTD10). Per-provider isolation — one provider's
@@ -85,6 +98,7 @@ public final class UsageStore {
     public private(set) var showCodexSparkCountersInApp: Bool
     public private(set) var showCodexSparkCountersInWidgets: Bool
     public private(set) var enabledSurfaces: Set<UsageSurface>
+    public private(set) var accountRemovalStates: [AccountKey: AccountRemovalState] = [:]
     public let displayNames: [ProviderID: String]
     public let apiSpendDisplayNames: [ProviderID: String]
 
@@ -108,6 +122,9 @@ public final class UsageStore {
     private let phoneSyncExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
     private var isStarting = false
+    @ObservationIgnored private var pendingAccountRefreshes: Set<AccountKey> = []
+    @ObservationIgnored private var removingAccounts: Set<AccountKey> = []
+    @ObservationIgnored private var setupCoordinator: SetupSessionCoordinator?
 
     public init(
         providers: [any UsageProvider],
@@ -199,6 +216,10 @@ public final class UsageStore {
         accounts(for: providerID).first
     }
 
+    public func attachSetupCoordinator(_ coordinator: SetupSessionCoordinator) {
+        setupCoordinator = coordinator
+    }
+
     public func canAddAccount(for providerID: ProviderID) -> Bool {
         // Delegate the cap rule to the registry — one source of truth for the same
         // gate `addAccount` enforces (code-review finding).
@@ -214,7 +235,10 @@ public final class UsageStore {
         guard let accountRegistry, let providerFactory,
               let account = accountRegistry.addAccount(for: providerID, label: label)
         else { return nil }
-        accountStorage.ensureDirectories(for: account)
+        guard case .success = accountStorage.ensureDirectories(for: account) else {
+            accountRegistry.removeAccount(account.key)
+            return nil
+        }
         providers.append(providerFactory(account))
         accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
         snapshots[account.key] = .stale(
@@ -237,18 +261,48 @@ public final class UsageStore {
     /// Remove an extra account: registry entry, provider instance, snapshot, and its
     /// on-disk config home (the account's CLI session with it). Built-ins are kept —
     /// they are the user's own CLI login; hide the provider via its surface instead.
-    public func removeAccount(_ key: AccountKey) {
+    @discardableResult
+    public func removeAccount(_ key: AccountKey) async -> AccountRemovalResult {
         guard let accountRegistry,
               let account = accounts(for: key.providerID).first(where: { $0.key == key }),
               !account.isBuiltIn
-        else { return }
+        else { return .notAllowed }
+        if await accountStorage.setupHandoffIsActive(for: account) {
+            accountRemovalStates[key] = .setupActive
+            return .setupActive
+        }
+        removingAccounts.insert(key)
+        pendingAccountRefreshes.remove(key)
+        accountRemovalStates[key] = .removing
+        setupCoordinator?.markRemoving(key)
+        let removal = await accountStorage.removeDirectories(for: account)
+        guard case .success = removal else {
+            removingAccounts.remove(key)
+            if case .failure(.setupActive) = removal {
+                accountRemovalStates[key] = .setupActive
+                setupCoordinator?.markRemovalFailed(key)
+                return .setupActive
+            }
+            accountRemovalStates[key] = .failed
+            setupCoordinator?.markRemovalFailed(key)
+            return .failed
+        }
         accountRegistry.removeAccount(key)
         providers.removeAll { $0.accountKey == key }
         snapshots.removeValue(forKey: key)
         accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
-        accountStorage.removeDirectories(for: account)
+        removingAccounts.remove(key)
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.markRemoved(key)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
+        return .removed
+    }
+
+    public func cancelAccountRemoval(_ key: AccountKey) {
+        guard accountRemovalStates[key] == .failed || accountRemovalStates[key] == .setupActive else { return }
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.cancelRemoval(key)
     }
 
     /// Begin polling: an immediate refresh, then the interval loop. Idempotent — a
@@ -399,12 +453,13 @@ public final class UsageStore {
     private func refreshAll(source: RefreshSource) async {
         if isRefreshing { return }
         isRefreshing = true
-        defer { isRefreshing = false }
         if source == .timer { timerCycleCount += 1 }
         await refreshSubscriptions(source: source, exportAfter: false)
         await refreshAPISpend(exportAfter: false)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
+        await drainPendingAccountRefreshes()
+        isRefreshing = false
     }
 
     /// Refresh a single account — the setup-session retry path, so watching one new
@@ -415,16 +470,14 @@ public final class UsageStore {
     }
 
     func refreshAccount(_ key: AccountKey) async {
-        guard !isRefreshing,
-              let provider = providers.first(where: { $0.accountKey == key }),
-              enabledSurfaces.contains(subscriptionSurface(for: key.providerID))
-        else { return }
+        if isRefreshing {
+            pendingAccountRefreshes.insert(key)
+            return
+        }
         isRefreshing = true
-        defer { isRefreshing = false }
-        let fresh = await provider.fetchSnapshot()
-        merge(key: key, fresh: fresh)
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
+        await fetchAccountIfEligible(key)
+        await drainPendingAccountRefreshes()
+        isRefreshing = false
     }
 
     public func refreshAPISpendOnly() async {
@@ -439,28 +492,35 @@ public final class UsageStore {
             enabledSurfaces.contains(subscriptionSurface(for: provider.id))
                 && !shouldSkipOnTimer(provider: provider, source: source)
         }
-        let results = await withTaskGroup(of: [(AccountKey, UsageSnapshot)].self) { group in
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: (AccountKey, UsageSnapshot).self,
+            bufferingPolicy: .unbounded
+        )
+        await withTaskGroup(of: Void.self) { group in
             // Each Claude fetch owns a full interactive CLI/PTY process for up to 30s.
             // Sequence those probes so five configured accounts cannot create a process
             // storm. Other providers remain concurrent with that serial Claude lane.
             let claudeProviders = candidates.filter { $0.id == .claude }
             if !claudeProviders.isEmpty {
                 group.addTask {
-                    var results: [(AccountKey, UsageSnapshot)] = []
                     for provider in claudeProviders {
-                        results.append((provider.accountKey, await provider.fetchSnapshot()))
+                        continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
                     }
-                    return results
                 }
             }
             for provider in candidates where provider.id != .claude {
-                group.addTask { [(provider.accountKey, await provider.fetchSnapshot())] }
+                group.addTask {
+                    continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
+                }
             }
-            var acc: [(AccountKey, UsageSnapshot)] = []
-            for await batch in group { acc.append(contentsOf: batch) }
-            return acc
+            var iterator = stream.makeAsyncIterator()
+            for _ in candidates {
+                guard let (key, fresh) = await iterator.next() else { break }
+                merge(key: key, fresh: fresh)
+            }
+            await group.waitForAll()
         }
-        for (key, fresh) in results { merge(key: key, fresh: fresh) }
+        continuation.finish()
         if exportAfter {
             exportWidgetSnapshot()
             exportPhoneSyncSnapshot()
@@ -494,9 +554,39 @@ public final class UsageStore {
     private func shouldSkipOnTimer(provider: any UsageProvider, source: RefreshSource) -> Bool {
         guard source == .timer,
               provider.accountID != .primary,
-              case .stale(.notLoggedIn(_)) = snapshots[provider.accountKey]?.freshness
+              case .stale(let reason) = snapshots[provider.accountKey]?.freshness,
+              isNeverSignedIn(reason)
         else { return false }
         return timerCycleCount % 4 != 0
+    }
+
+    private func isNeverSignedIn(_ reason: FailureReason) -> Bool {
+        if case .notLoggedIn = reason { return true }
+        guard case .providerSetup(let outcome) = reason else { return false }
+        return outcome == .claudeLoginRequired || outcome == .codexAuthAbsent
+    }
+
+    private func fetchAccountIfEligible(_ key: AccountKey) async {
+        guard let provider = providers.first(where: { $0.accountKey == key }),
+              accounts(for: key.providerID).contains(where: { $0.key == key }),
+              !removingAccounts.contains(key),
+              enabledSurfaces.contains(subscriptionSurface(for: key.providerID))
+        else { return }
+        let fresh = await provider.fetchSnapshot()
+        merge(key: key, fresh: fresh)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+    }
+
+    private func drainPendingAccountRefreshes() async {
+        while !pendingAccountRefreshes.isEmpty {
+            let keys = pendingAccountRefreshes.sorted {
+                if $0.providerID.raw == $1.providerID.raw { return $0.accountID.raw < $1.accountID.raw }
+                return $0.providerID.raw < $1.providerID.raw
+            }
+            pendingAccountRefreshes.removeAll()
+            for key in keys { await fetchAccountIfEligible(key) }
+        }
     }
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
@@ -504,7 +594,9 @@ public final class UsageStore {
     private func merge(key: AccountKey, fresh: UsageSnapshot) {
         // The account may have been removed while its fetch was in flight — a late
         // result must not resurrect the row.
-        guard accounts(for: key.providerID).contains(where: { $0.key == key }) else { return }
+        guard accounts(for: key.providerID).contains(where: { $0.key == key }),
+              !removingAccounts.contains(key)
+        else { return }
         let next: UsageSnapshot
         if case .stale(let reason) = fresh.freshness,
            fresh.windows.isEmpty,
@@ -520,6 +612,7 @@ public final class UsageStore {
         // Skip the assignment when nothing changed so an unchanging state (e.g. a
         // provider that stays logged-out) doesn't invalidate observers every cycle.
         if snapshots[key] != next { snapshots[key] = next }
+        setupCoordinator?.receive(next, for: key)
     }
 
     /// Claude's `/usage` panel can finish one repaint before its model-specific weekly

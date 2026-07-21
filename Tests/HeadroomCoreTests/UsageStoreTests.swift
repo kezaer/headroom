@@ -20,6 +20,25 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .codex).freshness == .live)
     }
 
+    @Test func codexPublishesBeforeSlowClaudeLaneCompletes() async {
+        let firstClaude = SlowCountingProvider(id: .claude)
+        let codex = StubProvider(
+            id: .codex,
+            displayName: "Codex",
+            snapshot: .live(.codex, windows: [UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset)])
+        )
+        let store = makeStore(providers: [firstClaude, codex])
+        let refresh = Task { await store.refreshAll() }
+        await firstClaude.waitUntilFetchStarts()
+
+        for _ in 0..<20 where store.snapshot(for: .codex).freshness != .live { await Task.yield() }
+        #expect(store.snapshot(for: .codex).freshness == .live)
+        #expect(store.snapshot(for: .claude).freshness == .pending)
+
+        firstClaude.releaseFetch()
+        await refresh.value
+    }
+
     @Test func startsPendingBeforeAnyFetch() {
         let store = makeStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude)),

@@ -10,6 +10,9 @@ Paste-ready fields for the `com.kylezantos.headroom.ios` 1.0 submission.
 - 2026-07-18: Uploaded universal iPhone/iPad build 23 with the production demonstration
   mode and the latest companion/widget fixes. Select build 23 only after processing and
   the clean TestFlight acceptance gate in `ios-app-review-testflight.md` pass.
+- 2026-07-20: Prepared universal build 24 as the next candidate. Source/archive preflight,
+  signature validation, the iPhone UI suite, and Apple Distribution-signed local IPA export pass;
+  it has not been uploaded or assigned to a TestFlight group.
 
 ## Name (30 chars max)
 

@@ -178,11 +178,37 @@ Use a dedicated macOS test user or VM so this does not replace a working develop
    /Applications/Headroom.app/Contents/MacOS/Headroom --probe-codex
    ```
 
+4. Exercise the signed provider recovery matrix without recording provider output or identity:
+   - Claude built-in: preserve an existing trusted workspace across the Sparkle update; in a
+     fresh test user, prove login-required and workspace-trust-required remain distinct and
+     both recover through the official CLI.
+   - Claude additional: add a fresh isolated account, close the popover while setup runs, and
+     confirm it settles live without switching or modifying the built-in CLI account.
+   - Codex permission: deny file access, confirm Headroom offers Privacy & Security guidance
+     rather than a login loop, re-grant access, and use **Check now** to recover.
+   - Codex login/storage: prove standard browser login and the explicit device-code fallback
+     target the same isolated account home and leave an owner-only readable `auth.json`.
+     Cancel an incomplete callback and confirm the UI offers standard retry plus device code.
+   - Start one Codex login, request another, and confirm the second requires a fresh
+     **Continue setup** action only after the first Terminal handoff ends.
+
+5. Exercise the signed additional-account lifecycle: add, rename, refresh, and remove one
+   account while a sibling remains live. Removal must stay visible while work is active, retain
+   the row with Retry/Cancel on failure, delete exactly the selected Headroom-owned home on
+   success, and leave the built-in and sibling homes unchanged. Confirm the popover scroll cap
+   and compact density with three or more accounts.
+
+6. Recheck macOS permission persistence after Sparkle relaunch. Existing Claude workspace trust,
+   Codex file access, widget/App Group access, and iCloud snapshot publication must not regress or
+   require destructive credential recreation. Record only typed outcomes, permission modes, and
+   pass/fail decisions—never emails, tokens, auth contents, callback URLs, or raw provider panels.
+
 Record the starting and ending versions in the release PR. A rejected signature, missing
 enclosure, or no-update result is a release blocker: stop before announcing the download.
 
 For a manual acceptance pass, drag the app to `/Applications`, launch it, and confirm the
-popover matches the official provider surfaces. For the Codex window-classification fix, a
+popover matches the official provider surfaces. Repeat the provider and additional-account
+checks above on the freshly installed public DMG, not a locally built bundle. For the Codex window-classification fix, a
 `prolite` account may correctly show only Weekly plus Spark Weekly. It must never fabricate a
 five-hour row.
 

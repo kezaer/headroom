@@ -39,7 +39,7 @@ public struct CodexProvider: UsageProvider {
                 case 200:
                     return decode(result.body)
                 case 401:
-                    return stale(.needsReauth("Session expired — run `\(CodexCLI.loginCommand)` to reconnect"))
+                    return stale(.providerSetup(.codexRejectedAuth))
                 default:
                     return stale(UsageWindowBuilder.genericFailure(for: result.status))
                 }

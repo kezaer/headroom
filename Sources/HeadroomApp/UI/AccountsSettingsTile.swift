@@ -18,8 +18,11 @@ struct AccountsSettingsTile: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
+    @State private var removalOrigin: AccountKey?
+    @State private var removalInProgress: AccountKey?
     @State private var hoveredLabel: AccountKey?
     @FocusState private var focusedLabel: AccountKey?
+    @FocusState private var focusedRemovalAction: AccountKey?
 
     private static let providerIDs: [ProviderID] = [.claude, .codex]
 
@@ -50,14 +53,21 @@ struct AccountsSettingsTile: View {
             presenting: removalCandidate
         ) { account in
             Button("Remove \(account.label)", role: .destructive) {
-                // End any in-flight handoff first, so orphaned retry tasks can't keep
-                // polling for a deleted account (code-review finding).
-                SetupSessions.settle(for: account)
-                withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
-                    store.removeAccount(account.key)
+                removalInProgress = account.key
+                Task { @MainActor in
+                    let result = await AccountsSettingsInteractions.removeAccount(account, from: store)
+                    removalInProgress = nil
+                    guard result == .removed else {
+                        restoreRemovalFocus()
+                        return
+                    }
+                    withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+                        removalCandidate = nil
+                    }
+                    removalOrigin = nil
                 }
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { restoreRemovalFocus() }
         } message: { account in
             Text("Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
         }
@@ -118,7 +128,23 @@ struct AccountsSettingsTile: View {
 
     private func accountRow(_ account: ProviderAccount) -> some View {
         let snapshot = store.snapshot(for: account.key)
-        let status = AccountStatus(snapshot: snapshot, waiting: isWaitingForSetup(account))
+        let removalState = store.accountRemovalStates[account.key]
+        let setupState = SetupSessions.state(for: account)
+        let setupFailure = SetupSessions.failureMessage(for: account)
+        let recoveryPresentation: ProviderRecoveryPresentation? = {
+            guard case .stale(let reason) = snapshot.freshness else { return nil }
+            return reason.providerSetupOutcome?.recoveryPresentation
+        }()
+        let status = AccountStatus(
+            snapshot: snapshot,
+            waiting: isWaitingForSetup(account),
+            blocked: {
+                if case .blockedByCodexLogin = setupState { return true }
+                return false
+            }(),
+            setupFailed: setupFailure != nil,
+            removalState: removalState
+        )
         let isEditingLabel = focusedLabel == account.key || hoveredLabel == account.key
         return HStack(spacing: 8) {
             // Quiet at rest, but the affordance reveals on approach: a hover/focus fill
@@ -149,33 +175,85 @@ struct AccountsSettingsTile: View {
                     .help("Uses the account your CLI is signed into")
             }
             Spacer(minLength: 8)
-            statusLabel(status)
-            if status.needsSignIn {
-                Button("Sign In…") { openSetup(for: account) }
+            statusLabel(
+                status,
+                setupFailure: setupFailure,
+                setupMode: SetupSessions.mode(for: account)
+            )
+            if (status.needsRecovery || recoveryPresentation != nil), removalState == nil {
+                Button(status == .blocked
+                       ? "Continue…"
+                       : (recoveryPresentation?.primaryLabel
+                          ?? (status == .setupFailed ? "Retry…" : "Sign In…"))) {
+                    if status == .blocked {
+                        SetupSessions.continueSetup(for: account)
+                    } else if let recoveryPresentation {
+                        SetupSessions.performRecovery(
+                            recoveryPresentation.primaryAction,
+                            for: account,
+                            onRetry: { store.refreshAccountNow(account.key) }
+                        )
+                    } else {
+                        openSetup(for: account)
+                    }
+                }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
             // The trash slot is always laid out — hidden (not absent) on built-in rows —
             // so status text shares one right anchor down the whole list (audit P2).
-            Button { removalCandidate = account } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11))
-                    .frame(width: 22, height: 22)
+            if removalState == .failed || removalState == .setupActive {
+                Button("Retry") {
+                    Task { @MainActor in
+                        _ = await AccountsSettingsInteractions.removeAccount(account, from: store)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Retry removal of \(account.label)")
+                .focused($focusedRemovalAction, equals: account.key)
+                Button("Cancel") {
+                    store.cancelAccountRemoval(account.key)
+                    removalOrigin = account.key
+                    restoreRemovalFocus()
+                }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .accessibilityLabel("Cancel removal of \(account.label)")
+            } else {
+                Button {
+                    removalOrigin = account.key
+                    removalCandidate = account
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
+                .foregroundStyle(.secondary)
+                .help("Remove this account")
+                .accessibilityLabel("Remove \(account.label)")
+                .opacity(account.isBuiltIn ? 0 : 1)
+                .disabled(account.isBuiltIn || removalState == .removing)
+                .accessibilityHidden(account.isBuiltIn)
+                .focused($focusedRemovalAction, equals: account.key)
             }
-            .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
-            .foregroundStyle(.secondary)
-            .help("Remove this account")
-            .accessibilityLabel("Remove \(account.label)")
-            .opacity(account.isBuiltIn ? 0 : 1)
-            .disabled(account.isBuiltIn)
-            .accessibilityHidden(account.isBuiltIn)
         }
         // 16pt + the field's 6pt inner pad lands the label text at the 22pt provider-
         // name alignment axis.
         .padding(.leading, 16)
+        .disabled(removalState == .removing)
+        .onAppear { SetupSessions.announceFailureIfNeeded(for: account) }
+        .onChange(of: setupState) {
+            SetupSessions.announceFailureIfNeeded(for: account)
+        }
     }
 
-    @ViewBuilder private func statusLabel(_ status: AccountStatus) -> some View {
+    @ViewBuilder private func statusLabel(
+        _ status: AccountStatus,
+        setupFailure: String?,
+        setupMode: SetupHandoffMode
+    ) -> some View {
         switch status {
         case .connected:
             Text("Connected")
@@ -188,7 +266,7 @@ struct AccountsSettingsTile: View {
         case .waiting:
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini)
-                Text("Waiting for sign-in…")
+                Text(setupMode == .deviceCode ? "Waiting for device code…" : "Waiting for sign-in…")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -207,15 +285,52 @@ struct AccountsSettingsTile: View {
             Text("Needs sign-in")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: colorScheme))
+        case .blocked:
+            Text("Another Codex login is open")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+        case .setupFailed:
+            Text(setupFailure ?? "Setup failed")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: colorScheme))
+                .lineLimit(2)
+        case .removing:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("Removing…").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        case .setupActive:
+            Text("Close setup, then retry")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: colorScheme))
+        case .removalFailed:
+            Text("Removal failed")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: colorScheme))
         }
     }
 
     // MARK: - Status
 
     private enum AccountStatus {
-        case connected, fetching, waiting, stale, needsSignIn
+        case connected, fetching, waiting, stale, needsSignIn, blocked, setupFailed
+        case removing, setupActive, removalFailed
 
-        init(snapshot: UsageSnapshot, waiting: Bool) {
+        init(
+            snapshot: UsageSnapshot,
+            waiting: Bool,
+            blocked: Bool,
+            setupFailed: Bool,
+            removalState: AccountRemovalState?
+        ) {
+            switch removalState {
+            case .removing: self = .removing; return
+            case .setupActive: self = .setupActive; return
+            case .failed: self = .removalFailed; return
+            case nil: break
+            }
+            if blocked { self = .blocked; return }
+            if setupFailed { self = .setupFailed; return }
             switch snapshot.freshness {
             case .live:
                 self = .connected
@@ -230,9 +345,8 @@ struct AccountsSettingsTile: View {
             }
         }
 
-        var needsSignIn: Bool {
-            if case .needsSignIn = self { return true }
-            return false
+        var needsRecovery: Bool {
+            self == .needsSignIn || self == .blocked || self == .setupFailed
         }
     }
 
@@ -241,10 +355,13 @@ struct AccountsSettingsTile: View {
     /// Create the account and immediately open its official-CLI sign-in so the add
     /// flow is one gesture: click Add → Terminal opens → sign in → row goes live.
     private func addAccount(for providerID: ProviderID) {
-        guard let account = withAnimation(reduceMotion ? nil : HeadroomMotion.settle, {
-            store.addAccount(for: providerID)
-        }) else { return }
-        openSetup(for: account)
+        _ = withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+            AccountsSettingsInteractions.addAccount(
+                for: providerID,
+                to: store,
+                openSetup: openSetup(for:)
+            )
+        }
     }
 
     private func openSetup(for account: ProviderAccount) {
@@ -270,17 +387,28 @@ struct AccountsSettingsTile: View {
 
     private func commitLabel(for account: ProviderAccount) {
         guard let draft = labelDrafts[account.key] else { return }
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty, trimmed != account.label {
-            store.renameAccount(account.key, to: trimmed)
-        }
+        AccountsSettingsInteractions.commitLabel(draft, for: account, in: store)
         labelDrafts[account.key] = nil
     }
 
     private var removalDialogPresented: Binding<Bool> {
         Binding(
             get: { removalCandidate != nil },
-            set: { if !$0 { removalCandidate = nil } }
+            set: {
+                if !$0 {
+                    removalCandidate = nil
+                    if removalInProgress == nil { restoreRemovalFocus() }
+                }
+            }
         )
+    }
+
+    private func restoreRemovalFocus() {
+        let key = removalOrigin
+        removalCandidate = nil
+        Task { @MainActor in
+            await Task.yield()
+            focusedRemovalAction = key
+        }
     }
 }

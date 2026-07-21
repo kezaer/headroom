@@ -129,19 +129,19 @@ struct ClaudeProviderTests {
     @Test func missingCLIDegradesToNotLoggedIn() async {
         let snap = await provider(.cliNotFound).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason.isPermanent)
+        #expect(reason.providerSetupOutcome == .claudeCLIMissing)
     }
 
     @Test func captureFailureIsTransient() async {
-        let snap = await provider(.failed).fetchSnapshot()
+        let snap = await provider(.transientCapture).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(!reason.isPermanent)   // will retry next cycle
+        #expect(reason.providerSetupOutcome == .claudeTransientCapture)
     }
 
     @Test func loggedOutPanelAsksToLogIn() async {
-        let snap = await provider(.panel("Please run /login to log in to Claude")).fetchSnapshot()
+        let snap = await provider(.loginRequired).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason.isPermanent)    // needsReauth
+        #expect(reason.providerSetupOutcome == .claudeLoginRequired)
     }
 
     @Test func loginRequiredResultReadsAsNeedsSignIn() async {
@@ -151,7 +151,7 @@ struct ClaudeProviderTests {
         // permanent — a transient blip would hide the account's Sign in affordance.
         let snap = await provider(.loginRequired).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason.isPermanent)
+        #expect(reason.providerSetupOutcome == .claudeLoginRequired)
     }
 
     @Test func probeClassifiesFirstRunScreens() {
@@ -160,15 +160,77 @@ struct ClaudeProviderTests {
         #expect(!ClaudeUsageCLIProbe.isFirstRunScreen("Current session\n38% used\nResets 2:15pm"))
     }
 
+    @Test func bootClassifierFailsClosedBeforeInput() {
+        #expect(ClaudeUsageCLIProbe.classifyBootText("") == .noOutput)
+        #expect(ClaudeUsageCLIProbe.classifyBootText("Quick safety check: Is this a project you trust?") == .trustRequired)
+        #expect(ClaudeUsageCLIProbe.classifyBootText("Choose the text style that looks best") == .loginRequired)
+        #expect(ClaudeUsageCLIProbe.classifyBootText("""
+        Claude Code v2.1.216
+        Quick safety check: Is this a project you trust?
+        ❯ Continue
+        manual mode on · ← for agents
+        """) == .trustRequired)
+        #expect(ClaudeUsageCLIProbe.classifyBootText("""
+        Claude Code v2.1.216
+        Select login method
+        ❯ Claude account with subscription
+        manual mode on · ← for agents
+        """) == .loginRequired)
+        #expect(ClaudeUsageCLIProbe.classifyBootText("A brand new onboarding screen") == .unknown)
+        #expect(ClaudeUsageCLIProbe.classifyBootText("Claude Code\n? for shortcuts") == .ready)
+    }
+
+    @Test func bootClassifierRecognizesCurrentPrompt() {
+        let currentPrompt = """
+        Claude Code v2.1.216
+        Opus 4.8 with high effort
+        ────────────────────────────────────────────────
+        ❯ Try "how do I log an error?"
+        ────────────────────────────────────────────────
+        manual mode on · ← for agents
+        """
+
+        #expect(ClaudeUsageCLIProbe.classifyBootText(currentPrompt) == .ready)
+    }
+
+    @Test func authStatusClassifierIsTypedAndFailsClosed() {
+        #expect(ClaudeUsageCLIProbe.classifyAuthStatus(Data(#"{"loggedIn":true}"#.utf8)) == .loggedIn)
+        #expect(ClaudeUsageCLIProbe.classifyAuthStatus(Data(#"{"loggedIn":false}"#.utf8)) == .loggedOut)
+        #expect(ClaudeUsageCLIProbe.classifyAuthStatus(Data("unsupported".utf8)) == .unsupported)
+    }
+
+    @Test func builtInProbeCannotInheritAnotherClaudeHome() {
+        let builtIn = ClaudeUsageCLIProbe.environment(
+            inherited: ["CLAUDE_CONFIG_DIR": "/wrong", "PATH": "/bin"],
+            overrides: [:],
+            loginPath: "/resolved/bin",
+            workingDirectory: "/workspace"
+        )
+        let extra = ClaudeUsageCLIProbe.environment(
+            inherited: ["CLAUDE_CONFIG_DIR": "/wrong"],
+            overrides: ["CLAUDE_CONFIG_DIR": "/exact"],
+            loginPath: "/resolved/bin",
+            workingDirectory: "/workspace"
+        )
+        #expect(builtIn["CLAUDE_CONFIG_DIR"] == nil)
+        #expect(extra["CLAUDE_CONFIG_DIR"] == "/exact")
+    }
+
     @Test func loginMethodSelectorReadsAsNeedsSignIn() async {
-        let snap = await provider(.panel("Select login method: 1. Claude account with subscription")).fetchSnapshot()
+        let snap = await provider(.loginRequired).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason.isPermanent)
+        #expect(reason.providerSetupOutcome == .claudeLoginRequired)
     }
 
     @Test func trustPromptAsksUserToOpenClaude() async {
-        let snap = await provider(.panel("Quick safety check: Is this a project you created or one you trust?")).fetchSnapshot()
+        let snap = await provider(.workspaceTrustRequired).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason == .needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
+        #expect(reason.providerSetupOutcome == .claudeTrustRequired)
+    }
+
+    @Test func unknownInteractiveSurfaceNeverMasqueradesAsLoginOrTrust() async {
+        let snap = await provider(.unknownUI).fetchSnapshot()
+        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
+        #expect(reason.providerSetupOutcome == .claudeUnknownUI)
     }
 }

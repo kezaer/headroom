@@ -46,7 +46,7 @@ public enum CLIExecutableResolver {
             ?? fallbackPaths.first(where: isExecutable)
     }
 
-    static func resolveLoginPath(fallback: String) -> String {
+    public static func resolveLoginPath(fallback: String) -> String {
         let output = runLoginShell(command: "printf '\\n\(pathMarker)%s' \"$PATH\"")
         return selectLoginPath(loginShellOutput: output, fallback: fallback)
     }

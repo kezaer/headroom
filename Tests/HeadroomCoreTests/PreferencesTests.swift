@@ -28,8 +28,18 @@ struct PreferencesTests {
         #expect(prefs.pollIntervalMinutes == Preferences.defaultIntervalMinutes) // unset default
         prefs.pollIntervalMinutes = 12
         #expect(prefs.pollIntervalMinutes == 12)
-        prefs.pollIntervalMinutes = 0            // clamped to >= 1
-        #expect(prefs.pollIntervalMinutes >= 1)
+        prefs.pollIntervalMinutes = 1
+        #expect(prefs.pollIntervalMinutes == Preferences.minimumIntervalMinutes)
+
+        // Persisted values from older builds are clamped on read as well as write.
+        let defaults = freshDefaults()
+        defaults.set(1, forKey: "pollIntervalMinutes")
+        #expect(Preferences(defaults: defaults).pollIntervalMinutes == Preferences.minimumIntervalMinutes)
+    }
+
+    @Test func pollingEngineUsesTheSameTwoMinuteFloor() {
+        #expect(PollingEngine.clampedIntervalMinutes(1) == Preferences.minimumIntervalMinutes)
+        #expect(PollingEngine.clampedIntervalMinutes(5) == 5)
     }
 
     @Test func appearancePreferenceDefaultsPersistsAndIgnoresUnknownValues() {

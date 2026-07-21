@@ -38,24 +38,22 @@ enum ClaudeSetupSession {
             : AccountStorage.claudeWorkspaceDirectoryURL(for: account)
     }
 
-    /// Extra accounts prefix the CLI with their isolated `CLAUDE_CONFIG_DIR`; the
-    /// built-in account keeps the plain command against the user's own `~/.claude`.
-    private static func commandPrefix(for account: ProviderAccount) -> String {
-        account.isBuiltIn
-            ? ""
-            : "CLAUDE_CONFIG_DIR=\(shellQuoted(AccountStorage.claudeConfigDirectoryURL(for: account).path)) "
-    }
-
     static func command(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
-        "cd \(shellQuoted(workspaceURL(for: account).path)) && \(commandPrefix(for: account))claude"
+        let configuration = ProviderAccountConfiguration.make(for: account)
+        return ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
+            accountKey: account.key,
+            executablePath: nil,
+            loginPath: "",
+            workspaceDirectory: configuration.claudeWorkspaceDirectory?.path ?? workspaceURL(for: account).path,
+            configDirectory: configuration.claudeConfigDirectory?.path
+        ))
     }
 
     static var command: String { command() }
 
     /// Tilde-abbreviated command for display; `command` (absolute) is what's copied.
     static func displayCommand(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
-        let tilde = (workspaceURL(for: account).path as NSString).abbreviatingWithTildeInPath
-        return "cd \(tilde.replacingOccurrences(of: " ", with: "\\ ")) && \(commandPrefix(for: account))claude"
+        command(for: account).replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
     static var displayCommand: String { displayCommand() }
@@ -211,6 +209,7 @@ enum ClaudeSetupStyle {
 /// State 1 — "Connect Claude": value first, one primary action, guided steps, and the
 /// raw command demoted behind a disclosure.
 struct ClaudeConnectCard: View {
+    var outcome: ProviderSetupOutcome = .claudeTrustRequired
     let onOpenSetup: () -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -220,18 +219,20 @@ struct ClaudeConnectCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 ProviderLogoView(providerID: .claude, size: 20)
-                Text("Connect Claude")
+                Text(outcome == .claudeLoginRequired ? "Sign in to Claude" : "Connect Claude")
                     .font(.system(size: 15, weight: .semibold))
                     .kerning(-0.2)
             }
-            Text("See your remaining Claude usage right here.")
+            Text(outcome == .claudeLoginRequired
+                 ? "Sign in through the official Claude CLI to show this account's usage."
+                 : "See your remaining Claude usage right here.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
                 .padding(.top, 6)
             reassurance
                 .padding(.top, 11)
             Button(action: onOpenSetup) {
-                Label("Open Claude Setup", systemImage: "terminal")
+                Label(outcome.recoveryPresentation.primaryLabel, systemImage: "terminal")
             }
             .buttonStyle(ClaudePrimaryButtonStyle())
             .padding(.top, 12)
@@ -245,7 +246,7 @@ struct ClaudeConnectCard: View {
     /// "official /usage · no login · never spends usage" — the trust line that makes a
     /// first-run user comfortable pressing the button.
     private var reassurance: some View {
-        Text("Reads Claude's official \(Text("/usage").font(.system(size: 10.5, design: .monospaced))) panel — no login, no tokens, and it never spends your usage.")
+        Text("Reads Claude's official \(Text("/usage").font(.system(size: 10.5, design: .monospaced))) panel through its CLI. Headroom never receives your password or tokens, and the check never spends usage.")
             .font(.system(size: 11.5))
             .foregroundStyle(.tertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -263,7 +264,9 @@ struct ClaudeConnectCard: View {
                     .frame(height: 1)
             }
             step(1, Text("Terminal opens and starts Claude for you"), dark: dark)
-            step(2, Text("Choose \(Text("“Yes, I trust this folder”").fontWeight(.semibold).foregroundColor(.primary)) when asked"), dark: dark)
+            step(2, outcome == .claudeLoginRequired
+                 ? Text("Finish signing in, then approve the workspace if asked")
+                 : Text("Choose \(Text("“Yes, I trust this folder”").fontWeight(.semibold).foregroundColor(.primary)) when asked"), dark: dark)
             step(3, Text("Come back — your usage appears here automatically"), dark: dark)
         }
     }
@@ -288,6 +291,7 @@ struct ClaudeConnectCard: View {
 /// literal trust-prompt option is a quiet bordered token (not bold prose) so it never
 /// competes with the bold title above it.
 struct ClaudeWaitingCard: View {
+    var outcome: ProviderSetupOutcome = .claudeTrustRequired
     let onCheckNow: () -> Void
     let onReopen: () -> Void
 
@@ -300,27 +304,31 @@ struct ClaudeWaitingCard: View {
                 ProviderLogoView(providerID: .claude, size: 20)
                 ProgressView()
                     .controlSize(.small)
-                Text("Waiting for approval…")
+                Text(outcome == .claudeLoginRequired ? "Waiting for sign-in…" : "Waiting for approval…")
                     .font(.system(size: 15, weight: .semibold))
                     .kerning(-0.2)
             }
-            Text("In the Terminal that just opened, choose the option below — Headroom connects the moment you approve.")
+            Text(outcome == .claudeLoginRequired
+                 ? "Finish signing in in the Terminal that just opened. Headroom checks this account automatically."
+                 : "In the Terminal that just opened, choose the option below — Headroom connects the moment you approve.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
-            HStack(spacing: 7) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                Text("“Yes, I trust this folder”")
-                    .font(.system(size: 12.5, weight: .semibold))
+            if outcome == .claudeTrustRequired {
+                HStack(spacing: 7) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                    Text("“Yes, I trust this folder”")
+                        .font(.system(size: 12.5, weight: .semibold))
+                }
+                .padding(.vertical, 6)
+                .padding(.leading, 9).padding(.trailing, 11)
+                .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
+                .padding(.top, 11)
             }
-            .padding(.vertical, 6)
-            .padding(.leading, 9).padding(.trailing, 11)
-            .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
-            .padding(.top, 11)
             HStack(spacing: 14) {
                 Button(action: onCheckNow) {
                     Label("Check now", systemImage: "arrow.clockwise")

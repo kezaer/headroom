@@ -1,7 +1,7 @@
 ---
 title: Multi-Account Profiles - Plan
 type: feat
-status: active
+status: implemented-superseded
 date: 2026-07-03
 artifact_contract: ce-unified-plan/v1
 artifact_readiness: deferred-implementation-ready
@@ -11,6 +11,14 @@ target_release: "1.1 candidate, after 1.0 public website release"
 ---
 
 # Multi-Account Profiles - Plan
+
+> Implemented for the 1.1 candidate and superseded by
+> `2026-07-20-001-fix-provider-setup-multi-account-release-stabilization-plan.md` for final
+> stabilization and release proof. Shipped implementation uses editable user labels rather
+> than provider email identity, Headroom-owned config homes rather than arbitrary paths, no
+> per-account disable switch, primary-only menu bar/widget/iPhone projections, and removal of
+> the selected additional local CLI sign-in. Claude probes are serialized; Codex/network work
+> remains concurrent.
 
 ## Goal Capsule
 

@@ -17,8 +17,26 @@ public enum ClaudePanelResult: Sendable, Equatable {
     /// this config home has no signed-in account. Typed here, at the layer that saw
     /// the screen, so the provider never re-derives it from marker strings.
     case loginRequired
+    case workspaceTrustRequired
+    /// Claude presented a surface Headroom does not positively recognize. The probe
+    /// fails closed and sends no input.
+    case unknownUI
     case cliNotFound
-    case failed
+    case transientCapture
+}
+
+public enum ClaudeBootState: Sendable, Equatable {
+    case ready
+    case loginRequired
+    case trustRequired
+    case unknown
+    case noOutput
+}
+
+public enum ClaudeAuthStatus: Sendable, Equatable {
+    case loggedIn
+    case loggedOut
+    case unsupported
 }
 
 /// Drives the interactive `claude` CLI in a pseudo-terminal, sends `/usage`, and
@@ -62,21 +80,27 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         // Run the blocking pty work off the cooperative pool.
         return await withCheckedContinuation { continuation in
             Thread.detachNewThread { [environmentOverrides] in
-                let raw = Self.runBlocking(
+                switch Self.runAuthStatus(
+                    claudePath: claudePath,
+                    environmentOverrides: environmentOverrides
+                ) {
+                case .loggedOut:
+                    continuation.resume(returning: .loginRequired)
+                    return
+                case .unsupported:
+                    continuation.resume(returning: .unknownUI)
+                    return
+                case .loggedIn:
+                    break
+                }
+                let result = Self.runBlocking(
                     claudePath: claudePath,
                     workingDirectory: workingDirectory,
                     environmentOverrides: environmentOverrides,
                     boot: bootTimeout,
                     panel: panelTimeout
                 )
-                guard let raw, !raw.isEmpty else {
-                    continuation.resume(returning: .failed); return
-                }
-                let stripped = ANSI.strip(raw)
-                if Self.isFirstRunScreen(stripped) {
-                    continuation.resume(returning: .loginRequired); return
-                }
-                continuation.resume(returning: .panel(stripped))
+                continuation.resume(returning: result)
             }
         }
     }
@@ -100,6 +124,51 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         return CLIExecutableResolver.resolveLoginPath(fallback: fallback)
     }
 
+    /// Decode only the stable boolean from `claude auth status --json`. Unknown output
+    /// never falls through to the interactive probe, because doing so could type into a
+    /// new first-run surface.
+    static func classifyAuthStatus(_ data: Data) -> ClaudeAuthStatus {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let loggedIn = object["loggedIn"] as? Bool
+        else { return .unsupported }
+        return loggedIn ? .loggedIn : .loggedOut
+    }
+
+    private static func runAuthStatus(
+        claudePath: String,
+        environmentOverrides: [String: String]
+    ) -> ClaudeAuthStatus {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: claudePath)
+        process.arguments = ["auth", "status", "--json"]
+        process.environment = environment(
+            inherited: ProcessInfo.processInfo.environment,
+            overrides: environmentOverrides,
+            loginPath: loginPath(),
+            workingDirectory: FileManager.default.currentDirectoryPath
+        )
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            return .unsupported
+        }
+
+        let deadline = Date().addingTimeInterval(5)
+        while process.isRunning, Date() < deadline { usleep(20_000) }
+        if process.isRunning {
+            process.terminate()
+            let terminationDeadline = Date().addingTimeInterval(1)
+            while process.isRunning, Date() < terminationDeadline { usleep(20_000) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+        process.waitUntilExit()
+        return classifyAuthStatus(output.fileHandleForReading.readDataToEndOfFile())
+    }
+
     // MARK: pty mechanics
 
     private static func runBlocking(
@@ -108,11 +177,11 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         environmentOverrides: [String: String],
         boot: TimeInterval,
         panel: TimeInterval
-    ) -> String? {
+    ) -> ClaudePanelResult {
         var master: Int32 = -1
         var slave: Int32 = -1
         var win = winsize(ws_row: 45, ws_col: 140, ws_xpixel: 0, ws_ypixel: 0)
-        guard openpty(&master, &slave, nil, nil, &win) == 0 else { return nil }
+        guard openpty(&master, &slave, nil, nil, &win) == 0 else { return .transientCapture }
 
         var fileActions = posix_spawn_file_actions_t(bitPattern: 0)
         posix_spawn_file_actions_init(&fileActions)
@@ -138,15 +207,15 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         // Inherit the user's environment (so a node-based `claude` shim finds `node`),
         // augmenting PATH via the login shell, and force a real TERM for TUI rendering.
-        var envDict = ProcessInfo.processInfo.environment
+        var envDict = environment(
+            inherited: ProcessInfo.processInfo.environment,
+            overrides: environmentOverrides,
+            loginPath: loginPath(),
+            workingDirectory: workingDirectory
+        )
         envDict["TERM"] = "xterm-256color"
         envDict["COLUMNS"] = "140"
         envDict["LINES"] = "45"
-        envDict["LANG"] = envDict["LANG"] ?? "en_US.UTF-8"
-        envDict["PATH"] = loginPath()
-        envDict["PWD"] = workingDirectory
-        // Applied last so an account's CLAUDE_CONFIG_DIR always wins over any inherited value.
-        for (key, value) in environmentOverrides { envDict[key] = value }
         let env = envDict.map { "\($0.key)=\($0.value)" }
         var pid: pid_t = 0
         let argv = [claudePath]
@@ -161,7 +230,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         let spawnResult = posix_spawn(&pid, claudePath, &fileActions, &attr, cArgv, cEnv)
         close(slave)
-        guard spawnResult == 0 else { close(master); return nil }
+        guard spawnResult == 0 else { close(master); return .transientCapture }
 
         // Guaranteed teardown regardless of how we leave.
         func teardown() {
@@ -180,20 +249,22 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         var buffer = Data()
         drain(master: master, maxSeconds: boot, quiet: 2.5, into: &buffer) // boot + prompt
-        if let bootText = String(data: buffer, encoding: .utf8) {
-            let stripped = ANSI.strip(bootText)
-            if stripped.localizedCaseInsensitiveContains("Quick safety check") {
-                teardown()
-                return bootText
-            }
-            // First-run screens (fresh CLAUDE_CONFIG_DIR on an extra account): theme
-            // picker and the login-method selector. Bail before typing — an Enter on the
-            // login selector *starts a browser sign-in*, which a background poll must
-            // never do. `capturePanel` types the returned text as `.loginRequired`.
-            if isFirstRunScreen(stripped) {
-                teardown()
-                return bootText
-            }
+        let bootText = String(decoding: buffer, as: UTF8.self)
+        switch classifyBootText(ANSI.strip(bootText)) {
+        case .ready:
+            break
+        case .loginRequired:
+            teardown()
+            return .loginRequired
+        case .trustRequired:
+            teardown()
+            return .workspaceTrustRequired
+        case .unknown:
+            teardown()
+            return .unknownUI
+        case .noOutput:
+            teardown()
+            return .transientCapture
         }
         usleep(800_000) // let the input box settle before typing
         _ = "/usage".withCString { write(master, $0, strlen($0)) }
@@ -212,7 +283,8 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         drain(master: master, maxSeconds: panel, quiet: 4.0, into: &buffer) // the panel
         teardown()
 
-        return String(data: buffer, encoding: .utf8) ?? String(decoding: buffer, as: UTF8.self)
+        let captured = ANSI.strip(String(decoding: buffer, as: UTF8.self))
+        return captured.isEmpty ? .transientCapture : .panel(captured)
     }
 
     /// The one marker list for the CLI's first-run screens — shared by the boot bail
@@ -221,6 +293,46 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     static func isFirstRunScreen(_ strippedText: String) -> Bool {
         strippedText.localizedCaseInsensitiveContains("Select login method")
             || strippedText.localizedCaseInsensitiveContains("Choose the text style")
+    }
+
+    /// Positive allowlist for PTY input. Login, trust, empty startup, and unknown/new
+    /// onboarding all remain no-input states; only a recognized normal interactive
+    /// prompt permits `/usage`.
+    static func classifyBootText(_ strippedText: String) -> ClaudeBootState {
+        let text = strippedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return .noOutput }
+        if text.localizedCaseInsensitiveContains("Quick safety check")
+            || text.localizedCaseInsensitiveContains("trust this folder") {
+            return .trustRequired
+        }
+        if isFirstRunScreen(text) { return .loginRequired }
+        if text.localizedCaseInsensitiveContains("? for shortcuts") { return .ready }
+        let hasCurrentInputPrompt = text
+            .split(whereSeparator: \.isNewline)
+            .contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
+        if text.localizedCaseInsensitiveContains("Claude Code"),
+           text.localizedCaseInsensitiveContains("for agents"),
+           hasCurrentInputPrompt {
+            return .ready
+        }
+        return .unknown
+    }
+
+    static func environment(
+        inherited: [String: String],
+        overrides: [String: String],
+        loginPath: String,
+        workingDirectory: String
+    ) -> [String: String] {
+        var result = inherited
+        // The built-in account always means the CLI default. A custom value inherited
+        // from a Terminal launch must not silently select another account.
+        if overrides["CLAUDE_CONFIG_DIR"] == nil { result.removeValue(forKey: "CLAUDE_CONFIG_DIR") }
+        result["LANG"] = result["LANG"] ?? "en_US.UTF-8"
+        result["PATH"] = loginPath
+        result["PWD"] = workingDirectory
+        for (key, value) in overrides { result[key] = value }
+        return result
     }
 
     /// Read from the pty until `quiet` seconds pass with no new bytes, or `maxSeconds`

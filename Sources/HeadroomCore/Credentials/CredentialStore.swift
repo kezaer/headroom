@@ -21,9 +21,19 @@ public actor CredentialStore {
         do {
             return .success(try codexReader.readCodexCredential().accessToken)
         } catch CredentialError.notLoggedIn {
-            return .failure(.notLoggedIn("Codex isn't logged in — run `\(CodexCLI.loginCommand)`"))
+            return .failure(.providerSetup(.codexAuthAbsent))
+        } catch CredentialError.permissionDenied {
+            return .failure(.providerSetup(.codexPermissionDenied))
+        } catch CredentialError.unsafePermissions {
+            return .failure(.providerSetup(.codexUnsafePermissions))
+        } catch CredentialError.malformed {
+            return .failure(.providerSetup(.codexMalformedAuth))
+        } catch CredentialError.ioFailure {
+            return .failure(.providerSetup(.codexCredentialIO))
+        } catch CredentialError.keychainStatus {
+            return .failure(.providerSetup(.codexCredentialIO))
         } catch {
-            return .failure(.notLoggedIn("Codex credential unreadable"))
+            return .failure(.providerSetup(.codexCredentialIO))
         }
     }
 

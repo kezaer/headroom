@@ -33,9 +33,7 @@ enum Entry {
     private static func runClaudeProbe() {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            let path = ClaudeUsageCLIProbe.resolveClaudePath() ?? "(not found)"
-            print("claude path: \(path)")
-            print("working directory: \(claudeWorkingDirectory())")
+            print("claude CLI: \(ClaudeUsageCLIProbe.resolveClaudePath() == nil ? "missing" : "available")")
             // `--claude-config <dir>`: probe an alternate account home (multi-account
             // diagnostic) — exercises the same CLAUDE_CONFIG_DIR override the extra
             // accounts use in production.
@@ -43,7 +41,9 @@ enum Entry {
             if let flagIndex = CommandLine.arguments.firstIndex(of: "--claude-config"),
                CommandLine.arguments.indices.contains(flagIndex + 1) {
                 overrides["CLAUDE_CONFIG_DIR"] = CommandLine.arguments[flagIndex + 1]
-                print("CLAUDE_CONFIG_DIR: \(CommandLine.arguments[flagIndex + 1])")
+                print("account home: isolated")
+            } else {
+                print("account home: built-in")
             }
             switch await ClaudeUsageCLIProbe(
                 workingDirectory: claudeWorkingDirectory(),
@@ -51,24 +51,19 @@ enum Entry {
             ).capturePanel() {
             case .cliNotFound:
                 print("RESULT: CLI not found")
-            case .failed:
+            case .transientCapture:
                 print("RESULT: capture failed (no panel text)")
             case .loginRequired:
                 print("RESULT: login required (first-run screen — no account signed into this config home)")
+            case .workspaceTrustRequired:
+                print("RESULT: workspace trust required")
+            case .unknownUI:
+                print("RESULT: unrecognized Claude surface (no input sent)")
             case .panel(let text):
                 let windows = ClaudeUsageParser.parse(text)
-                print("RESULT: captured panel (\(text.count) chars), parsed \(windows.count) window(s):")
+                print("RESULT: parsed \(windows.count) window(s)")
                 for w in windows {
-                    print("  • \(w.kind)  \(Int(w.percentUsed))% used  →  \(w.resetLabel ?? "no reset")  (remaining \(Int(100 - w.percentUsed))%)")
-                }
-                // Always dump the raw panel so we can see fields the parser doesn't yet
-                // extract (e.g. the subscription tier for the plan pill).
-                if CommandLine.arguments.contains("--full") {
-                    print("--- RAW PANEL (full) ---")
-                    print(text)
-                } else {
-                    print("--- RAW PANEL (first 1500 chars) ---")
-                    print(String(text.prefix(1500)))
+                    print("  • \(w.kind)  \(Int(w.percentUsed))% used  reset=\(w.resetLabel == nil ? "absent" : "present")")
                 }
             }
             semaphore.signal()
@@ -170,6 +165,7 @@ struct HeadroomApp: App {
     init() {
         let preferences = Preferences()
         let store = AppComposition.store(preferences: preferences)
+        if !DemoFixture.isEnabled { SetupSessions.configure(store: store) }
         self.preferences = preferences
         _store = State(initialValue: store)
         _appearancePreference = State(initialValue: preferences.appearancePreference)
@@ -421,28 +417,35 @@ enum AppComposition {
     /// `CODEX_HOME`) that the user signed into via the official CLI.
     @MainActor
     static func provider(for account: ProviderAccount, credentials: CredentialStore) -> any UsageProvider {
+        let configuration = ProviderAccountConfiguration.make(for: account)
         switch account.providerID {
         case .codex:
             guard !account.isBuiltIn else {
                 return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
             }
-            let reader = CodexAuthFileReader(path: AccountStorage.codexAuthFileURL(for: account))
+            let reader = CodexAuthFileReader(path: configuration.codexAuthFile)
             return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
-        default: // .claude
-            // ProviderID is open by design (R13); a third provider must register its
-            // own account factory here, never fall through to a Claude probe.
-            assert(account.providerID == .claude, "No account provider registered for \(account.providerID)")
-            guard !account.isBuiltIn else {
-                return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: Entry.claudeWorkingDirectory()))
+        case .claude:
+            guard let workspace = configuration.claudeWorkspaceDirectory else {
+                return UnavailableAccountProvider(account: account)
             }
-            _ = try? AccountStorage.ensureDirectories(for: account)
+            guard !account.isBuiltIn else {
+                return ClaudeProvider(
+                    source: ClaudeUsageCLIProbe(workingDirectory: workspace.path)
+                )
+            }
+            guard let configDirectory = configuration.claudeConfigDirectory else {
+                return UnavailableAccountProvider(account: account)
+            }
             return ClaudeProvider(
                 source: ClaudeUsageCLIProbe(
-                    workingDirectory: AccountStorage.claudeWorkspaceDirectoryURL(for: account).path,
-                    environmentOverrides: ["CLAUDE_CONFIG_DIR": AccountStorage.claudeConfigDirectoryURL(for: account).path]
+                    workingDirectory: workspace.path,
+                    environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
                 ),
                 accountID: account.id
             )
+        default:
+            return UnavailableAccountProvider(account: account)
         }
     }
 
@@ -461,5 +464,21 @@ enum AppComposition {
 
     static func phoneSyncExporter() -> any WidgetSnapshotExporting {
         iCloudSnapshotPublisher(sync: iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore()))
+    }
+}
+
+private struct UnavailableAccountProvider: UsageProvider {
+    let id: ProviderID
+    let accountID: AccountID
+    let displayName: String
+
+    init(account: ProviderAccount) {
+        id = account.providerID
+        accountID = account.id
+        displayName = account.providerID.raw.capitalized
+    }
+
+    func fetchSnapshot() async -> UsageSnapshot {
+        .stale(for: id, reason: .transient("This provider is not available in this Headroom build"))
     }
 }

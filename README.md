@@ -34,11 +34,27 @@ redaction-safe snapshot synced from the Mac through iCloud Key-Value Store.
   cost reports. These keys are separate from CLI subscription login, and Headroom never
   uses Claude subscription OAuth credentials for API spend.
 
+## Multiple subscription accounts
+
+Headroom 1.1 can show up to five Claude and five Codex subscriptions side by side. The
+built-in account keeps using the CLI's normal `~/.claude` or `~/.codex` home, so existing
+installs need no migration. Additional accounts use Headroom-owned, owner-only config homes
+and sign in through the same official CLIs in Terminal; Headroom never copies one account's
+credentials into another home.
+
+Add, rename, or remove accounts in **Settings → Accounts**. Removing an additional account
+deletes only that Headroom-owned local CLI home; it does not touch the subscription, built-in
+CLI login, or sibling accounts. The popover shows every account and becomes scrollable at
+higher counts. The menu bar, macOS widgets, and iPhone/iPad snapshot intentionally continue
+to follow each provider's built-in account so compact surfaces keep one stable meaning.
+
 ## Build & test
 
 ```bash
 swift build          # builds HeadroomCore + Headroom + HeadroomWidgets
 swift test
+xcodebuild -project Headroom.xcodeproj -scheme HeadroomAppTests \
+  -destination 'platform=macOS' test   # deterministic macOS app-boundary interactions
 ./Scripts/build-app.sh   # produces Headroom.app (menu bar / LSUIElement), then: open Headroom.app
 xcodebuild -project Headroom.xcodeproj -scheme HeadroomIOS \
   -configuration Debug -destination 'generic/platform=iOS Simulator' \
@@ -55,8 +71,8 @@ runtime support is not currently validated or advertised. The app bundle build a
 Codex subscription usage requires the Codex CLI; Headroom can open `codex login` when its
 CLI-managed `~/.codex/auth.json` session is absent or rejected. API spend rows require the
 relevant OpenAI/Anthropic admin keys entered in Settings. Diagnostic:
-`swift run Headroom --probe-claude` prints the live parsed windows so you can confirm the
-Claude path works on your machine.
+`swift run Headroom --probe-claude` prints only a redacted classification and parsed window
+summary so you can confirm the Claude path without exposing panel, account, or path contents.
 
 ## Structure
 
@@ -149,14 +165,16 @@ HEADROOM_ENABLE_ICLOUD_ENTITLEMENT=1 ./Scripts/build-app.sh debug
   (last) value for each window wins.
 - Login-shell PATH resolution, so a Finder-launched app (bare environment) still finds a
   node/nvm/homebrew `claude` or `codex` — verified against a stripped environment.
-- Codex connect/reconnect delegates to the official `codex login` command in Terminal,
+- Codex connect/reconnect delegates to the official `codex login` command in Terminal with
+  an account-scoped readable-file storage override,
   retries the normal usage fetch, and keeps last-known usage dimmed while reauthentication
   is in progress. Headroom does not write or refresh the Codex auth file itself.
 - Graceful degrade: CLI missing → "install Claude Code"; not logged in → "run `claude`";
   transient read failure → keeps last-known data and retries next cycle.
 - Reset times are shown **verbatim** from the panel ("Resets Jul 9 at 10am"), so the app
   can't drift from what Claude Code itself displays.
-- The probe runs off the main actor, on the poll timer (default 5 min) — never per-render.
+- Claude probes run off the main actor in one serial lane while Codex/network fetches can
+  overlap. The poll timer defaults to 5 minutes and enforces a 2-minute floor — never per-render.
 
 ## Local app build
 

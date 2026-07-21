@@ -25,25 +25,19 @@ public struct ClaudeProvider: UsageProvider {
     public func fetchSnapshot() async -> UsageSnapshot {
         switch await source.capturePanel() {
         case .cliNotFound:
-            return stale(.notLoggedIn("Install Claude Code to show usage"))
+            return stale(.providerSetup(.claudeCLIMissing))
         case .loginRequired:
-            return stale(.needsReauth("Run `claude` and log in"))
-        case .failed:
-            return stale(.transient("Couldn't read Claude usage — will retry"))
+            return stale(.providerSetup(.claudeLoginRequired))
+        case .workspaceTrustRequired:
+            return stale(.providerSetup(.claudeTrustRequired))
+        case .unknownUI:
+            return stale(.providerSetup(.claudeUnknownUI))
+        case .transientCapture:
+            return stale(.providerSetup(.claudeTransientCapture))
         case .panel(let text):
             let parsed = ClaudeUsageParser.parse(text)
             guard !parsed.isEmpty else {
-                if text.localizedCaseInsensitiveContains("Quick safety check")
-                    || text.localizedCaseInsensitiveContains("trust this folder") {
-                    return stale(.needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
-                }
-                // Panel captured but no windows found: most often "not logged in".
-                // (First-run screens arrive typed as `.loginRequired`; this string
-                // check covers logged-out wording inside an otherwise normal session.)
-                if text.lowercased().contains("log in") || text.lowercased().contains("login") {
-                    return stale(.needsReauth("Run `claude` and log in"))
-                }
-                return stale(.transient("Couldn't read Claude usage — will retry"))
+                return stale(.providerSetup(.claudeTransientCapture))
             }
             let windows = parsed.map { window in
                 UsageWindow(
