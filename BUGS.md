@@ -1,19 +1,15 @@
 # Deferred / Follow-up
 
-Non-blocking items. The app works end-to-end (75 tests pass; live Claude + Codex data
-verified). The earlier OAuth/Keychain-token approach and its U9 spike are **obsolete** —
+Non-blocking items. The earlier OAuth/Keychain-token approach and its U9 spike are **obsolete** —
 Anthropic prohibits and blocks third-party subscription-OAuth use, so Claude now reads the
 official `claude` CLI's `/usage` panel instead.
 
 ## Claude CLI probe
 
-- **`--probe-claude` raw preview can disclose account PII.** The default diagnostic prints
-  the first 1,500 characters of the captured Claude panel, whose welcome banner can include
-  the signed-in account email and organization name before the `/usage` content. Redact
-  email/organization strings before printing or make raw output an explicit opt-in that
-  warns about PII; never include the raw preview in shared logs.
-- **The per-model weekly row ("Weekly (Fable)") disappeared from `/usage` — source-side, not
-  a parser bug (2026-07-16).** The panel now emits only `Current session` and
+- **Resolved upstream on 2026-07-20: the per-model weekly row ("Weekly (Fable)") returned in
+  Claude Code 2.1.216.** Headroom's signed live probe parsed it again without a parser change.
+  The prior source-side disappearance remains documented here because it can recur: on 2026-07-16
+  the panel emitted only `Current session` and
   `Current week (all models)`, followed by a new "What's contributing to your limits usage?"
   attribution section. `ClaudeUsageParser` is **correct and unchanged** — `parsesSettledWindows`
   still passes against a fixture containing `Current week (Fable)` → `.other("Weekly (Fable)")`,
@@ -43,9 +39,9 @@ official `claude` CLI's `/usage` panel instead.
   positions, but a future Claude Code redesign of the panel could still break it. It fails
   safe (empty result → transient stale), and the `--probe-claude` diagnostic makes drift
   easy to spot. Add a version check / update the fixture if the panel changes.
-- **Each poll spawns a full `claude` session (~20–30s, some CPU).** Fine at the default
-  5-minute cadence for a personal tool; if the interval is set very low in Settings this
-  becomes noticeable. Consider a minimum floor or caching if that matters.
+- **Each poll spawns a full `claude` session (~20–30s, some CPU).** Claude accounts now run
+  in one serial lane and the interval has an enforced 2-minute floor. Caching or adaptive
+  cadence could still reduce cost for users who configure several accounts.
 - **No live integration test for the PTY probe.** Provider tests use a fixture panel +
   mock source (fast, deterministic). The real `ClaudeUsageCLIProbe` is verified manually
   via `--probe-claude`; a machine-dependent integration test would need the CLI logged in.
@@ -58,23 +54,17 @@ official `claude` CLI's `/usage` panel instead.
 
 ## Polish
 
-- **`PopoverRenderHarness` dark captures can resolve primary text as black.** The generated
-  dark PNG uses the correct dark surfaces and secondary colors, but default/primary text
-  (title, percentages, footer controls) can render black in the headless compositor path.
-  The harness also announces Settings PNGs even when `screencapture` fails to create them.
-  Fix the capture-only appearance propagation and only print success for files that exist;
-  live app appearance is unaffected.
-- **The 3× `hero-popover-dark.png` render can omit the entire card stack.** The regular
-  connected render includes usage and API-spend cards, but `renderHero` currently exports
-  only the header and footer after the popover moved to a measured `ScrollView`. Fix the
-  offscreen height proposal/state settling before regenerating the website hero; the live
-  popover is unaffected.
 - ~~App icon — user to provide.~~ Done: Vessel `AppIcon.appiconset` (16–1024), wired via
   `ASSETCATALOG_COMPILER_APPICON_NAME`. The artwork is full-bleed square PNG output so iOS,
   iPadOS, and macOS can apply their native icon shape without a second baked-in frame.
   Regenerate all sizes with `node Scripts/gen-app-icon.mjs` (master:
   `design/vessel-app-icon.svg`).
 - `MenuBarLabel` uses a fixed font size (menu bar height is OS-constrained).
+- **App-boundary tests emit an AppKit re-entrant-layout warning under Xcode 26.5.** All six
+  `HeadroomAppTests` pass, but loading the app test bundle logs that `layoutSubtreeIfNeeded` was
+  called while a view was already being laid out. No failure or production symptom was observed;
+  isolate the responsible test-host/view initialization before a future AppKit release turns the
+  warning into an error.
 
 ## iPhone sync — Mac needs the iCloud-KVS entitlement (provisioning-gated)
 

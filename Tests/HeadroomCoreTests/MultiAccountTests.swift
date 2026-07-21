@@ -25,8 +25,18 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
 /// No-op storage so account-lifecycle tests never touch the real Application
 /// Support tree (AGENTS.md: suite is all mocked).
 private struct NoopAccountStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) {}
-    func removeDirectories(for account: ProviderAccount) {}
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+}
+
+private final class FailingRemovalStorage: AccountStorageManaging, @unchecked Sendable {
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .failure(.removeFailed) }
+}
+
+private struct ActiveSetupRemovalStorage: AccountStorageManaging {
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .failure(.setupActive) }
 }
 
 private actor FetchConcurrencyProbe {
@@ -51,6 +61,67 @@ private struct ProbedAccountProvider: UsageProvider {
         await probe.begin()
         try? await Task.sleep(for: .milliseconds(40))
         await probe.end()
+        return .live(id, windows: [window(.weekly, used: 20)])
+    }
+}
+
+private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable {
+    let id: ProviderID
+    let accountID: AccountID
+    let displayName = "P"
+    private let lock = NSLock()
+    private var count = 0
+    private var started: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+    private var didStart = false
+    private var shouldRelease = false
+
+    init(id: ProviderID, accountID: AccountID) {
+        self.id = id
+        self.accountID = accountID
+    }
+
+    var fetchCount: Int { lock.withLock { count } }
+
+    func waitUntilStarted() async {
+        if lock.withLock({ didStart }) { return }
+        await withCheckedContinuation { continuation in
+            var immediate = false
+            lock.withLock {
+                if didStart { immediate = true } else { started = continuation }
+            }
+            if immediate { continuation.resume() }
+        }
+    }
+
+    func releaseFetches() {
+        let continuation = lock.withLock {
+            shouldRelease = true
+            let pending = release
+            release = nil
+            return pending
+        }
+        continuation?.resume()
+    }
+
+    func fetchSnapshot() async -> UsageSnapshot {
+        let start = lock.withLock {
+            count += 1
+            didStart = true
+            let pending = started
+            started = nil
+            return pending
+        }
+        start?.resume()
+        if !lock.withLock({ shouldRelease }) {
+            await withCheckedContinuation { continuation in
+                var immediate = false
+                lock.withLock {
+                    if shouldRelease { immediate = true } else { release = continuation }
+                }
+                if immediate { continuation.resume() }
+            }
+        }
         return .live(id, windows: [window(.weekly, used: 20)])
     }
 }
@@ -300,7 +371,7 @@ private struct ProbedAccountProvider: UsageProvider {
         )
         let added = store.addAccount(for: .claude)!
         await store.refreshAll()
-        store.removeAccount(added.key)
+        #expect(await store.removeAccount(added.key) == .removed)
         #expect(store.accounts(for: .claude).count == 1)
         // Snapshot access for the removed key degrades to pending, and a refresh
         // doesn't resurrect it.
@@ -308,7 +379,7 @@ private struct ProbedAccountProvider: UsageProvider {
         #expect(store.snapshot(for: added.key).freshness == .pending)
     }
 
-    @Test func builtInAccountCannotBeRemovedFromStore() {
+    @Test func builtInAccountCannotBeRemovedFromStore() async {
         let defaults = freshDefaults()
         let store = UsageStore(
             providers: [
@@ -323,8 +394,55 @@ private struct ProbedAccountProvider: UsageProvider {
                                     snapshot: .pending(for: .claude))
             }
         )
-        store.removeAccount(AccountKey(providerID: .claude, accountID: .primary))
+        #expect(await store.removeAccount(AccountKey(providerID: .claude, accountID: .primary)) == .notAllowed)
         #expect(store.accounts(for: .claude).count == 1)
+    }
+
+    @Test func deletionFailureKeepsRecoverableRegisteredAccount() async {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .codex, accountID: .primary, displayName: "Codex", snapshot: .pending(for: .codex)),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: FailingRemovalStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: .codex, accountID: account.id, displayName: "Codex", snapshot: .pending(for: .codex))
+            }
+        )
+        let added = store.addAccount(for: .codex)!
+
+        #expect(await store.removeAccount(added.key) == .failed)
+        #expect(store.accounts(for: .codex).contains(where: { $0.key == added.key }))
+        #expect(store.accountRemovalStates[added.key] == .failed)
+
+        store.cancelAccountRemoval(added.key)
+        #expect(store.accountRemovalStates[added.key] == nil)
+        #expect(store.accounts(for: .codex).contains(where: { $0.key == added.key }))
+    }
+
+    @Test func activeExternalSetupKeepsAccountRegisteredAndRemovalRetryable() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .codex, accountID: .primary, displayName: "Codex", snapshot: .pending(for: .codex)),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: ActiveSetupRemovalStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: .codex, accountID: account.id, displayName: "Codex", snapshot: .pending(for: .codex))
+            }
+        )
+        let added = store.addAccount(for: .codex)!
+
+        #expect(await store.removeAccount(added.key) == .setupActive)
+        #expect(store.accounts(for: .codex).contains(where: { $0.key == added.key }))
+        #expect(store.accountRemovalStates[added.key] == .setupActive)
+        store.cancelAccountRemoval(added.key)
+        #expect(store.accountRemovalStates[added.key] == nil)
     }
 
     @Test func renameUpdatesAccountLabel() {
@@ -392,6 +510,33 @@ private struct ProbedAccountProvider: UsageProvider {
         #expect(accountIDs.allSatisfy {
             store.snapshot(for: AccountKey(providerID: .claude, accountID: $0)).freshness == .live
         })
+    }
+
+    @Test func setupRefreshQueuedDuringFleetRefreshIsDeduplicatedAndDrained() async {
+        let primary = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let extraID = AccountID("work")
+        let extra = SuspendedAccountProvider(id: .claude, accountID: extraID)
+        extra.releaseFetches()
+        let accounts: [ProviderAccount] = [
+            .builtIn(for: .claude),
+            ProviderAccount(id: extraID, providerID: .claude, label: "Work"),
+        ]
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: Preferences(defaults: freshDefaults()),
+            accounts: accounts
+        )
+        let fleet = Task { await store.refreshAll() }
+        await primary.waitUntilStarted()
+
+        async let first: Void = store.refreshAccount(AccountKey(providerID: .claude, accountID: extraID))
+        async let second: Void = store.refreshAccount(AccountKey(providerID: .claude, accountID: extraID))
+        _ = await (first, second)
+        primary.releaseFetches()
+        await fleet.value
+
+        // One fleet fetch plus one deduplicated queued setup check.
+        #expect(extra.fetchCount == 2)
     }
 
     @Test func widgetExportUsesPrimaryAccountOnly() async {

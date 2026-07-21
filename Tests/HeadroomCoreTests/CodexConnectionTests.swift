@@ -6,7 +6,7 @@ struct CodexConnectionTests {
     @Test func missingCredentialsRequestInitialConnection() {
         let snapshot = UsageSnapshot.stale(
             for: .codex,
-            reason: .notLoggedIn("Codex isn't logged in — run `codex login`")
+            reason: .providerSetup(.codexAuthAbsent)
         )
 
         #expect(snapshot.codexConnectionAction == .connect)
@@ -29,6 +29,14 @@ struct CodexConnectionTests {
 
         #expect(snapshot.codexConnectionAction == .reconnect)
         #expect(snapshot.windows == [window])
+    }
+
+    @Test func permissionAndStorageFailuresNeverRouteIntoLoginLoop() {
+        let permission = UsageSnapshot.stale(for: .codex, reason: .providerSetup(.codexPermissionDenied))
+        let mismatch = UsageSnapshot.stale(for: .codex, reason: .providerSetup(.codexStorageMismatch))
+
+        #expect(permission.codexConnectionAction == .showPrivacyGuidance)
+        #expect(mismatch.codexConnectionAction == .resolveStorage)
     }
 
     @Test func unrelatedStatesDoNotRequestCodexConnection() {
@@ -122,7 +130,7 @@ struct CodexConnectionTests {
     @Test func generatedLoginScriptUsesOnlyQuotedExecutableAndAllowlistedArgument() {
         let script = CodexCLI.loginScript(executablePath: "/Users/Test User/bin/cod'ex")
 
-        #expect(script.contains("exec '/Users/Test User/bin/cod'\\''ex' login"))
+        #expect(script.contains("exec '/Users/Test User/bin/cod'\\''ex' -c cli_auth_credentials_store=file login"))
         #expect(script.contains("Headroom never receives your password or sign-in details"))
         #expect(!script.localizedCaseInsensitiveContains("access_token"))
         #expect(!script.localizedCaseInsensitiveContains("authorization"))

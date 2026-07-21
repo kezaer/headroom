@@ -301,7 +301,13 @@ enum PopoverRenderHarness {
         store.refreshNow()
         try? await Task.sleep(for: .milliseconds(400))
 
-        let root = PopoverView(store: store, onOpenSettings: {}, forceVisible: true, forceSolidSurface: true)
+        let root = PopoverView(
+            store: store,
+            onOpenSettings: {},
+            forceVisible: true,
+            forceSolidSurface: true,
+            forcedCardsHeight: 410
+        )
             .environment(\.colorScheme, .dark)
             .focusEffectDisabled()
             // The popover's `WindowAccessor` background NSView renders as the system accent
@@ -309,15 +315,36 @@ enum PopoverRenderHarness {
             // Clip the whole export to the surface shape so those cutouts stay transparent.
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
 
-        let renderer = ImageRenderer(content: root)
-        renderer.scale = 3
-        renderer.isOpaque = false
+        // Host the view for one layout cycle. `ImageRenderer` does not mount ScrollView
+        // content, so even a fixed height can produce a shell with no cards. A transparent
+        // hosting view exercises the same mounted layout path as the 32 review captures
+        // while retaining a permission-free bitmap export.
+        let hosting = NSHostingView(rootView: root)
+        hosting.appearance = NSAppearance(named: .darkAqua)
+        hosting.frame = NSRect(x: 0, y: 0, width: 384, height: 760)
+        let fitting = hosting.fittingSize
+        hosting.frame.size.height = max(fitting.height, 200)
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.appearance = hosting.appearance
+        window.contentView = hosting
+        window.orderFrontRegardless()
+        window.displayIfNeeded()
+        try? await Task.sleep(for: .milliseconds(500))
 
-        var pngData: Data?
-        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance {
-            guard let cgImage = renderer.cgImage else { return }
-            pngData = NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+        guard let representation = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+            window.orderOut(nil)
+            return false
         }
+        hosting.cacheDisplay(in: hosting.bounds, to: representation)
+        let pngData = representation.representation(using: .png, properties: [:])
+        window.orderOut(nil)
         guard let data = pngData, data.count > 10_000 else { return false }
         do {
             try data.write(to: url)
@@ -474,7 +501,7 @@ enum PopoverRenderHarness {
                 windows: [],
                 planLabel: nil,
                 capturedAt: Date(),
-                freshness: .stale(.needsReauth(ClaudeUsageWorkspace.trustRequiredMessage))
+                freshness: .stale(.providerSetup(.claudeTrustRequired))
             )
         case .connected, .codexConnect, .codexReconnect, .codexWaiting, .codexConnected:
             return DemoFixture.claudeSnapshot
@@ -486,7 +513,7 @@ enum PopoverRenderHarness {
         case .codexConnect:
             return .stale(
                 for: .codex,
-                reason: .notLoggedIn("Codex isn't logged in — run `\(CodexCLI.loginCommand)`")
+                reason: .providerSetup(.codexAuthAbsent)
             )
         case .codexReconnect, .codexWaiting, .dualWaiting:
             return UsageSnapshot(
@@ -494,7 +521,7 @@ enum PopoverRenderHarness {
                 windows: DemoFixture.codexSnapshot.windows,
                 planLabel: DemoFixture.codexSnapshot.planLabel,
                 capturedAt: DemoFixture.codexSnapshot.capturedAt,
-                freshness: .stale(.needsReauth("Session expired — run `\(CodexCLI.loginCommand)` to reconnect"))
+                freshness: .stale(.providerSetup(.codexRejectedAuth))
             )
         case .codexConnected, .connect, .waiting, .connected:
             return DemoFixture.codexSnapshot

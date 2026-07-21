@@ -138,6 +138,9 @@ public enum FailureReason: Sendable, Equatable, Error {
     case decode(String)
     /// No credential is present yet (Keychain item / auth.json absent).
     case notLoggedIn(String)
+    /// A typed provider/setup condition. Its redaction-safe copy is derived from the
+    /// outcome; UI recovery behavior must use the outcome, never compare the copy.
+    case providerSetup(ProviderSetupOutcome)
 
     /// User-facing message for the stale card (already redaction-safe).
     public var message: String {
@@ -145,6 +148,8 @@ public enum FailureReason: Sendable, Equatable, Error {
         case .transient(let m), .needsReauth(let m), .scopeDenied(let m),
              .decode(let m), .notLoggedIn(let m):
             return m
+        case .providerSetup(let outcome):
+            return outcome.message
         }
     }
 
@@ -154,7 +159,13 @@ public enum FailureReason: Sendable, Equatable, Error {
         case .transient: return false
         case .needsReauth, .scopeDenied, .notLoggedIn: return true
         case .decode: return false
+        case .providerSetup(let outcome): return outcome.isPermanent
         }
+    }
+
+    public var providerSetupOutcome: ProviderSetupOutcome? {
+        guard case .providerSetup(let outcome) = self else { return nil }
+        return outcome
     }
 }
 

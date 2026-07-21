@@ -34,7 +34,58 @@ struct CredentialStoreTests {
         let store = CredentialStore(codexReader: MockCodexReader(credential: nil))
         let result = await store.codexAccessToken()
         guard case .failure(let reason) = result else { Issue.record("expected failure"); return }
-        #expect(reason == .notLoggedIn("Codex isn't logged in — run `codex login`"))
+        #expect(reason.providerSetupOutcome == .codexAuthAbsent)
+    }
+
+    @Test func codexFileReaderDistinguishesAbsentPermissionMalformedAndIO() throws {
+        let path = URL(fileURLWithPath: "/redacted/auth.json")
+
+        for (error, expected) in [
+            (CocoaError(.fileNoSuchFile), CredentialError.notLoggedIn),
+            (CocoaError(.fileReadNoPermission), CredentialError.permissionDenied),
+            (CocoaError(.fileReadUnknown), CredentialError.ioFailure),
+        ] {
+            let reader = CodexAuthFileReader(path: path, readData: { _ in throw error })
+            #expect(throws: expected) { try reader.readCodexCredential() }
+        }
+
+        let malformed = CodexAuthFileReader(
+            path: path,
+            readData: { _ in Data("{}".utf8) },
+            permissionsAreSafe: { _ in true }
+        )
+        #expect(throws: CredentialError.malformed) { try malformed.readCodexCredential() }
+    }
+
+    @Test func codexFileReaderRejectsUnsafeCredentialPermissions() {
+        let data = Data("""
+        { "tokens": { "access_token": "sensitive" } }
+        """.utf8)
+        let reader = CodexAuthFileReader(
+            path: URL(fileURLWithPath: "/redacted/auth.json"),
+            readData: { _ in data },
+            permissionsAreSafe: { _ in false }
+        )
+
+        #expect(throws: CredentialError.unsafePermissions) {
+            try reader.readCodexCredential()
+        }
+    }
+
+    @Test func credentialStoreMapsCodexFileFailuresToTypedSetupOutcomes() async {
+        for (error, expected) in [
+            (CredentialError.permissionDenied, ProviderSetupOutcome.codexPermissionDenied),
+            (CredentialError.unsafePermissions, .codexUnsafePermissions),
+            (CredentialError.malformed, .codexMalformedAuth),
+            (CredentialError.ioFailure, .codexCredentialIO),
+        ] {
+            let store = CredentialStore(codexReader: ThrowingCodexReader(error: error))
+            guard case .failure(let reason) = await store.codexAccessToken() else {
+                Issue.record("expected failure")
+                continue
+            }
+            #expect(reason.providerSetupOutcome == expected)
+        }
     }
 
     @Test func redactionHidesTokens() {
@@ -73,4 +124,9 @@ struct CredentialStoreTests {
         }
         #expect(!reason.message.contains("sk-"))
     }
+}
+
+private struct ThrowingCodexReader: CodexAuthReading {
+    let error: CredentialError
+    func readCodexCredential() throws -> CodexCredential { throw error }
 }

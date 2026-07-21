@@ -113,7 +113,9 @@ enum CodexSetupSession {
 
 struct CodexConnectCard: View {
     let action: CodexConnectionAction
+    var presentation: ProviderRecoveryPresentation? = nil
     let onOpenSetup: () -> Void
+    var onSecondaryAction: (() -> Void)? = nil
 
     @Environment(\.colorScheme) private var scheme
 
@@ -140,10 +142,23 @@ struct CodexConnectCard: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 11)
             Button(action: onOpenSetup) {
-                Label(reconnecting ? "Open Codex Login" : "Connect with Codex", systemImage: "terminal")
+                Label(
+                    presentation?.primaryLabel
+                        ?? (reconnecting ? "Open Codex Login" : "Connect with Codex"),
+                    systemImage: "terminal"
+                )
             }
             .buttonStyle(CodexPrimaryButtonStyle())
             .padding(.top, 12)
+            if let secondaryLabel = presentation?.secondaryLabel,
+               let onSecondaryAction {
+                Button(secondaryLabel, action: onSecondaryAction)
+                    .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 4))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(ProviderStyle.textAccent(for: .codex, scheme: scheme))
+                    .padding(.top, 7)
+                    .accessibilityLabel(secondaryLabel)
+            }
             steps
                 .padding(.top, 14)
             CodexManualCommandDisclosure()
@@ -184,7 +199,50 @@ struct CodexConnectCard: View {
     }
 }
 
+enum CodexAccessRecoveryKind {
+    case permission
+    case storage
+}
+
+/// Recovery that cannot be repaired by silently reopening login. Permission denial
+/// goes to macOS access guidance; storage mismatch deliberately names the file-store
+/// repair before the user invokes the official CLI again.
+struct CodexAccessRecoveryCard: View {
+    let kind: CodexAccessRecoveryKind
+    let onPrimaryAction: () -> Void
+    let onCheckNow: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                ProviderLogoView(providerID: .codex, size: 20)
+                Text(kind == .permission ? "Allow Codex Access" : "Resolve Codex Storage")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ProviderStyle.textAccent(for: .codex, scheme: scheme))
+            }
+            Text(kind == .permission
+                 ? "Headroom found the Codex sign-in file but macOS did not allow it to be read. Signing in again cannot repair this permission."
+                 : "Codex did not leave a readable file for this account. Reopen its official login with Headroom's account-specific file-storage setting.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Button(kind == .permission ? "Open Privacy & Security" : "Resolve Storage", action: onPrimaryAction)
+                    .buttonStyle(CodexPrimaryButtonStyle())
+                    .accessibilityLabel(kind == .permission
+                                        ? "Open Privacy and Security for Codex file access"
+                                        : "Resolve Codex storage for this account")
+                Button("Check now", action: onCheckNow)
+                    .buttonStyle(SetupChipButtonStyle())
+            }
+        }
+    }
+}
+
 struct CodexWaitingCard: View {
+    var mode: SetupHandoffMode = .standard
     let onCheckNow: () -> Void
     let onReopen: () -> Void
 
@@ -196,17 +254,21 @@ struct CodexWaitingCard: View {
             HStack(spacing: 6) {
                 ProviderLogoView(providerID: .codex, size: 20)
                 ProgressView().controlSize(.small)
-                Text("Finish signing in…")
+                Text(mode == .deviceCode ? "Finish device-code sign-in…" : "Finish signing in…")
                     .font(.system(size: 15, weight: .semibold))
                     .kerning(-0.2)
                     .foregroundStyle(ProviderStyle.textAccent(for: .codex, scheme: scheme))
             }
-            Text("Complete the ChatGPT sign-in in your browser. Headroom will reconnect when Codex confirms it.")
+            Text(mode == .deviceCode
+                 ? "Follow the device-code instructions in Terminal. Headroom will reconnect when Codex confirms it."
+                 : "Complete the ChatGPT sign-in in your browser. Headroom will reconnect when Codex confirms it.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
-            Label("Official Codex CLI · \(CodexCLI.loginCommand)", systemImage: "lock.shield")
+            Label(mode == .deviceCode
+                  ? "Official Codex CLI · device code · file-backed sign-in"
+                  : "Official Codex CLI · file-backed sign-in", systemImage: "lock.shield")
                 .font(.system(size: 11.5, weight: .medium))
                 .padding(.vertical, 6)
                 .padding(.horizontal, 9)
@@ -254,12 +316,18 @@ struct CodexManualCommandDisclosure: View {
             .accessibilityLabel(open ? "Hide manual Codex login command" : "Show manual Codex login command")
             if open {
                 HStack(alignment: .top, spacing: 8) {
-                    Text(CodexCLI.loginCommand)
+                    Text(CodexCLI.accountLoginCommand(codexHome: nil))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
-                    Button(action: CodexSetupSession.copyCommand) {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(
+                            CodexCLI.accountLoginCommand(codexHome: nil),
+                            forType: .string
+                        )
+                    } label: {
                         Image(systemName: "doc.on.doc").frame(width: 22, height: 22)
                     }
                     .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))

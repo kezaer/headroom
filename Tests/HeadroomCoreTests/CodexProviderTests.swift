@@ -107,7 +107,7 @@ struct CodexProviderTests {
     @Test func unauthorizedSaysRunCodex() async {
         let snap = await provider(MockFetcher([.success(HTTPResult(status: 401, body: Data()))])).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason == .needsReauth("Session expired — run `codex login` to reconnect"))
+        #expect(reason.providerSetupOutcome == .codexRejectedAuth)
     }
 
     @Test func networkErrorIsTransient() async {

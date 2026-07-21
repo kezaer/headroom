@@ -27,13 +27,14 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
     }
 
     public static let defaultIntervalMinutes = 5
+    public static let minimumIntervalMinutes = 2
 
     public var pollIntervalMinutes: Int {
         get {
             let v = defaults.integer(forKey: Key.interval)
-            return v > 0 ? v : Self.defaultIntervalMinutes
+            return v > 0 ? max(Self.minimumIntervalMinutes, v) : Self.defaultIntervalMinutes
         }
-        nonmutating set { defaults.set(max(1, newValue), forKey: Key.interval) }
+        nonmutating set { defaults.set(max(Self.minimumIntervalMinutes, newValue), forKey: Key.interval) }
     }
 
     public var appearancePreference: AppearancePreference {

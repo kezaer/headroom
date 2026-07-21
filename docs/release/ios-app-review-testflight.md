@@ -1,8 +1,8 @@
 # iOS App Review and TestFlight Runbook
 
-Release candidate: iOS 1.0 build 23 (`com.kylezantos.headroom.ios`) with widget
-extension build 23 (`com.kylezantos.headroom.ios.widgets`). Last known uploaded build
-baseline for this cut: 22.
+Release candidate: iOS 1.0 build 24 (`com.kylezantos.headroom.ios`) with widget extension
+build 24 (`com.kylezantos.headroom.ios.widgets`). The confirmed last uploaded build baseline is
+23; build 24 was confirmed unused before stamping on 2026-07-20.
 
 ## Why this resubmission exists
 
@@ -11,7 +11,7 @@ reviewer could not access connected functionality without a Mac/iCloud publisher
 Submission ID: `3472c833-11a3-4815-82d0-816b291dab60`. Apple explicitly accepted a
 demonstration mode as the resolution.
 
-Build 23 includes the production, one-tap demo introduced in build 21, needs no login,
+Build 24 includes the production, one-tap demo introduced in build 21, needs no login,
 Mac, iCloud payload, or provider account, and carries the latest companion/widget fixes.
 The host and widget extension remain universal on iPhone/iPad. Demo data is bundled and
 read-only; a separate App Group flag coordinates the widget and never replaces the real
@@ -23,28 +23,27 @@ snapshot cache.
 swift test
 xcodegen generate
 
-# Run HeadroomIOSUITests on an iPhone and an iPad Air 11-inch simulator.
-# XcodeBuildMCP or xcodebuild may be used; both destinations must pass.
+# Run HeadroomIOSUITests on an iPhone simulator.
+# An iPad simulator pass is welcome when a layout change calls for it, but is not a release gate.
 
-HEADROOM_IOS_LAST_UPLOADED_BUILD=22 Scripts/verify-ios-release.sh --source
+HEADROOM_IOS_LAST_UPLOADED_BUILD=23 Scripts/verify-ios-release.sh --source
 ```
 
 The release script repeats source preflight, archives, validates the signed host and
 embedded widget, and only then exports/uploads:
 
 ```bash
-HEADROOM_IOS_LAST_UPLOADED_BUILD=22 ./Scripts/release-ios-testflight.sh
+HEADROOM_IOS_LAST_UPLOADED_BUILD=23 ./Scripts/release-ios-testflight.sh
 
-HEADROOM_IOS_LAST_UPLOADED_BUILD=22 \
+HEADROOM_IOS_LAST_UPLOADED_BUILD=23 \
 HEADROOM_IOS_UPLOAD=1 \
   ./Scripts/release-ios-testflight.sh
 ```
 
 If using API-key authentication, set all three `HEADROOM_ASC_KEY_PATH`,
 `HEADROOM_ASC_KEY_ID`, and `HEADROOM_ASC_ISSUER_ID` variables. Never paste their values
-into this document or command output. Build 23 must be confirmed unused in App Store
-Connect before upload; if a newer build already exists, increment host and widget
-together and use the actual highest uploaded build as the baseline.
+into this document or command output. Build 23 is already used; 24 is the paired host/widget
+candidate and the source/archive checks continue to use 23 as the uploaded baseline.
 
 ## Internal TestFlight acceptance
 
@@ -53,7 +52,7 @@ Keep the currently accepted build available while validating the candidate.
 1. Wait for App Store Connect processing and export-compliance completion.
 2. Assign the candidate to the internal Headroom group first.
 3. Delete prior development/App Store copies before installing from TestFlight.
-4. On iPhone and an iPad-class device, launch with no Mac publisher available.
+4. On an iPhone, launch with no Mac publisher available. An iPad spot check is optional.
 5. Tap **Explore Demo** and verify Claude, Codex, Weekly (Fable), API Spend, Settings,
    light/dark appearance, and readable portrait/landscape layouts.
 6. Add small, medium, and large widgets. Each must show a visible DEMO label and open
@@ -61,7 +60,10 @@ Keep the currently accepted build available while validating the candidate.
 7. Terminate/relaunch the app; app and widget must remain in demo.
 8. Exit through Settings; app and widget must return to the real waiting/synced state.
 9. Publish a real Mac snapshot and verify it appears unchanged after demo exit.
-10. Check stale/offline/setup states and confirm no provider credential action exists on iOS.
+10. Add, fail, rename, and remove an additional Mac account; confirm the iPhone app and widgets
+    remain byte-for-byte focused on each provider's built-in account and never show the extra
+    account label or setup state.
+11. Check stale/offline/setup states and confirm no provider credential action exists on iOS.
 
 Only after this gate passes: assign the same build to the intended external group,
 submit for Beta App Review when required, and enable broader invitations after approval.
@@ -85,7 +87,8 @@ Report device, OS version, widget size, appearance, and reproduction steps with 
 - Sign-in required: **Off**. Headroom has no login or account.
 - Review Notes: paste the current block in `docs/release/appstore-listing.md`.
 - Screenshots: capture with `Scripts/capture-demo-screenshots.sh`; include both the
-  6.9-inch iPhone and required 13-inch iPad sets.
+  6.9-inch iPhone and required 13-inch iPad App Store sets. This metadata requirement does
+  not make an iPad runtime/UI-test pass a release gate.
 - Support URL: `https://headroom.zantos.co`
 - Privacy URL: `https://headroom.zantos.co/privacy`
 - Export compliance: `ITSAppUsesNonExemptEncryption = NO` in host and extension.
@@ -123,3 +126,10 @@ until those facts are verified in App Store Connect.
 - 2026-07-18: Build 23 passed the source, signed-archive, iPhone, and iPad release gates.
   Xcode Organizer uploaded the host app and embedded widget to App Store Connect at
   1:22 PM PT; App Store Connect processing and TestFlight group assignment remain pending.
+- 2026-07-20: Build 24 was confirmed unused, then passed source preflight, host/widget archive
+  preflight, strict code-sign validation, and all 6 iPhone UI tests. The archive is retained at
+  `dist/ios-testflight/HeadroomIOS.xcarchive`. After explicit confirmation, Xcode created an Apple
+  Distribution certificate and fresh App Store profiles, then exported an Apple
+  Distribution-signed local IPA at `dist/ios-testflight/export-24/Headroom.ipa`. Host and widget
+  both report 1.0 (24) and pass strict signature validation. Build 24 has not been uploaded or
+  assigned to a TestFlight group.

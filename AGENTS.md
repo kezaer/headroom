@@ -58,7 +58,7 @@ config homes under `~/Library/Application Support/Headroom/Accounts/…` and rou
 same compliant paths there: the Claude probe runs with `CLAUDE_CONFIG_DIR` set, and
 Codex reads the `auth.json` that official `codex login` wrote under that account's
 `CODEX_HOME`. Sign-in is always a Terminal handoff to the official CLI
-(`ClaudeSetupSession`/`CodexSetupSession`, both keyed per account) — the OAuth
+through the account-scoped `SetupSessionCoordinator` — the OAuth
 constraint above applies to every account. The menu bar and widgets follow each
 provider's primary account; the popover shows all accounts (compact meter density from
 3 accounts up; the card list scrolls past a 640pt cap). Account management lives in
@@ -69,6 +69,7 @@ Settings → Accounts (`AccountsSettingsTile`); removal deletes the account's co
 ```bash
 swift build                        # HeadroomCore + Headroom
 swift test                         # unit suite (fast, all mocked — no CLI/network/Keychain)
+xcodebuild -project Headroom.xcodeproj -scheme HeadroomAppTests -destination 'platform=macOS' test
 swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windows
 ./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
 ```
@@ -128,8 +129,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
 - **ANSI stripping uses ICU escapes (`\x1B`), not Swift's `\u{1B}`** — the latter silently
   fails inside `.regularExpression`.
 - Each Claude poll spawns a full `claude` session (~20–30s). Fine at the 5-min default; don't
-  poll aggressively. **Every configured Claude account spawns its own session per poll**
-  (concurrently) — another reason the account cap and the 2-min interval floor exist.
+  poll aggressively. Configured Claude accounts are probed **serially in one Claude lane** while
+  Codex/network work can overlap; the account cap and enforced 2-min interval floor bound cost.
 - **Per-account isolation is env-var based and verified**: a fresh `CLAUDE_CONFIG_DIR`
   reports "Not logged in · Please run /login" and a fresh `CODEX_HOME` reports "Not
   logged in" — the CLIs never fall back to the default login. Don't "simplify" account

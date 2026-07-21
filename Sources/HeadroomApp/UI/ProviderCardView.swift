@@ -73,45 +73,153 @@ struct ProviderCardView: View {
         // and springs its height change rather than hard-cutting — the arrival of a poll
         // cycle, felt not flashed. Snaps instead under Reduce Motion.
         .animation(reduceMotion ? nil : HeadroomMotion.valueSpring, value: snapshot.freshness)
-        .onAppear { evaluateConnectedPayoff() }
+        .onAppear {
+            evaluateConnectedPayoff()
+            SetupSessions.announceFailureIfNeeded(for: primaryAccount)
+        }
         .onChange(of: snapshot.freshness) { evaluateConnectedPayoff() }
+        .onChange(of: SetupSessions.state(for: primaryAccount)) {
+            SetupSessions.announceFailureIfNeeded(for: primaryAccount)
+        }
     }
 
     // MARK: - Single account (unchanged pre-multi-account layout)
 
     @ViewBuilder private var singleAccountBody: some View {
-        if isClaudeTrustSetup {
-            if ClaudeSetupSession.openedSetupAt(for: primaryAccount.id) != nil {
+        if let outcome = claudeGuidedSetupOutcome {
+            if SetupSessions.isWaiting(for: primaryAccount) {
                 ClaudeWaitingCard(
+                    outcome: outcome,
                     onCheckNow: onRetrySetup,
-                    onReopen: { ClaudeSetupSession.openSetup(for: primaryAccount, onRetry: onRetrySetup) }
+                    onReopen: {
+                        performRecovery(
+                            outcome.recoveryPresentation.primaryAction,
+                            for: primaryAccount,
+                            onRetry: onRetrySetup
+                        )
+                    }
                 )
             } else {
-                ClaudeConnectCard(
-                    onOpenSetup: { ClaudeSetupSession.openSetup(for: primaryAccount, onRetry: onRetrySetup) }
-                )
+                VStack(alignment: .leading, spacing: 10) {
+                    setupFailureNotice(for: primaryAccount, onCheckNow: onRetrySetup)
+                    ClaudeConnectCard(
+                        outcome: outcome,
+                        onOpenSetup: {
+                            performRecovery(
+                                outcome.recoveryPresentation.primaryAction,
+                                for: primaryAccount,
+                                onRetry: onRetrySetup
+                            )
+                        }
+                    )
+                }
             }
         } else if let action = snapshot.codexConnectionAction {
+            let presentation = providerSetupOutcome?.recoveryPresentation
             VStack(alignment: .leading, spacing: 13) {
-                if CodexSetupSession.openedSetupAt(for: primaryAccount.id) != nil {
+                if SetupSessions.isWaiting(for: primaryAccount) {
                     CodexWaitingCard(
+                        mode: SetupSessions.mode(for: primaryAccount),
                         onCheckNow: onRetrySetup,
-                        onReopen: { CodexSetupSession.openSetup(for: primaryAccount, onRetry: onRetrySetup) }
+                        onReopen: { SetupSessions.continueSetup(for: primaryAccount) }
+                    )
+                } else if action == .showPrivacyGuidance {
+                    CodexAccessRecoveryCard(
+                        kind: .permission,
+                        onPrimaryAction: {
+                            performRecovery(
+                                presentation?.primaryAction ?? .showPrivacyGuidance,
+                                for: primaryAccount,
+                                onRetry: onRetrySetup
+                            )
+                        },
+                        onCheckNow: onRetrySetup
+                    )
+                } else if action == .resolveStorage {
+                    CodexAccessRecoveryCard(
+                        kind: .storage,
+                        onPrimaryAction: {
+                            performRecovery(
+                                presentation?.primaryAction ?? .resolveCodexStorage,
+                                for: primaryAccount,
+                                onRetry: onRetrySetup
+                            )
+                        },
+                        onCheckNow: onRetrySetup
                     )
                 } else {
+                    setupFailureNotice(for: primaryAccount, onCheckNow: onRetrySetup)
                     CodexConnectCard(
                         action: action,
-                        onOpenSetup: { CodexSetupSession.openSetup(for: primaryAccount, onRetry: onRetrySetup) }
+                        presentation: presentation,
+                        onOpenSetup: {
+                            performRecovery(
+                                presentation?.primaryAction
+                                    ?? (action == .reconnect ? .reconnectCodex : .connectCodex),
+                                for: primaryAccount,
+                                onRetry: onRetrySetup
+                            )
+                        },
+                        onSecondaryAction: presentation?.secondaryAction.map { secondaryAction in
+                            {
+                                performRecovery(
+                                    secondaryAction,
+                                    for: primaryAccount,
+                                    onRetry: onRetrySetup
+                                )
+                            }
+                        }
                     )
                 }
                 if action == .reconnect, !snapshot.windows.isEmpty {
                     bars(for: snapshot, dimmed: true)
                 }
             }
+        } else if let outcome = providerSetupOutcome {
+            let presentation = outcome.recoveryPresentation
+            ProviderSetupRecoveryCard(
+                providerID: providerID,
+                presentation: presentation,
+                onPrimaryAction: {
+                    performRecovery(
+                        presentation.primaryAction,
+                        for: primaryAccount,
+                        onRetry: onRetrySetup
+                    )
+                },
+                onSecondaryAction: presentation.secondaryAction.map { secondaryAction in
+                    {
+                        performRecovery(
+                            secondaryAction,
+                            for: primaryAccount,
+                            onRetry: onRetrySetup
+                        )
+                    }
+                }
+            )
         } else {
             VStack(alignment: .leading, spacing: 9) {
                 header
                 content
+            }
+        }
+    }
+
+    @ViewBuilder private func setupFailureNotice(
+        for account: ProviderAccount,
+        onCheckNow: @escaping () -> Void
+    ) -> some View {
+        if let message = SetupSessions.failureMessage(for: account) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Setup failed. \(message)")
+                Spacer(minLength: 4)
+                Button("Check now", action: onCheckNow)
+                    .buttonStyle(SetupChipButtonStyle())
             }
         }
     }
@@ -148,39 +256,38 @@ struct ProviderCardView: View {
     private func evaluateConnectedPayoff() {
         guard !isMultiAccount else { return }
         guard case .live = snapshot.freshness else { return }
-        let accountID = primaryAccount.id
-        let setupOpenedAt: Date
-        switch providerID {
-        case .claude:
-            guard let openedAt = ClaudeSetupSession.openedSetupAt(for: accountID) else { return }
-            setupOpenedAt = openedAt
-            ClaudeSetupSession.cancelRetries(for: accountID)
-        case .codex:
-            guard let openedAt = CodexSetupSession.openedSetupAt(for: accountID) else { return }
-            setupOpenedAt = openedAt
-            CodexSetupSession.cancelRetries(for: accountID)
-        default:
-            return
-        }
+        guard SetupSessions.isConnected(primaryAccount) else { return }
         guard !showsConnectedChip else { return }
         withAnimation(reduceMotion ? nil : HeadroomMotion.valueSpring) { showsConnectedChip = true }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
             withAnimation(reduceMotion ? nil : HeadroomMotion.settle) { showsConnectedChip = false }
-            switch providerID {
-            case .claude where ClaudeSetupSession.openedSetupAt(for: accountID) == setupOpenedAt:
-                ClaudeSetupSession.setOpenedSetupAt(nil, for: accountID)
-            case .codex where CodexSetupSession.openedSetupAt(for: accountID) == setupOpenedAt:
-                CodexSetupSession.setOpenedSetupAt(nil, for: accountID)
-            default: break
-            }
+            SetupSessions.settle(for: primaryAccount)
         }
     }
 
-    /// Claude's folder-trust first run — the one failure that gets the guided flow.
-    private var isClaudeTrustSetup: Bool {
-        guard providerID == .claude, case .stale(let reason) = snapshot.freshness else { return false }
-        return reason.isPermanent && reason.message == ClaudeUsageWorkspace.trustRequiredMessage
+    /// Only typed Claude login/trust outcomes enter the guided Terminal handoff.
+    private var claudeGuidedSetupOutcome: ProviderSetupOutcome? {
+        guard providerID == .claude, case .stale(let reason) = snapshot.freshness else { return nil }
+        switch reason.providerSetupOutcome {
+        case .claudeLoginRequired, .claudeTrustRequired:
+            return reason.providerSetupOutcome
+        default:
+            return nil
+        }
+    }
+
+    private var providerSetupOutcome: ProviderSetupOutcome? {
+        guard case .stale(let reason) = snapshot.freshness else { return nil }
+        return reason.providerSetupOutcome
+    }
+
+    private func performRecovery(
+        _ action: SetupRecoveryAction,
+        for account: ProviderAccount,
+        onRetry: @escaping () -> Void
+    ) {
+        SetupSessions.performRecovery(action, for: account, onRetry: onRetry)
     }
 
     /// The per-card "Updated N min ago" was removed here — both providers poll on one
@@ -304,6 +411,37 @@ struct ProviderCardView: View {
     }
 }
 
+/// Compact fallback for typed setup outcomes that do not need the richer first-run
+/// cards. Labels and available actions come directly from the core recovery table.
+private struct ProviderSetupRecoveryCard: View {
+    let providerID: ProviderID
+    let presentation: ProviderRecoveryPresentation
+    let onPrimaryAction: () -> Void
+    let onSecondaryAction: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                ProviderLogoView(providerID: providerID, size: 18)
+                Text(presentation.status)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Setup needed. \(presentation.status)")
+            HStack(spacing: 10) {
+                Button(presentation.primaryLabel, action: onPrimaryAction)
+                    .buttonStyle(.borderedProminent)
+                if let secondaryLabel = presentation.secondaryLabel,
+                   let onSecondaryAction {
+                    Button(secondaryLabel, action: onSecondaryAction)
+                        .buttonStyle(SetupChipButtonStyle())
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Account section (multi-account rows)
 
 /// One account's section inside a multi-account provider card: a quiet identity row
@@ -330,7 +468,13 @@ private struct AccountSectionView: View {
         }
         .animation(reduceMotion ? nil : HeadroomMotion.valueSpring, value: snapshot.freshness)
         .onChange(of: snapshot.freshness) { settleSetupIfLive() }
-        .onAppear { settleSetupIfLive() }
+        .onAppear {
+            settleSetupIfLive()
+            SetupSessions.announceFailureIfNeeded(for: account)
+        }
+        .onChange(of: SetupSessions.state(for: account)) {
+            SetupSessions.announceFailureIfNeeded(for: account)
+        }
     }
 
     /// Label + plan pill. The label is the account's identity — 13pt semibold in
@@ -399,12 +543,28 @@ private struct AccountSectionView: View {
     /// While the handoff Terminal is open it becomes a quiet waiting row with a
     /// real-progress spinner (bound to the retry cycle, not decorative).
     @ViewBuilder private func signInContent(_ reason: FailureReason) -> some View {
+        let recoveryPresentation = reason.providerSetupOutcome?.recoveryPresentation
         VStack(alignment: .leading, spacing: 7) {
-            if isWaitingForSetup {
+            if case .blockedByCodexLogin = SetupSessions.state(for: account) {
+                HStack(spacing: 7) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Another Codex sign-in is open")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 6)
+                    Button("Continue setup") { SetupSessions.continueSetup(for: account) }
+                        .buttonStyle(SetupChipButtonStyle())
+                        .accessibilityLabel("Continue Codex setup for \(account.label)")
+                }
+            } else if isWaitingForSetup {
                 HStack(spacing: 7) {
                     ProgressView()
                         .controlSize(.mini)
-                    Text("Waiting for sign-in…")
+                    Text(SetupSessions.mode(for: account) == .deviceCode
+                         ? "Waiting for device code…"
+                         : "Waiting for sign-in…")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 6)
@@ -418,20 +578,46 @@ private struct AccountSectionView: View {
                     Image(systemName: "person.crop.circle.badge.exclamationmark")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
-                    Text(reason.message)
+                    Text(SetupSessions.failureMessage(for: account) ?? reason.message)
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 6)
                     Button {
-                        SetupSessions.openSetup(for: account, onRetry: onRetry)
+                        if let recoveryPresentation {
+                            SetupSessions.performRecovery(
+                                recoveryPresentation.primaryAction,
+                                for: account,
+                                onRetry: onRetry
+                            )
+                        } else {
+                            SetupSessions.openSetup(for: account, onRetry: onRetry)
+                        }
                     } label: {
-                        Label("Sign in", systemImage: "terminal")
+                        Label(recoveryPresentation?.primaryLabel ?? "Sign in", systemImage: "terminal")
                             .font(.system(size: 11.5, weight: .semibold))
                     }
                     .buttonStyle(SetupChipButtonStyle())
-                    .accessibilityLabel("Sign in to \(account.label)")
+                    .accessibilityLabel("\(recoveryPresentation?.primaryLabel ?? "Sign in") for \(account.label)")
+                }
+                if let secondaryLabel = recoveryPresentation?.secondaryLabel,
+                   let secondaryAction = recoveryPresentation?.secondaryAction {
+                    Button(secondaryLabel) {
+                        SetupSessions.performRecovery(
+                            secondaryAction,
+                            for: account,
+                            onRetry: onRetry
+                        )
+                    }
+                    .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(ClaudeSetupStyle.accentText(dark: scheme == .dark))
+                } else if SetupSessions.failureMessage(for: account) != nil {
+                    Button("Check now", action: onRetry)
+                        .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(ClaudeSetupStyle.accentText(dark: scheme == .dark))
                 }
             }
             if !snapshot.windows.isEmpty {
@@ -455,7 +641,7 @@ private struct AccountSectionView: View {
     /// An account going live ends its handoff session and pending retries so the
     /// waiting row doesn't keep spinning (and retrying) after success.
     private func settleSetupIfLive() {
-        guard case .live = snapshot.freshness, SetupSessions.isWaiting(for: account) else { return }
+        guard case .live = snapshot.freshness, SetupSessions.isConnected(account) else { return }
         SetupSessions.settle(for: account)
     }
 
