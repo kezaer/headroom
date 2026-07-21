@@ -5,6 +5,10 @@ Use this runbook to ship a new public macOS Headroom release at
 signing, Apple notarization, Sparkle appcast generation, the portfolio-hosted download files,
 and live verification. It also includes the installed-app acceptance test for Sparkle updates.
 
+For a coordinated macOS + TestFlight release, start with `release-operations.md`. It defines the
+shared preflight, state vocabulary, UI boundaries, and closeout evidence. This runbook owns only
+the macOS website lane.
+
 The macOS app source is this repository. The public files are hosted by the separate
 `/Users/kylezantos/App Development/Manual Library/kz-portfolio` repository. Its Vercel
 project owns `headroom.zantos.co`; do not deploy the generated `dist/` directory directly as a
@@ -18,6 +22,10 @@ new Vercel project.
 - Working notarization credentials, normally the `headroom-notary` keychain profile.
 - The Sparkle private signing key available in the login Keychain.
 - `xcodegen`, Xcode, `gh`, `pnpm`, and the Vercel CLI installed and authenticated.
+- A VM/dedicated Mac, or a dedicated macOS test user with a user-local `~/Applications` install,
+  with the previous public DMG ready for the installed Sparkle update test. A separate user does
+  not isolate the shared `/Applications` directory. Confirm this before publishing, not after the
+  new appcast is live.
 
 Confirm the signing prerequisites without exposing credentials:
 
@@ -161,24 +169,43 @@ off. Users receive an update prompt and choose when to install it; this is inten
 (`SUEnableAutomaticChecks = YES`, `SUAllowsAutomaticUpdates = NO`). Every public release must
 prove that an already-installed, older public build can take that path.
 
-Use a dedicated macOS test user or VM so this does not replace a working development install:
+Use a VM/dedicated Mac, or install into `~/Applications` in a dedicated macOS test user, so this
+does not replace a working development install. A separate user alone does not isolate the shared
+`/Applications` directory.
 
-1. Download an older **public** versioned DMG from the portfolio `public/` history, install
-   `Headroom.app` in `/Applications`, and launch it once.
-2. Open Headroom Settings, select **Check for Updates…**, accept the Sparkle prompt, and let it
+1. Download an older **public** versioned DMG from the portfolio `public/` history. Verify its
+   Developer ID signature, notarization, version, and build before installing it. A local or
+   Apple Development-signed bundle is not a valid starting point.
+2. Before launching, inspect exact Headroom process paths. Keep only this public installation
+   running; close only verified QA/debug PIDs. Launch Services may list many bundle copies, which
+   are not live instances. The WidgetKit extension is expected and is not a second app.
+3. Set `INSTALLED_APP` to the isolated installed bundle, then launch it once:
+
+   ```bash
+   INSTALLED_APP="$HOME/Applications/Headroom.app" # dedicated user on a shared Mac
+   # INSTALLED_APP="/Applications/Headroom.app"    # VM or dedicated Mac
+   open "$INSTALLED_APP"
+   ```
+
+   Do not overwrite a working development installation. If the user explicitly authorizes the
+   primary-account fallback, back up the existing bundle recoverably and record that this is
+   weaker than an isolated acceptance pass.
+4. Open Headroom Settings, select **Check for Updates…**, accept the Sparkle prompt, and let it
    relaunch. Do not test against a locally built app; it lacks the production feed configuration.
-3. Confirm the installed app's version and build equal the new release, then repeat the normal
+   If the menu-bar UI is not exposed after one fresh accessibility query, stop automation and ask
+   the tester to make this exact click. Do not keyboard-scan the menu bar or try hidden positions.
+5. Confirm the installed app's version and build equal the new release, then repeat the normal
    provider/setup smoke:
 
    ```bash
    /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-     /Applications/Headroom.app/Contents/Info.plist
+     "$INSTALLED_APP/Contents/Info.plist"
    /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
-     /Applications/Headroom.app/Contents/Info.plist
-   /Applications/Headroom.app/Contents/MacOS/Headroom --probe-codex
+     "$INSTALLED_APP/Contents/Info.plist"
+   "$INSTALLED_APP/Contents/MacOS/Headroom" --probe-codex
    ```
 
-4. Exercise the signed provider recovery matrix without recording provider output or identity:
+6. Exercise the signed provider recovery matrix without recording provider output or identity:
    - Claude built-in: preserve an existing trusted workspace across the Sparkle update; in a
      fresh test user, prove login-required and workspace-trust-required remain distinct and
      both recover through the official CLI.
@@ -192,25 +219,28 @@ Use a dedicated macOS test user or VM so this does not replace a working develop
    - Start one Codex login, request another, and confirm the second requires a fresh
      **Continue setup** action only after the first Terminal handoff ends.
 
-5. Exercise the signed additional-account lifecycle: add, rename, refresh, and remove one
+7. Exercise the signed additional-account lifecycle: add, rename, refresh, and remove one
    account while a sibling remains live. Removal must stay visible while work is active, retain
    the row with Retry/Cancel on failure, delete exactly the selected Headroom-owned home on
    success, and leave the built-in and sibling homes unchanged. Confirm the popover scroll cap
    and compact density with three or more accounts.
 
-6. Recheck macOS permission persistence after Sparkle relaunch. Existing Claude workspace trust,
+8. Recheck macOS permission persistence after Sparkle relaunch. Existing Claude workspace trust,
    Codex file access, widget/App Group access, and iCloud snapshot publication must not regress or
    require destructive credential recreation. Record only typed outcomes, permission modes, and
    pass/fail decisions—never emails, tokens, auth contents, callback URLs, or raw provider panels.
 
 Record the starting and ending versions in the release PR. A rejected signature, missing
 enclosure, or no-update result is a release blocker: stop before announcing the download.
+If the dedicated environment was unavailable before publishing, proceed only after the user
+explicitly authorizes that residual. Report the macOS lane as **published; Sparkle acceptance
+pending/waived**, never simply “complete.”
 
-For a manual acceptance pass, drag the app to `/Applications`, launch it, and confirm the
-popover matches the official provider surfaces. Repeat the provider and additional-account
-checks above on the freshly installed public DMG, not a locally built bundle. For the Codex window-classification fix, a
-`prolite` account may correctly show only Weekly plus Spark Weekly. It must never fabricate a
-five-hour row.
+For a manual acceptance pass, launch the same isolated `$INSTALLED_APP` used above and confirm the
+popover matches the official provider surfaces. Repeat the provider and additional-account checks
+on that freshly installed public DMG, not a locally built bundle. For the Codex
+window-classification fix, a `prolite` account may correctly show only Weekly plus Spark Weekly. It
+must never fabricate a five-hour row.
 
 ## Rollback
 

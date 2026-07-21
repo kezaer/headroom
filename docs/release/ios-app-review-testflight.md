@@ -45,6 +45,31 @@ If using API-key authentication, set all three `HEADROOM_ASC_KEY_PATH`,
 into this document or command output. Build 23 is already used; 24 is the paired host/widget
 candidate and the source/archive checks continue to use 23 as the uploaded baseline.
 
+## Efficient App Store Connect path
+
+Preflight App Store Connect access and the physical acceptance device before archiving. Follow one
+path per state transition:
+
+1. Prefer `release-ios-testflight.sh` for archive validation and upload.
+2. If CLI upload reaches an Xcode account-state error, open the same fresh archive in Xcode
+   Organizer and upload it once. Do not alternate repeatedly between export methods or rebuild a
+   candidate that already passed archive validation.
+3. Record **uploaded** only when the upload completes. Processing, export compliance, internal
+   group assignment, TestFlight availability, clean-device acceptance, and App Review submission
+   remain separate states.
+4. Treat Xcode Organizer's **Uploaded** status only as upload evidence. Verify processing and
+   group assignment through an already configured App Store Connect API/CLI or the user's logged-in
+   App Store Connect browser; the TestFlight app can independently confirm device availability.
+   Ask before opening visible logged-in Chrome.
+5. Prefer a tester operating the physical iPhone from the checklist below. Do not configure
+   iPhone Mirroring during the release or use it as a workaround for physical-device access. Use
+   it only when already configured and explicitly chosen by the user.
+6. Never enter or automate a Mac login password, device unlock, passkey, two-factor code, or
+   privacy confirmation. State the exact handoff and wait for the user.
+
+If processing or device acceptance cannot be verified, leave the exact state pending. An uploaded
+build is not yet an available or accepted TestFlight build.
+
 ## Internal TestFlight acceptance
 
 Keep the currently accepted build available while validating the candidate.
