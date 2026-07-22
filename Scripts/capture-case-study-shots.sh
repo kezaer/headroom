@@ -97,7 +97,10 @@ cat <<EOF
 Next (portfolio repo):
   cwebp -q 90 "$OUT/ios-usage.png"    -o public/images/projects/case-study/headroom/ios-usage.webp
   cwebp -q 90 "$OUT/ios-settings.png" -o public/images/projects/case-study/headroom/ios-settings.webp
-  rm -rf .next/cache/images   # overwriting in place otherwise serves stale optimized bytes
+  # Overwriting in place keeps the URL, so the optimizer serves stale cached bytes.
+  # Under Next 16 + Turbopack the dev cache is .next/dev/cache/images — NOT
+  # .next/cache/images, which is a silent no-op. Stop `pnpm dev` first, then:
+  rm -rf .next/dev/cache/images
   pnpm check-case-study-assets
 ────────────────────────────────────────────────────────────────────────────
 EOF
