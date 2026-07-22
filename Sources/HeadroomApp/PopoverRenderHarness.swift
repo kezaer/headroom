@@ -306,7 +306,14 @@ enum PopoverRenderHarness {
             onOpenSettings: {},
             forceVisible: true,
             forceSolidSurface: true,
-            forcedCardsHeight: 410
+            // Must fit the whole locked scenario: Claude (3 windows) + Codex (2 windows)
+            // + both API Spend rows. At 410 the second spend row clipped under the footer
+            // once Codex's restored 5-hour window pushed the stack down.
+            // Sized to the locked scenario: Claude (3 windows) + Codex (2 windows) + both
+            // API Spend rows. 410 clipped the second spend row once Codex's 5-hour window
+            // was restored, and 444 left it fading under the scroll mask. 482 reproduces
+            // the approved v3 geometry exactly (384x609pt). Retune if the scenario changes.
+            forcedCardsHeight: 482
         )
             .environment(\.colorScheme, .dark)
             .focusEffectDisabled()
