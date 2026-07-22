@@ -76,7 +76,7 @@ import Testing
             configDirectory: "/tmp/config space"
         ))
 
-        #expect(command == "cd '/tmp/work space' && CLAUDE_CONFIG_DIR='/tmp/config space' claude")
+        #expect(command == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && CLAUDE_CONFIG_DIR='/tmp/config space' claude")
         #expect(!command.contains(account.accountID.raw))
     }
 
@@ -155,5 +155,43 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: marker.pendingPath))
         #expect(!FileManager.default.fileExists(atPath: scriptURL.path))
         #expect(try String(contentsOfFile: marker.completedPath, encoding: .utf8) == "complete:0\n")
+    }
+}
+
+@Suite struct ClaudeUsageWorkspaceTests {
+    @Test func provisioningCreatesAnAbsentWorkspaceWithOwnerOnlyPermissions() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-claude-workspace-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let workspace = parent.appendingPathComponent("ClaudeProbe", isDirectory: true)
+
+        #expect(!FileManager.default.fileExists(atPath: workspace.path))
+
+        let provisioned = try ClaudeUsageWorkspace.ensureDirectory(at: workspace)
+        var isDirectory: ObjCBool = false
+        #expect(provisioned == workspace)
+        #expect(FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+        let attributes = try FileManager.default.attributesOfItem(atPath: workspace.path)
+        let permissions = try #require(attributes[.posixPermissions] as? NSNumber)
+        #expect(permissions.intValue & 0o777 == 0o700)
+    }
+
+    @Test func provisioningDoesNotRechmodAnExistingUsableWorkspace() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-existing-workspace-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let workspace = parent.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: workspace,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o755]
+        )
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: workspace.path)
+
+        #expect(try ClaudeUsageWorkspace.ensureDirectory(at: workspace) == workspace)
+        let attributes = try FileManager.default.attributesOfItem(atPath: workspace.path)
+        let permissions = try #require(attributes[.posixPermissions] as? NSNumber)
+        #expect(permissions.intValue & 0o777 == 0o755)
     }
 }

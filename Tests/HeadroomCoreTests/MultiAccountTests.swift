@@ -356,6 +356,7 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
 
     @Test func removeAccountDropsProviderSnapshotAndRegistryEntry() async {
         let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
         let store = UsageStore(
             providers: [
                 AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
@@ -367,11 +368,14 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
             providerFactory: { account in
                 AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
                                     snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
-            }
+            },
+            continuityCache: continuityCache
         )
         let added = store.addAccount(for: .claude)!
         await store.refreshAll()
+        #expect(continuityCache.load()[added.key] != nil)
         #expect(await store.removeAccount(added.key) == .removed)
+        #expect(continuityCache.load()[added.key] == nil)
         #expect(store.accounts(for: .claude).count == 1)
         // Snapshot access for the removed key degrades to pending, and a refresh
         // doesn't resurrect it.

@@ -231,17 +231,24 @@ enum SetupSessions {
         SetupSessionActivity.shared.set(nil, for: account.key)
     }
 
-    private static func prepareHandoff(
+    static func prepareHandoff(
         for account: ProviderAccount,
-        mode: SetupHandoffMode
+        mode: SetupHandoffMode,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
+        resolveClaudeExecutable: @escaping @Sendable () -> String? = {
+            ClaudeUsageCLIProbe.resolveClaudePath()
+        }
     ) async -> SetupPreparationResult {
-        let accountCompletionMarker = completionMarker(for: account)
+        let accountCompletionMarker = completionMarker(
+            for: account,
+            builtInClaudeWorkspace: builtInClaudeWorkspace
+        )
         let preparation = await Task.detached(priority: .userInitiated) { () -> Result<PreparedScript, SetupSessionFailure> in
             do {
                 if !account.isBuiltIn {
                     _ = try AccountStorage.ensureDirectories(for: account)
                 }
-                let supportDirectory = ClaudeUsageWorkspace.defaultDirectoryURL
+                let supportDirectory = builtInClaudeWorkspace
                     .deletingLastPathComponent()
                     .appendingPathComponent("Setup", isDirectory: true)
                 try FileManager.default.createDirectory(
@@ -259,12 +266,16 @@ enum SetupSessions {
                 let script: String
                 switch account.providerID {
                 case .claude:
-                    let executable = ClaudeUsageCLIProbe.resolveClaudePath()
+                    let executable = resolveClaudeExecutable()
                     guard executable != nil else { return .failure(.executableMissing) }
-                    let configuration = ProviderAccountConfiguration.make(for: account)
+                    let configuration = ProviderAccountConfiguration.make(
+                        for: account,
+                        builtInClaudeWorkspace: builtInClaudeWorkspace
+                    )
                     guard let workspace = configuration.claudeWorkspaceDirectory else {
                         return .failure(.stagingFailed)
                     }
+                    try ClaudeUsageWorkspace.ensureDirectory(at: workspace)
                     let fallback = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
                     let descriptor = ClaudeSetupDescriptor(
                         accountKey: account.key,
@@ -326,7 +337,7 @@ enum SetupSessions {
         return .success(())
     }
 
-    private static func discardPreparedHandoff(_ handoff: PreparedSetupHandoff) async {
+    static func discardPreparedHandoff(_ handoff: PreparedSetupHandoff) async {
         guard let prepared = preparedScripts.removeValue(forKey: handoff.accountKey) else { return }
         await Task.detached(priority: .utility) {
             AccountStorage.clearPreparedSetupCompletionMarker(prepared.completionMarker)
@@ -334,9 +345,12 @@ enum SetupSessions {
         }.value
     }
 
-    private static func completionMarker(for account: ProviderAccount) -> SetupCompletionMarker {
+    private static func completionMarker(
+        for account: ProviderAccount,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
+    ) -> SetupCompletionMarker {
         if !account.isBuiltIn { return AccountStorage.setupCompletionMarker(for: account) }
-        let directory = ClaudeUsageWorkspace.defaultDirectoryURL
+        let directory = builtInClaudeWorkspace
             .deletingLastPathComponent()
             .appendingPathComponent("Setup", isDirectory: true)
         let stem = ".headroom-\(account.providerID.raw)-setup"
@@ -378,6 +392,7 @@ enum SetupSessions {
         case .claude:
             let configuration = ProviderAccountConfiguration.make(for: account)
             guard let workspace = configuration.claudeWorkspaceDirectory else { return false }
+            _ = try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)
             command = ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
                 accountKey: key,
                 executablePath: ClaudeUsageCLIProbe.resolveClaudePath(),
