@@ -39,11 +39,19 @@ struct IOSCompanionView: View {
                         demoWidgetUnavailable: demoWidgetUnavailable,
                         appearance: $appearance,
                         onEnterDemo: enterDemo,
-                        onExitDemo: exitDemo
+                        onExitDemo: exitDemo,
+                        forcesLargeDetent: opensSettingsForCapture
                     )
                 }
         }
-        .onAppear { Task { await refresh() } }
+        .onAppear {
+            Task {
+                await refresh()
+                // Capture harness only: present Settings once content has settled so the
+                // sheet can be screenshotted headlessly. Always false in Release.
+                if opensSettingsForCapture { showSettings = true }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await refresh() } }
         }
@@ -139,6 +147,16 @@ struct IOSCompanionView: View {
 
     private var canExitDemo: Bool {
         isDemoMode && !DemoScreenshotData.isEnabled
+    }
+
+    /// DEBUG-only: lets the case-study capture script open Settings on launch and shoot it
+    /// headlessly, with no UI automation. Compiled out of Release.
+    private var opensSettingsForCapture: Bool {
+        #if DEBUG
+        CompanionPreviewSeed.previewScreen == .settings
+        #else
+        false
+        #endif
     }
 
     private func refresh() async {

@@ -10,6 +10,9 @@ struct SettingsSheetView: View {
     @Binding var appearance: AppearanceSetting
     let onEnterDemo: () -> Void
     let onExitDemo: () -> Void
+    /// Capture harness only: pins the sheet to `.large` so a screenshot shows the settled,
+    /// opaque sheet instead of the half-height detent over a dimmed Usage screen.
+    var forcesLargeDetent: Bool = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
@@ -93,7 +96,7 @@ struct SettingsSheetView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents(forcesLargeDetent ? [.large] : [.medium, .large])
     }
 
     #if DEBUG
