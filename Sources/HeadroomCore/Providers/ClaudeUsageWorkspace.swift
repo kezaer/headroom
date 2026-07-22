@@ -16,8 +16,30 @@ public enum ClaudeUsageWorkspace {
 
     @discardableResult
     public static func ensureDefaultDirectory() throws -> URL {
-        let url = defaultDirectoryURL
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try ensureDirectory(at: defaultDirectoryURL)
+    }
+
+    /// Provision the exact Headroom-owned workspace a Claude probe or setup handoff
+    /// will enter. Keeping this idempotent invariant beside the path definition avoids
+    /// handing a valid-looking URL to `posix_spawn` or zsh before the directory exists.
+    @discardableResult
+    public static func ensureDirectory(at url: URL) throws -> URL {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            return url
+        }
+        try FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: url.path
+        )
         return url
     }
 }

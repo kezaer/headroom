@@ -51,6 +51,14 @@ enum ClaudeSetupSession {
 
     static var command: String { command() }
 
+    private static func ensureWorkspace(for account: ProviderAccount) throws -> URL {
+        if account.isBuiltIn {
+            return try ClaudeUsageWorkspace.ensureDefaultDirectory()
+        }
+        try AccountStorage.ensureDirectories(for: account)
+        return workspaceURL(for: account)
+    }
+
     /// Tilde-abbreviated command for display; `command` (absolute) is what's copied.
     static func displayCommand(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
         command(for: account).replacingOccurrences(of: NSHomeDirectory(), with: "~")
@@ -59,6 +67,9 @@ enum ClaudeSetupSession {
     static var displayCommand: String { displayCommand() }
 
     static func copyCommand(for account: ProviderAccount = .builtIn(for: .claude)) {
+        // Terminal may have filesystem permission the app lacks, and the manual command
+        // provisions its own workspace. Never leave an older account command on the pasteboard.
+        _ = try? ensureWorkspace(for: account)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command(for: account), forType: .string)
     }
@@ -72,13 +83,7 @@ enum ClaudeSetupSession {
     static func openSetup(for account: ProviderAccount = .builtIn(for: .claude), onRetry: @escaping () -> Void) {
         setOpenedSetupAt(Date(), for: account.id)
         do {
-            let workspace: URL
-            if account.isBuiltIn {
-                workspace = try ClaudeUsageWorkspace.ensureDefaultDirectory()
-            } else {
-                try AccountStorage.ensureDirectories(for: account)
-                workspace = AccountStorage.claudeWorkspaceDirectoryURL(for: account)
-            }
+            let workspace = try ensureWorkspace(for: account)
             // Script filename is per-account: a shared name let a second account's
             // Sign In overwrite the script a still-open Terminal was about to run,
             // landing the login in the wrong config home (code-review finding).

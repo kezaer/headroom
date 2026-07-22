@@ -124,6 +124,337 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .claude).windows.map(\.kind) == [.fiveHour, .weekly])
     }
 
+    @Test func cachedClaudeSubLimitSurvivesPartialFirstRefreshAfterRelaunch() async {
+        let relaunchCapture = Date()
+        let initialCapture = relaunchCapture.addingTimeInterval(-60)
+        let reset = relaunchCapture.addingTimeInterval(3_600)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let firstProcessCache = UsageContinuityCache(defaults: defaults)
+        firstProcessCache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 5, resetsAt: reset),
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: reset),
+                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 39, resetsAt: reset),
+            ], at: initialCapture),
+            for: key
+        )
+
+        let provider = StubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 6, resetsAt: reset),
+                UsageWindow(kind: .weekly, utilization: 26, resetsAt: reset),
+            ], at: relaunchCapture)
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            continuityCache: UsageContinuityCache(defaults: defaults),
+            now: { relaunchCapture }
+        )
+
+        #expect(store.snapshot(for: key).windows.map(\.kind) == [
+            .fiveHour,
+            .weekly,
+            .other("Weekly (Fable)"),
+        ])
+        if case .stale = store.snapshot(for: key).freshness {} else {
+            Issue.record("restored launch data should be stale")
+        }
+
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: key).windows.map(\.kind) == [
+            .fiveHour,
+            .weekly,
+            .other("Weekly (Fable)"),
+        ])
+        #expect(store.snapshot(for: key).windows.first?.utilization == 6)
+        #expect(store.snapshot(for: key).freshness == .stale(.transient("Partial Claude usage — will retry")))
+    }
+
+    @Test func cachedClaudeSubLimitWithUnknownResetSurvivesRelaunchAndPartialRefresh() async {
+        let initialCapture = Date(timeIntervalSince1970: 2_000_000)
+        let relaunchCapture = initialCapture.addingTimeInterval(60)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(
+                    kind: .other("Weekly (Fable)"),
+                    utilization: 39,
+                    resetsAt: initialCapture
+                ),
+            ], at: initialCapture),
+            for: key
+        )
+        let provider = StubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [
+                UsageWindow(
+                    kind: .weekly,
+                    utilization: 26,
+                    resetsAt: relaunchCapture.addingTimeInterval(3_600)
+                ),
+            ], at: relaunchCapture)
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { relaunchCapture }
+        )
+
+        #expect(store.snapshot(for: key).windows.map(\.kind) == [.other("Weekly (Fable)")])
+
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: key).windows.map(\.kind) == [
+            .weekly,
+            .other("Weekly (Fable)"),
+        ])
+        #expect(store.snapshot(for: key).freshness == .stale(.transient("Partial Claude usage — will retry")))
+    }
+
+    @Test func cachedUnknownResetExpiresAfterItsFallbackLifetime() {
+        let initialCapture = Date(timeIntervalSince1970: 2_000_000)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(
+                    kind: .other("Weekly (Fable)"),
+                    utilization: 39,
+                    resetsAt: initialCapture
+                ),
+            ], at: initialCapture),
+            for: key
+        )
+
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { initialCapture.addingTimeInterval(8 * 24 * 60 * 60) }
+        )
+
+        #expect(store.snapshot(for: key).freshness == .pending)
+    }
+
+    @Test func genuinelyPastClaudeResetIsNotTreatedAsUnknown() {
+        let restorationDate = Date(timeIntervalSince1970: 2_000_000)
+        let capturedAt = restorationDate.addingTimeInterval(-60)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(
+                    kind: .other("Weekly (Fable)"),
+                    utilization: 92,
+                    resetsAt: capturedAt.addingTimeInterval(-24 * 60 * 60),
+                    resetLabel: "Resets Jan 5 at 9am"
+                ),
+            ], at: capturedAt),
+            for: key
+        )
+
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { restorationDate }
+        )
+
+        #expect(store.snapshot(for: key).freshness == .pending)
+    }
+
+    @Test func codexResetAtCaptureIsNeverTreatedAsClaudeUnknownSentinel() {
+        let capturedAt = Date(timeIntervalSince1970: 2_000_000)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 100, resetsAt: capturedAt),
+            ], at: capturedAt),
+            for: key
+        )
+
+        let store = UsageStore(
+            providers: [StubProvider(id: .codex, displayName: "Codex", snapshot: .pending(for: .codex))],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { capturedAt.addingTimeInterval(60) }
+        )
+
+        #expect(store.snapshot(for: key).freshness == .pending)
+    }
+
+    @Test func repeatedPartialCapturesDoNotRenewUnknownResetFallbackLifetime() async {
+        let initialCapture = Date(timeIntervalSince1970: 2_000_000)
+        let weeklyReset = initialCapture.addingTimeInterval(14 * 24 * 60 * 60)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: weeklyReset),
+                UsageWindow(
+                    kind: .other("Weekly (Fable)"),
+                    utilization: 39,
+                    resetsAt: initialCapture
+                ),
+            ], at: initialCapture),
+            for: key
+        )
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .pending(for: .claude)
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { initialCapture }
+        )
+
+        for day in 1...6 {
+            let capturedAt = initialCapture.addingTimeInterval(Double(day) * 24 * 60 * 60)
+            provider.set(.live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: weeklyReset),
+            ], at: capturedAt))
+            await store.refreshAll()
+            #expect(store.snapshot(for: key).windows.map(\.kind) == [
+                .weekly,
+                .other("Weekly (Fable)"),
+            ])
+            #expect(store.snapshot(for: key).capturedAt == initialCapture)
+        }
+
+        let relaunched = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { initialCapture.addingTimeInterval(7 * 24 * 60 * 60) }
+        )
+
+        #expect(relaunched.snapshot(for: key).windows.map(\.kind) == [.weekly])
+    }
+
+    @Test func permanentFailureClearsPersistedContinuityBeforeRelaunch() async {
+        let capture = Date(timeIntervalSince1970: 2_000_000)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: .distantFuture),
+            ], at: capture),
+            for: key
+        )
+        let signedOut = StubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired))
+        )
+        let store = UsageStore(
+            providers: [signedOut],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { capture }
+        )
+
+        await store.refreshAll()
+
+        #expect(cache.load()[key] == nil)
+        let relaunched = UsageStore(
+            providers: [signedOut],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { capture }
+        )
+        #expect(relaunched.snapshot(for: key).freshness == .pending)
+    }
+
+    @Test func relaunchIgnoresExpiredCachedWindows() {
+        let restorationDate = Date(timeIntervalSince1970: 2_000_000)
+        let capturedAt = restorationDate.addingTimeInterval(-3_600)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(
+                    kind: .other("Weekly (Fable)"),
+                    utilization: 39,
+                    resetsAt: restorationDate.addingTimeInterval(-1)
+                ),
+            ], at: capturedAt),
+            for: key
+        )
+
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { restorationDate }
+        )
+
+        #expect(store.snapshot(for: key).windows.isEmpty)
+        #expect(store.snapshot(for: key).freshness == .pending)
+    }
+
+    @Test func relaunchDropsOnlyExpiredCachedWindows() {
+        let restorationDate = Date(timeIntervalSince1970: 2_000_000)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 5, resetsAt: restorationDate.addingTimeInterval(-1)),
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: restorationDate.addingTimeInterval(1)),
+            ], at: restorationDate.addingTimeInterval(-60)),
+            for: key
+        )
+
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { restorationDate }
+        )
+
+        #expect(store.snapshot(for: key).windows.map(\.kind) == [.weekly])
+    }
+
+    @Test func cachedWindowsNeverCrossAccountBoundaries() {
+        let defaults = freshContinuityDefaults()
+        let otherAccount = AccountKey(providerID: .claude, accountID: AccountID("work"))
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 39, resetsAt: .distantFuture),
+            ]),
+            for: otherAccount
+        )
+
+        let store = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: freshPreferences(),
+            continuityCache: cache
+        )
+
+        #expect(store.snapshot(for: .claude).windows.isEmpty)
+        #expect(store.snapshot(for: .claude).freshness == .pending)
+    }
+
     @Test func startIsIdempotent() async {
         // A second start() (e.g. the popover re-appearing) must not re-fetch or restart
         // the loop — the guard keeps exactly one initial refresh.
@@ -549,6 +880,13 @@ struct UsageStoreTests {
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return Preferences(defaults: defaults)
+    }
+
+    private func freshContinuityDefaults() -> UserDefaults {
+        let suite = "headroom.continuity.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
     }
 
     /// Default-behavior store: stub providers on isolated (all-default) preferences.

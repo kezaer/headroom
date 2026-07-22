@@ -368,6 +368,7 @@ enum AppComposition {
             preferences: preferences,
             accountRegistry: registry,
             providerFactory: { account in provider(for: account, credentials: credentials) },
+            continuityCache: UsageContinuityCache(),
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
         )
@@ -416,8 +417,15 @@ enum AppComposition {
     /// same compliant paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
     /// `CODEX_HOME`) that the user signed into via the official CLI.
     @MainActor
-    static func provider(for account: ProviderAccount, credentials: CredentialStore) -> any UsageProvider {
-        let configuration = ProviderAccountConfiguration.make(for: account)
+    static func provider(
+        for account: ProviderAccount,
+        credentials: CredentialStore,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
+    ) -> any UsageProvider {
+        let configuration = ProviderAccountConfiguration.make(
+            for: account,
+            builtInClaudeWorkspace: builtInClaudeWorkspace
+        )
         switch account.providerID {
         case .codex:
             guard !account.isBuiltIn else {
@@ -427,6 +435,11 @@ enum AppComposition {
             return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
         case .claude:
             guard let workspace = configuration.claudeWorkspaceDirectory else {
+                return UnavailableAccountProvider(account: account)
+            }
+            // Provider configuration describes the path but deliberately has no file-system
+            // side effects. Provision it before the PTY receives it as its working directory.
+            guard (try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)) != nil else {
                 return UnavailableAccountProvider(account: account)
             }
             guard !account.isBuiltIn else {

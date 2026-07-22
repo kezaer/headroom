@@ -6,6 +6,46 @@ import HeadroomCore
 @MainActor
 @Suite(.serialized)
 struct AccountsSettingsInteractionTests {
+    @Test func productionProviderProvisionsBuiltInClaudeWorkspaceBeforePolling() {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-provider-workspace-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let workspace = parent.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        _ = AppComposition.provider(
+            for: account,
+            credentials: CredentialStore(),
+            builtInClaudeWorkspace: workspace
+        )
+
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+    }
+
+    @Test func guidedSetupProvisionsBuiltInClaudeWorkspaceBeforeWritingScript() async {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-setup-workspace-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let workspace = parent.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        let result = await SetupSessions.prepareHandoff(
+            for: .builtIn(for: .claude),
+            mode: .standard,
+            builtInClaudeWorkspace: workspace,
+            resolveClaudeExecutable: { "/usr/bin/true" }
+        )
+
+        guard case .success(let handoff) = result else {
+            Issue.record("Expected setup preparation to succeed from an absent workspace")
+            return
+        }
+        await SetupSessions.discardPreparedHandoff(handoff)
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+    }
+
     @Test func addFlowReachesPreparingWaitingAndLiveForEachProviderWithoutMountedViews() async {
         for providerID in [ProviderID.claude, .codex] {
             let fixture = makeFixture()

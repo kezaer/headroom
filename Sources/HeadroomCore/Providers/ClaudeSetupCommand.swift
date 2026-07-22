@@ -32,7 +32,8 @@ public enum ClaudeSetupCommand {
             "CLAUDE_CONFIG_DIR=\(shellQuoted($0)) "
         } ?? "env -u CLAUDE_CONFIG_DIR "
         let executable = descriptor.executablePath.map(shellQuoted) ?? "claude"
-        return "cd \(shellQuoted(descriptor.workspaceDirectory)) && \(home)\(executable)"
+        let workspace = shellQuoted(descriptor.workspaceDirectory)
+        return "umask 077 && mkdir -p \(workspace) && cd \(workspace) && \(home)\(executable)"
     }
 
     public static func script(for descriptor: ClaudeSetupDescriptor) -> String {
