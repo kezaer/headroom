@@ -4,8 +4,15 @@ import Foundation
 /// DEBUG-only sample content so the companion can be driven in the Simulator without a
 /// Mac syncing over iCloud. Enabled by launching with the `HEADROOM_PREVIEW=1`
 /// environment variable (set in the scheme or via `simctl launch`). Never ships — the
-/// whole file is compiled out of Release. Mirrors the reference screenshot (Claude Max,
-/// Codex Prolite) so the card styling can be reviewed against the approved mock.
+/// whole file is compiled out of Release.
+///
+/// The numbers are the locked demo scenario shared with `DemoFixture` and
+/// `DemoScreenshotData`, so the menu-bar popover, the macOS widgets, and the iPhone all
+/// show the same moment. Unlike `--demo`, this path renders as ordinary *synced* content:
+/// no Demo Mode banner, and Settings reports `Source: Mac snapshot`. That is what the
+/// portfolio case-study phone pair needs — it illustrates the Mac→iPhone mirror, so a
+/// "sample data / no accounts connected" banner would contradict the story it is proving.
+/// See `Scripts/capture-case-study-shots.sh`.
 enum CompanionPreviewSeed {
     enum UITestState: String {
         case waiting
@@ -13,8 +20,18 @@ enum CompanionPreviewSeed {
         case stale
     }
 
+    /// Screen the preview harness should open on launch (`HEADROOM_PREVIEW_SCREEN`).
+    /// Lets the capture script shoot the Settings sheet headlessly, with no UI automation.
+    enum PreviewScreen: String {
+        case settings
+    }
+
     static var isEnabled: Bool {
         ProcessInfo.processInfo.environment["HEADROOM_PREVIEW"] == "1"
+    }
+
+    static var previewScreen: PreviewScreen? {
+        ProcessInfo.processInfo.environment["HEADROOM_PREVIEW_SCREEN"].flatMap(PreviewScreen.init(rawValue:))
     }
 
     static var uiTestState: UITestState? {
@@ -37,19 +54,27 @@ enum CompanionPreviewSeed {
                     freshness: .live,
                     windows: [
                         WidgetWindowSummary(
+                            kind: .weekly,
+                            label: "Weekly",
+                            percentRemaining: 38,
+                            resetsAt: now.addingTimeInterval(3 * 86_400),
+                            resetLabel: "Resets Jul 9",
+                            severity: .low
+                        ),
+                        WidgetWindowSummary(
                             kind: .fiveHour,
                             label: "5h",
-                            percentRemaining: 100,
+                            percentRemaining: 72,
                             resetsAt: now.addingTimeInterval(3 * 3600),
-                            resetLabel: "Resets 3:09am",
+                            resetLabel: "Resets 2:15pm",
                             severity: .healthy
                         ),
                         WidgetWindowSummary(
-                            kind: .weekly,
-                            label: "Weekly",
-                            percentRemaining: 70,
+                            kind: .other("Weekly (Fable)"),
+                            label: "Weekly (Fable)",
+                            percentRemaining: 54,
                             resetsAt: now.addingTimeInterval(3 * 86_400),
-                            resetLabel: "Resets Jul 9 at 10am",
+                            resetLabel: "Resets Jul 9",
                             severity: .healthy
                         )
                     ],
@@ -62,20 +87,20 @@ enum CompanionPreviewSeed {
                     freshness: .live,
                     windows: [
                         WidgetWindowSummary(
-                            kind: .fiveHour,
-                            label: "5h",
-                            percentRemaining: 39,
-                            resetsAt: now.addingTimeInterval(115 * 60),
-                            resetLabel: nil,
-                            severity: .low
-                        ),
-                        WidgetWindowSummary(
                             kind: .weekly,
                             label: "Weekly",
-                            percentRemaining: 44,
-                            resetsAt: now.addingTimeInterval((5 * 86_400) + (21 * 3600)),
-                            resetLabel: nil,
-                            severity: .low
+                            percentRemaining: 64,
+                            resetsAt: now.addingTimeInterval((6 * 86_400) + (4 * 3600)),
+                            resetLabel: "Resets in 6d 4h",
+                            severity: .healthy
+                        ),
+                        WidgetWindowSummary(
+                            kind: .fiveHour,
+                            label: "5h",
+                            percentRemaining: 91,
+                            resetsAt: now.addingTimeInterval((3 * 3600) + (12 * 60)),
+                            resetLabel: "Resets in 3h 12m",
+                            severity: .healthy
                         )
                     ],
                     renewalDate: nil
@@ -85,7 +110,7 @@ enum CompanionPreviewSeed {
                 WidgetAPISpendSummary(
                     id: ProviderID.claude.raw,
                     displayName: "Anthropic API",
-                    amount: 14.82,
+                    amount: 142.67,
                     currency: "usd",
                     periodLabel: "Current month",
                     capturedAt: now.addingTimeInterval(-6 * 60),
@@ -94,7 +119,7 @@ enum CompanionPreviewSeed {
                 WidgetAPISpendSummary(
                     id: ProviderID.codex.raw,
                     displayName: "OpenAI API",
-                    amount: 7.4,
+                    amount: 58.90,
                     currency: "usd",
                     periodLabel: "Current month",
                     capturedAt: now.addingTimeInterval(-9 * 60),
