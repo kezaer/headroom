@@ -193,6 +193,29 @@ struct ClaudeProviderTests {
         #expect(ClaudeUsageCLIProbe.classifyBootText(currentPrompt) == .ready)
     }
 
+    @Test func bootClassifierRecognizes2_1_218Prompt() {
+        // A real ANSI-stripped capture of the CLI 2.1.218 (Jul 2026) boot screen. That
+        // release repaints via cursor positioning, so the stripped text carries carriage
+        // returns but NO line feeds, and it dropped both "? for shortcuts" and the
+        // "… for agents" tagline the classifier used to key on — the regression that made
+        // it fall through to .unknown and never type /usage. The "❯" prompt marker and the
+        // `Try "…"` placeholder must still classify it .ready.
+        let boot218 = " 7  8      [<u [>1u [>4;2m [>0q     [<u [>1u [>4;2m        \r   ▐ ▛███▜ ▌   Claude Code   v2.1.218\r  ▝▜ █████ ▛▘  Fable 5 with high effort · Claude Max\r    ▘▘ ▝▝    ~/App Development/headroom\r  ● high · /effort\r  ────────────────────────────────────────────────────────────────────────────────\r  ❯  Try \"fix lint errors\"\r   ────────────────────────────────────────────────────────────────────────────────\r   ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker  · res…\r   /rc connecting…\r   ⏸ manual mode on        \r   ⚠ 1 MCP server needs authentication  · run /mcp\r  kzmbp in headroom • Fable 5        \r          \r                /rc      "
+
+        #expect(!boot218.contains("\n"))
+        #expect(!boot218.localizedCaseInsensitiveContains("? for shortcuts"))
+        #expect(!boot218.localizedCaseInsensitiveContains("for agents"))
+        #expect(ClaudeUsageCLIProbe.classifyBootText(boot218) == .ready)
+
+        // A menu-shaped screen that names "Claude Code" and shows a "❯" selector but no
+        // input placeholder must still fail closed — banner + prompt alone is not enough.
+        #expect(ClaudeUsageCLIProbe.classifyBootText("""
+        Claude Code v2.1.218
+        A brand new onboarding step we do not recognize
+        ❯ Set up now
+        """) == .unknown)
+    }
+
     @Test func authStatusClassifierIsTypedAndFailsClosed() {
         #expect(ClaudeUsageCLIProbe.classifyAuthStatus(Data(#"{"loggedIn":true}"#.utf8)) == .loggedIn)
         #expect(ClaudeUsageCLIProbe.classifyAuthStatus(Data(#"{"loggedIn":false}"#.utf8)) == .loggedOut)

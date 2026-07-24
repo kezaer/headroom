@@ -306,13 +306,33 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
             return .trustRequired
         }
         if isFirstRunScreen(text) { return .loginRequired }
+        // Pre-2.1.218 CLIs painted a "? for shortcuts" hint on the ready prompt.
         if text.localizedCaseInsensitiveContains("? for shortcuts") { return .ready }
-        let hasCurrentInputPrompt = text
-            .split(whereSeparator: \.isNewline)
-            .contains { $0.trimmingCharacters(in: .whitespaces).hasPrefix("❯") }
+        // CLI 2.1.218 (Jul 2026) redesigned the boot paint: it dropped BOTH the
+        // "? for shortcuts" hint and the "… for agents" tagline that the two branches
+        // below keyed on, so this classifier fell through to .unknown and the app never
+        // typed /usage. The new banner reads "Claude Code v2.1.218 / <model> · Claude
+        // Max" with a `❯ Try "…"` input hint. Two positive markers still separate a
+        // normal interactive REPL from a menu (login/trust/onboarding): the "❯" prompt
+        // marker AND the empty-input `Try "…"` placeholder — a selection menu puts a real
+        // choice after "❯" and never paints that placeholder. Requiring the placeholder
+        // (not just the banner) keeps this a positive allowlist: login/onboarding screens
+        // also contain "Claude Code", so banner + prompt alone would be too permissive.
+        //
+        // WHY containment, not a line-prefix split: 2.1.218 repaints via cursor
+        // positioning, so the ANSI-stripped capture can arrive with carriage returns but
+        // no line feeds — a split()+hasPrefix("❯") check is unreliable across that layout.
+        let hasPromptMarker = text.contains("❯")
+        if text.localizedCaseInsensitiveContains("Claude Code"),
+           hasPromptMarker,
+           text.localizedCaseInsensitiveContains("Try \"") {
+            return .ready
+        }
+        // Legacy fallback: pre-2.1.218 prompt whose status line carried the "for agents"
+        // tagline but no visible "Try …" placeholder (e.g. after the user typed).
         if text.localizedCaseInsensitiveContains("Claude Code"),
            text.localizedCaseInsensitiveContains("for agents"),
-           hasCurrentInputPrompt {
+           hasPromptMarker {
             return .ready
         }
         return .unknown
