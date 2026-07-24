@@ -17,9 +17,11 @@ struct ProviderAccountEntry: Identifiable {
 ///
 /// Multi-account (Jul 2026): the card takes one `ProviderAccountEntry` per configured
 /// account. A single account renders exactly the pre-multi-account layout (no labels,
-/// no dividers — nothing changed for the common case). Two or more accounts stack
-/// labeled sections inside the one provider card, divided by inset hairlines; at three
-/// or more the meters step down to the compact recipe so five accounts stay glanceable.
+/// no bands — nothing changed for the common case). Two or more accounts stack labeled
+/// sections inside the one provider card. H3a (Jul 2026 multi-account design review)
+/// replaced the uppercase eyebrow + hairline dividers with a full-bleed band header per
+/// account and dropped the compact meter recipe — every section renders at the regular
+/// scale, with the 640pt popover scroll cap absorbing taller five-account stacks.
 /// The guided full-size Connect/Waiting cards stay reserved for the single-account
 /// first run — extra accounts get a compact inline sign-in row instead, since the
 /// user explicitly created them from Settings and just needs the Terminal handoff.
@@ -34,11 +36,6 @@ struct ProviderCardView: View {
     let entries: [ProviderAccountEntry]
     let percentageMode: UsagePercentageMode
     let now: Date
-    /// Popover-wide density, decided by the caller across ALL provider cards — never
-    /// per-card. Siblings must share one meter scale (PRODUCT.md #1: comparison stays
-    /// fair); a per-card threshold made a 3-account Claude compact next to a
-    /// regular-size 2-account Codex (impeccable audit P1).
-    var compactDensity: Bool = false
     let onRetrySetup: () -> Void
     /// Retry scoped to one account — the multi-account rows use this so watching one
     /// sign-in doesn't re-probe the whole fleet. Defaults to the whole-card retry.
@@ -49,7 +46,6 @@ struct ProviderCardView: View {
     @State private var showsConnectedChip = false
 
     private var isMultiAccount: Bool { entries.count > 1 }
-    private var isCompact: Bool { compactDensity }
     private var primaryEntry: ProviderAccountEntry? { entries.first }
     private var snapshot: UsageSnapshot { primaryEntry?.snapshot ?? .pending(for: providerID) }
     private var primaryAccount: ProviderAccount {
@@ -227,20 +223,17 @@ struct ProviderCardView: View {
     // MARK: - Multi-account
 
     private var multiAccountBody: some View {
+        // H3a: sections stack at 12pt with no hairline dividers — each account is fenced by
+        // its own full-bleed band header instead, so the separator became redundant.
         VStack(alignment: .leading, spacing: 10) {
             header
-            VStack(alignment: .leading, spacing: isCompact ? 9 : 11) {
+            VStack(alignment: .leading, spacing: 12) {
                 ForEach(entries) { entry in
-                    if entry.id != entries.first?.id {
-                        Rectangle()
-                            .fill(ClaudeSetupStyle.hairline(dark: scheme == .dark))
-                            .frame(height: 1)
-                    }
                     AccountSectionView(
                         entry: entry,
                         percentageMode: percentageMode,
                         now: now,
-                        compact: isCompact,
+                        isMenuBarAccount: entry.id == entries.first?.id,
                         onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
                     )
                 }
@@ -353,12 +346,12 @@ struct ProviderCardView: View {
     }
 
     private func bars(for snapshot: UsageSnapshot, dimmed: Bool) -> some View {
+        // Single-account keeps the "Low" chip (chiplessCriticalInk defaults off).
         UsageBarsStack(
             windows: snapshot.windows,
             percentageMode: percentageMode,
             now: now,
-            dimmed: dimmed,
-            compact: isCompact
+            dimmed: dimmed
         )
     }
 
@@ -367,8 +360,8 @@ struct ProviderCardView: View {
     /// the ~20–30s first Claude poll so the delay feels intentional, not hung.
     private var pendingSkeleton: some View {
         VStack(alignment: .leading, spacing: 9) {
-            SkeletonMeter(labelWidth: 72, valueWidth: 42, compact: false)
-            SkeletonMeter(labelWidth: 86, valueWidth: 36, compact: false)
+            SkeletonMeter(labelWidth: 72, valueWidth: 42)
+            SkeletonMeter(labelWidth: 86, valueWidth: 36)
             Text("Fetching usage…")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
@@ -444,28 +437,39 @@ private struct ProviderSetupRecoveryCard: View {
 
 // MARK: - Account section (multi-account rows)
 
-/// One account's section inside a multi-account provider card: a quiet identity row
-/// (label + plan) above the account's meters, with per-account failure affordances.
-/// Kept intentionally smaller than the card header — accounts are siblings *within*
-/// a provider, one hierarchy step below the brand row.
+/// One account's section inside a multi-account provider card (H3a, Jul 2026 multi-account
+/// design review): a full-bleed band header (account name + plan pill + optional menu-bar
+/// mark) fencing the account's meters, with per-account failure affordances below. The band
+/// replaced the earlier uppercase eyebrow + hairline divider — a filled strip reads as a
+/// stronger group boundary while still sitting one hierarchy step below the brand row.
 private struct AccountSectionView: View {
     let entry: ProviderAccountEntry
     let percentageMode: UsagePercentageMode
     let now: Date
-    let compact: Bool
+    /// H3a: the built-in `.primary` account (`entries.first`) is the one the menu bar and
+    /// widgets follow; its band carries a "menubar.rectangle" mark so the popover explains
+    /// which login drives the always-visible glyph.
+    let isMenuBarAccount: Bool
     let onRetry: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
 
     private var snapshot: UsageSnapshot { entry.snapshot }
     private var account: ProviderAccount { entry.account }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 6 : 7) {
-            identityRow
+        // H3a: 8pt binds the band to the meters it fences; the 12pt inter-section spacing in
+        // `multiAccountBody` (no hairline) does the separating. The whole section is one
+        // VoiceOver container so the rotor can jump account-to-account instead of the meters
+        // floating free of their identity row.
+        VStack(alignment: .leading, spacing: 8) {
+            bandHeader
             stateContent
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(account.label) account")
         .animation(reduceMotion ? nil : HeadroomMotion.valueSpring, value: snapshot.freshness)
         .onChange(of: snapshot.freshness) { settleSetupIfLive() }
         .onAppear {
@@ -477,36 +481,64 @@ private struct AccountSectionView: View {
         }
     }
 
-    /// Label + plan pill. The label is the account's identity — 13pt semibold in
-    /// secondary ink, one weight step above the 13pt-medium window labels it parents
-    /// (impeccable audit P2: a group header must not read smaller than its rows).
-    private var identityRow: some View {
+    /// Reduce Transparency / Increase Contrast swaps the translucent band for a solid fill,
+    /// same guard RaisedTile uses — the faint white/black wash vanishes at high contrast.
+    private var highLegibility: Bool {
+        reduceTransparency || NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+    }
+
+    /// Band fill: a plain Color, never a Material — glass-on-glass is banned on the popover
+    /// (UI-07). The solid `controlBackgroundColor` branch survives high-contrast modes.
+    private var bandFill: Color {
+        if highLegibility { return Color(nsColor: .controlBackgroundColor) }
+        return scheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.05)
+    }
+
+    /// Full-bleed band header (H3a). The row content is inset 13pt and the band is then
+    /// pulled 13pt outward, so the fill reaches the card's padded edges while the account
+    /// name stays x-aligned with the meter labels below it (a hard alignment requirement).
+    /// Square edges, no corner radius — a plain rectangular strip.
+    private var bandHeader: some View {
         HStack(spacing: 6) {
+            // Account name one weight above the 13pt-medium meter labels, so the band reads
+            // as a header by weight (not the old case/tracking eyebrow trick).
             Text(account.label)
-                .font(.system(size: 13, weight: .semibold))
-                .kerning(-0.1)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .truncationMode(.tail)
             if let plan = snapshot.planLabel, !plan.isEmpty {
                 Text(plan.capitalized)
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(ClaudeSetupStyle.stepBackground(dark: scheme == .dark), in: Capsule())
+            }
+            if isMenuBarAccount {
+                Image(systemName: "menubar.rectangle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Shown in the menu bar")
             }
             Spacer(minLength: 6)
             if case .stale(let reason) = snapshot.freshness, !reason.isPermanent {
                 staleTag
             }
         }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 5)
+        .background(bandFill)
+        .padding(.horizontal, -13)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityIdentity)
     }
 
     private var accessibilityIdentity: String {
+        // Explicit label replaces the band's combined child labels, so re-state the
+        // menu-bar mark here (H3a) — otherwise its "Shown in the menu bar" is dropped.
         var parts = ["\(account.label) account"]
         if let plan = snapshot.planLabel, !plan.isEmpty { parts.append("\(plan) plan") }
+        if isMenuBarAccount { parts.append("Shown in the menu bar") }
         return parts.joined(separator: ", ")
     }
 
@@ -529,12 +561,14 @@ private struct AccountSectionView: View {
     }
 
     private func bars(dimmed: Bool) -> some View {
+        // H3a: multi-account meters go chipless — critical windows paint the numeral instead
+        // of stacking a "Low" chip under the band that already fences the account.
         UsageBarsStack(
             windows: snapshot.windows,
             percentageMode: percentageMode,
             now: now,
             dimmed: dimmed,
-            compact: compact
+            chiplessCriticalInk: true
         )
     }
 
@@ -646,33 +680,36 @@ private struct AccountSectionView: View {
     }
 
     private var accountSkeleton: some View {
-        SkeletonMeter(labelWidth: 72, valueWidth: 38, compact: compact)
+        SkeletonMeter(labelWidth: 72, valueWidth: 38)
     }
 }
 
 // MARK: - Shared meter building blocks
 
-/// One meter stack for every card body — single-account, multi-account, dimmed,
-/// compact. A single definition so the two render paths can never drift apart.
+/// One meter stack for every card body — single-account, multi-account, dimmed.
+/// A single definition so the two render paths can never drift apart. (H3a retired the
+/// compact recipe: multi-account sections now render at the regular scale.)
 struct UsageBarsStack: View {
     let windows: [UsageWindow]
     let percentageMode: UsagePercentageMode
     let now: Date
     let dimmed: Bool
-    let compact: Bool
+    /// H3a: multi-account sections opt into chipless critical numerals; single-account keeps
+    /// the "Low" chip. Threaded down to every row so a stack renders one way.
+    var chiplessCriticalInk: Bool = false
 
     var body: some View {
         if windows.isEmpty {
             Text("No usage data").font(.caption).foregroundStyle(.secondary)
         } else {
-            VStack(spacing: compact ? 7 : 9) {
+            VStack(spacing: 9) {
                 ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
                     UsageBarView(
                         window: window,
                         percentageMode: percentageMode,
                         now: now,
                         dimmed: dimmed,
-                        compact: compact
+                        chiplessCriticalInk: chiplessCriticalInk
                     )
                 }
             }
@@ -685,18 +722,17 @@ struct UsageBarsStack: View {
 struct SkeletonMeter: View {
     let labelWidth: CGFloat
     let valueWidth: CGFloat
-    let compact: Bool
 
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: labelWidth, height: compact ? 11 : 13)
+                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: labelWidth, height: 13)
                 Spacer(minLength: 6)
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: valueWidth, height: compact ? 11 : 13)
+                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: valueWidth, height: 13)
             }
-            Capsule().fill(ProviderStyle.barTrack(scheme: scheme)).frame(height: compact ? 6 : 8)
+            Capsule().fill(ProviderStyle.barTrack(scheme: scheme)).frame(height: 8)
         }
     }
 }

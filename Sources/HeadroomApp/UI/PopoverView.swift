@@ -67,7 +67,6 @@ struct PopoverView: View {
                                 },
                                 percentageMode: store.usagePercentageMode,
                                 now: context.date,
-                                compactDensity: usesCompactDensity,
                                 onRetrySetup: { store.refreshNow() },
                                 onRetryAccount: { store.refreshAccountNow($0.key) }
                             )
@@ -126,13 +125,6 @@ struct PopoverView: View {
                 PopoverEntranceAnimation.hasAnimatedThisSession = true
             }
         }
-    }
-
-    /// One density for the whole popover: compact as soon as ANY provider stacks 3+
-    /// accounts. Sibling cards must share a meter scale — different sizes read as
-    /// different importance (impeccable audit P1, PRODUCT.md #1).
-    private var usesCompactDensity: Bool {
-        store.providerOrder.contains { store.accounts(for: $0).count >= 3 }
     }
 
     /// Native pattern: navigating out of the transient menu-bar popover into the persistent

@@ -84,9 +84,9 @@ enum PopoverRenderHarness {
         case dualWaiting
     }
 
-    /// Multi-account layouts under review: two accounts (regular density), three
-    /// (compact threshold), five (max cap + popover scroll), and a mixed-health stack
-    /// (one live, one waiting on sign-in, one transiently stale).
+    /// Multi-account layouts under review (H3a band design): two accounts, three, five
+    /// (max cap + popover scroll — all render at the regular meter scale now), and a
+    /// mixed-health stack (one live, one waiting on sign-in, one transiently stale).
     enum MultiAccountScenario: String, CaseIterable {
         case multiTwo = "multi-2"
         case multiThree = "multi-3"

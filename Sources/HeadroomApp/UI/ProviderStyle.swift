@@ -58,6 +58,12 @@ enum ProviderStyle {
         Color(HeadroomSeverityColorValues.color(for: severity, dark: scheme == .dark))
     }
 
+    /// Critical-as-text ink (H3a), decoupled from the bar fill so the chipless multi-account
+    /// numeral clears WCAG AA at 18pt semibold. See `HeadroomSeverityColorValues.criticalText`.
+    static func criticalText(scheme: ColorScheme) -> Color {
+        Color(HeadroomSeverityColorValues.criticalText(dark: scheme == .dark))
+    }
+
     static func symbol(for id: ProviderID) -> String {
         switch id {
         case .claude: return "sparkle"
