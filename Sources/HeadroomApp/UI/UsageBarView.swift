@@ -15,20 +15,27 @@ struct UsageBarView: View {
     let percentageMode: UsagePercentageMode
     let now: Date
     var dimmed: Bool = false
-    /// Denser recipe for stacked multi-account cards (3+ accounts): one type step down
-    /// across the row and a 6pt bar, so five accounts stay scannable without scrolling.
-    var compact: Bool = false
+    /// H3a (Jul 2026 multi-account design review): in the multi-account meter the critical
+    /// band drops the "Low" chip and paints the percentage numeral a decoupled critical text
+    /// color instead — the band header already carries per-account identity, so the chip's
+    /// second urgency mark became redundant. Off by default so the single-account path keeps
+    /// the chip exactly as before.
+    var chiplessCriticalInk: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var scheme
 
     // Whole-point steps only, staying on the family ladder (impeccable audit P3).
-    private var labelSize: CGFloat { compact ? 12 : 13 }
+    private var labelSize: CGFloat { 13 }
     private var resetSize: CGFloat { 11 }
-    private var percentSize: CGFloat { compact ? 15 : 18 }
+    private var percentSize: CGFloat { 18 }
     private var termSize: CGFloat { 11 }
-    private var barHeight: CGFloat { compact ? 6 : 8 }
-    private var rowSpacing: CGFloat { compact ? 4 : 5 }
+    private var barHeight: CGFloat { 8 }
+    private var rowSpacing: CGFloat { 5 }
+
+    /// True only when this row should paint its numeral critical instead of chipping it
+    /// (H3a): live (not dimmed) critical, in the chipless multi-account path.
+    private var usesCriticalInk: Bool { chiplessCriticalInk && !dimmed && severity == .critical }
 
     private var pct: Int { percentageMode.roundedPercentage(for: window) }
     private var fraction: Double { percentageMode.fraction(for: window) }
@@ -93,15 +100,16 @@ struct UsageBarView: View {
                         .fixedSize()
                 }
                 Spacer(minLength: 6)
-                if !dimmed, severity == .critical {
+                if !dimmed, severity == .critical, !chiplessCriticalInk {
                     lowChip
                         .transition(.opacity)
                 }
                 Text("\(pct)%")
                     // Semibold, matching the widgets' bold numerals — the glance payload
-                    // leads the row.
+                    // leads the row. H3a: goes critical-ink (chipless multi-account) when the
+                    // "Low" chip is suppressed, so urgency still reads on the numeral itself.
                     .font(.system(size: percentSize, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(usesCriticalInk ? ProviderStyle.criticalText(scheme: scheme) : .primary)
                     .contentTransition(.numericText())
                     .animation(valueAnimation, value: pct)
                 Text(percentageMode.term)

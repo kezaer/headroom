@@ -44,4 +44,41 @@ struct DemoFixtureTests {
         #expect(resetText(DemoFixture.claudeSnapshot, .other("Weekly (Fable)")) == "Resets in 4d")
         #expect(resetText(DemoFixture.codexSnapshot, .weekly) == "Resets in 6d 4h")
     }
+
+    // MARK: - `--demo` scenario parsing (demo mode, Jul 2026)
+
+    @Test func bareDemoRequestsSingleAccountFixtures() {
+        #expect(DemoFixture.scenarioRequest(arguments: ["Headroom", "--demo"]) == .singleAccount)
+        // A following flag is not a scenario token — still a bare demo.
+        #expect(DemoFixture.scenarioRequest(arguments: ["Headroom", "--demo", "--verbose"]) == .singleAccount)
+    }
+
+    @Test func absentDemoFlagIsNotRequested() {
+        #expect(DemoFixture.scenarioRequest(arguments: ["Headroom"]) == .notRequested)
+    }
+
+    @Test func knownScenarioTokensResolve() {
+        for scenario in DemoFixture.MultiAccountScenario.allCases {
+            #expect(
+                DemoFixture.scenarioRequest(arguments: ["Headroom", "--demo", scenario.rawValue])
+                    == .multiAccount(scenario)
+            )
+        }
+    }
+
+    @Test func unknownScenarioTokenIsInvalid() {
+        #expect(DemoFixture.scenarioRequest(arguments: ["Headroom", "--demo", "multi-9"]) == .invalid("multi-9"))
+    }
+
+    @Test func multiFixtureAccountCountsMatchScenario() {
+        #expect(DemoFixture.multiFixture(for: .multiTwo).accounts.count == 3)   // 2 Claude + 1 Codex
+        #expect(DemoFixture.multiFixture(for: .multiThree).accounts.count == 5)
+        #expect(DemoFixture.multiFixture(for: .multiFive).accounts.count == 8)  // 5 Claude + 3 Codex (past the cap for scroll)
+        #expect(DemoFixture.multiFixture(for: .multiMixed).accounts.count == 4)
+        // Provider instances are 1:1 with accounts.
+        for scenario in DemoFixture.MultiAccountScenario.allCases {
+            let fixture = DemoFixture.multiFixture(for: scenario)
+            #expect(fixture.providers.count == fixture.accounts.count)
+        }
+    }
 }

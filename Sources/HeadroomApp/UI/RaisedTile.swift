@@ -65,7 +65,11 @@ struct RaisedTile: ViewModifier {
         case (.glass, true):
             [Color.white.opacity(0.075), Color.white.opacity(0.045)]
         case (.glass, false):
-            [Color.white.opacity(0.92), Color.white.opacity(0.80)]
+            // Near-opaque white (0.92/0.80 → 0.98/0.94, Jul 2026): with the light shell
+            // tinted, the translucent fill let the gray bleed through and the card-vs-shell
+            // step collapsed to ~6% luminance (dark mode's is ~36%). Full-white cards on
+            // the gray shell is the System Settings idiom; shadows + hairline stay as-is.
+            [Color.white.opacity(0.98), Color.white.opacity(0.94)]
         case (.opaque, true):
             [Color.white.opacity(0.08), Color.white.opacity(0.05)]
         case (.opaque, false):

@@ -27,6 +27,14 @@ enum Entry {
             MainActor.assumeIsolated { PopoverRenderHarness.run(outputDirectory: outDir) }
             return
         }
+        // `--demo <scenario>` (demo mode, Jul 2026): reject an unrecognized scenario before the
+        // menu bar launches, mirroring the probe/render diagnostics above — a bare `--demo`
+        // (single-account screenshot fixtures) still launches normally.
+        if case .invalid(let token) = DemoFixture.scenarioRequest() {
+            let valid = DemoFixture.MultiAccountScenario.allCases.map(\.rawValue).joined(separator: ", ")
+            FileHandle.standardError.write(Data("Unknown --demo scenario '\(token)'. Valid scenarios: \(valid)\n".utf8))
+            exit(1)
+        }
         HeadroomApp.main()
     }
 
@@ -359,7 +367,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum AppComposition {
     @MainActor
     static func store(preferences: Preferences = Preferences()) -> UsageStore {
-        if DemoFixture.isEnabled { return demoStore() }
+        if DemoFixture.isEnabled {
+            // `--demo <scenario>` opts into the isolated multi-account preview; a bare `--demo`
+            // keeps the single-account screenshot fixtures the marketing pipeline relies on.
+            if case .multiAccount(let scenario) = DemoFixture.scenarioRequest() {
+                return demoMultiAccountStore(scenario: scenario)
+            }
+            return demoStore()
+        }
         let credentials = CredentialStore()
         let registry = AccountRegistry()
         return UsageStore(
@@ -401,6 +416,65 @@ enum AppComposition {
             preferences: prefs,
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
+        )
+    }
+
+    /// Live multi-account preview (`--demo <scenario>`, demo mode Jul 2026): the real menu
+    /// bar app + popover + Liquid Glass shell, backed entirely by the shared multi-account
+    /// fixtures (`DemoFixture.multiFixture`) so the multi-account UI can be posed without a
+    /// second real login, and the genuine glass popover can be screenshotted over a desktop
+    /// (the render harness forces a solid shell — this mode is the complement).
+    ///
+    /// Isolation is a hard requirement: both the preferences and the account registry live in
+    /// their own per-launch UserDefaults suites (never `.standard`), so nothing here reads or
+    /// mutates the user's real settings or account catalog. The providers are fixtures that
+    /// return their snapshots instantly (Refresh re-serves them at no cost — no CLI, no
+    /// network), and the widget/iCloud exporters are omitted so no App Group or KVS write
+    /// happens. The `providerFactory` returns fixtures too, so even "Add account" in Settings
+    /// never spawns the claude/codex CLIs.
+    @MainActor
+    private static func demoMultiAccountStore(scenario: DemoFixture.MultiAccountScenario) -> UsageStore {
+        let prefsSuite = "co.zantos.headroom.demo.multi.\(UUID().uuidString)"
+        let prefsDefaults = UserDefaults(suiteName: prefsSuite) ?? .standard
+        prefsDefaults.removePersistentDomain(forName: prefsSuite)
+        let prefs = Preferences(defaults: prefsDefaults)
+        prefs.showMenuBarPercentage = true
+        prefs.menuBarFillSource = .both            // show both Claude + Codex pills in the menu bar
+        prefs.setSurfaceEnabled(true, for: .anthropicAPI)   // API spend surfaces are off by default
+        prefs.setSurfaceEnabled(true, for: .openAIAPI)
+        // widgetsEnabled / syncToIPhoneEnabled deliberately left off (with nil exporters
+        // below) so the preview never publishes to the widget App Group or iCloud KVS.
+
+        let fixture = DemoFixture.multiFixture(for: scenario)
+        // A live registry + factory so account management renders enabled (the real app always
+        // has both), seeded with the fixture accounts — but in its OWN suite, never `.standard`,
+        // so seeding can't clobber the user's real account catalog.
+        let registry = UserDefaults(suiteName: "co.zantos.headroom.demo.accounts.\(UUID().uuidString)")
+            .map { AccountRegistry(defaults: $0) }
+        registry?.seed(fixture.accounts)
+        // Split assignment (not `registry.map { … }`): a nested `@MainActor` closure inside
+        // `Optional.map` trips a Swift 6.3 type-checker crash — mirror the harness's pattern.
+        var factory: (@MainActor (ProviderAccount) -> any UsageProvider)?
+        if registry != nil {
+            factory = { account in
+                DemoUsageProvider(
+                    id: account.providerID,
+                    displayName: account.providerID == .claude ? "Claude" : "Codex",
+                    snapshot: .pending(for: account.providerID),
+                    accountID: account.id
+                )
+            }
+        }
+        return UsageStore(
+            providers: fixture.providers,
+            apiSpendProviders: [
+                DemoSpendProvider(id: .claude, displayName: "Anthropic API", snapshot: DemoFixture.anthropicSpend),
+                DemoSpendProvider(id: .codex, displayName: "OpenAI API", snapshot: DemoFixture.openAISpend),
+            ],
+            preferences: prefs,
+            accounts: fixture.accounts,
+            accountRegistry: registry,
+            providerFactory: factory
         )
     }
 

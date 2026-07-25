@@ -158,6 +158,23 @@ public enum HeadroomSeverityColorValues {
         dark ? HeadroomRGBColor(red: 1.00, green: 0.34, blue: 0.29) : HeadroomRGBColor(red: 0.85, green: 0.16, blue: 0.13)
     }
 
+    /// Critical severity rendered as *text*, decoupled from the bar fill (H3a, Jul 2026
+    /// multi-account design review). The chipless multi-account meter paints the percentage
+    /// numeral critical instead of showing the "Low" chip, so the numeral becomes AA-legible
+    /// body text rather than a bar fill — a separate token because the fill red fails at text
+    /// size. WCAG contrast for 18pt-semibold numerals (relative luminance L, ratio
+    /// (L_light+0.05)/(L_dark+0.05)):
+    /// - Dark = (1.00,0.40,0.35), L≈0.315, on the composite dark card #2C2C2E (L≈0.025)
+    ///   → 4.85:1. The raw fill red (1.00,0.34,0.29) lands at only ~4.45:1 there, so it is
+    ///   brightened (green 0.34→0.40, blue 0.29→0.35) until it clears ≥4.5:1.
+    /// - Light = (0.82,0.14,0.11), L≈0.149, on white → 5.28:1 and across the light card fill
+    ///   (L≈0.87 bottom … 0.97 top) ≥4.6:1. The raw fill red (0.85,0.16,0.13) passes on pure
+    ///   white (4.9:1) but dips to ~4.3:1 on the card's darker lower fill, so it is darkened
+    ///   (0.85→0.82 R, 0.16→0.14 G, 0.13→0.11 B) to hold ≥4.5:1 over the whole surface.
+    public static func criticalText(dark: Bool) -> HeadroomRGBColor {
+        dark ? HeadroomRGBColor(red: 1.00, green: 0.40, blue: 0.35) : HeadroomRGBColor(red: 0.82, green: 0.14, blue: 0.11)
+    }
+
     public static func color(for severity: WidgetUsageSeverity, dark: Bool) -> HeadroomRGBColor {
         switch severity {
         case .healthy: healthy(dark: dark)

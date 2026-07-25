@@ -75,22 +75,22 @@ enum VesselGlyph {
         return image
     }
 
+    // Menu bar palette pinned dark (Jul 2026). `VesselGlyph` renders ONLY the menu-bar
+    // status item (the widget uses a separate `VesselMark`), and SwiftUI rasterizes the
+    // resulting `Image(nsImage:)` against the *system* appearance — so a dynamic `NSColor`
+    // bakes to its light value in light mode while a sibling `.labelColor` stays dynamic and
+    // resolves white on the dark menu bar, giving a mixed palette. The Tahoe menu bar always
+    // paints status items on a dark translucent backplate, so both the stroke and the fills
+    // pin to their dark-scheme values regardless of system appearance. See MenuBarLabel.
     private static func strokeColor(for severity: UsageSeverity, isNeutral: Bool) -> NSColor {
         if !isNeutral, severity == .critical { return fillColor(for: severity, isNeutral: false) }
-        return NSColor.labelColor
+        return .white
     }
 
     private static func fillColor(for severity: UsageSeverity, isNeutral: Bool) -> NSColor {
-        guard !isNeutral else { return NSColor.labelColor.withAlphaComponent(0.62) }
-        // Dynamic so the glyph re-resolves with the menu bar's own appearance (which
-        // follows the wallpaper/system) — the vivid dark values are ~1.9:1 on a light menu
-        // bar, so on light backgrounds we draw the darkened, WCAG-tuned light variants from
-        // the shared severity palette (matching the percentage text in MenuBarLabelRenderer).
-        return NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let rgb = HeadroomSeverityColorValues.color(for: severity, dark: dark)
-            return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1.0)
-        }
+        guard !isNeutral else { return NSColor.white.withAlphaComponent(0.62) }
+        let rgb = HeadroomSeverityColorValues.color(for: severity, dark: true)
+        return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1.0)
     }
 
     private struct ImageKey: Hashable {
