@@ -290,6 +290,7 @@ private struct PopoverSurfaceModifier: ViewModifier {
     /// Render-harness only: force the solid shell (ImageRenderer can't rasterize glass).
     var forceSolid: Bool = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -298,7 +299,15 @@ private struct PopoverSurfaceModifier: ViewModifier {
                 .background(Color(nsColor: .windowBackgroundColor), in: shape)
                 .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(in: shape)
+            // Light glass over a dark desktop lenses the wallpaper into the edge band and
+            // muddies the shell (diagnosed Jul 2026, hierarchy log ruled out a second shell);
+            // the tint pins the light shell to a light identity while dark mode keeps pure
+            // glass. Mirrors how system menu-bar dropdowns read as a light surface.
+            if colorScheme == .light {
+                content.glassEffect(.regular.tint(Color.white.opacity(0.55)), in: shape)
+            } else {
+                content.glassEffect(in: shape)
+            }
         } else {
             content
                 .background(.regularMaterial, in: shape)

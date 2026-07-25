@@ -11,17 +11,13 @@ import HeadroomCore
 struct MenuBarLabel: View {
     let meters: [MenuBarMeter]
     let showsPercentage: Bool
-    /// Set only by the Settings *preview* to pin the render to the settings window's own
-    /// appearance. The real status item leaves this nil so its dynamic colors resolve
-    /// against the live menu bar (which follows the wallpaper/system) — but SwiftUI
-    /// rasterizes `Image(nsImage:)` against the *system* appearance, not the enclosing
-    /// window's, so a forced-theme window would otherwise show the wrong-scheme pill.
-    var bakeAppearance: NSAppearance? = nil
 
     var body: some View {
+        // Menu bar palette pinned dark (Jul 2026): the renderer draws every color to its
+        // dark-scheme value regardless of system appearance, so `Image(nsImage:)` needs no
+        // appearance baking — the render is appearance-independent. See MenuBarLabelRenderer.
         let result = MenuBarLabelRenderer.render(meters: meters, showsPercentage: showsPercentage)
-        let image = bakeAppearance.map { MenuBarLabelRenderer.baked(result.image, in: $0) } ?? result.image
-        Image(nsImage: image)
+        Image(nsImage: result.image)
             .accessibilityLabel(result.accessibilityLabel)
             .help(result.tooltip)
     }
@@ -66,7 +62,9 @@ enum MenuBarLabelRenderer {
                 )
                 vessel.draw(in: NSRect(x: x, y: 0, width: vesselWidth, height: height))
                 if item.meter.summary.needsAttention {
-                    NSColor.systemRed.setFill()
+                    // Warning dot pinned to the fixed dark critical red (see menu-bar
+                    // palette note below) for consistency with the pinned text/glyph colors.
+                    severityColor(for: .critical).setFill()
                     NSBezierPath(ovalIn: NSRect(x: x + vesselWidth - 2, y: height - 5, width: 5, height: 5)).fill()
                 }
                 x += vesselWidth
@@ -97,21 +95,6 @@ enum MenuBarLabelRenderer {
         )
     }
 
-    /// Flattens the dynamic-color label into a static bitmap resolved against `appearance`.
-    /// Re-runs the image's drawing handlers with that appearance current, so every dynamic
-    /// NSColor (severity fills, `labelColor` strokes) bakes to its light/dark value — the
-    /// Settings preview then matches its window instead of the system appearance.
-    static func baked(_ image: NSImage, in appearance: NSAppearance) -> NSImage {
-        let baked = NSImage(size: image.size)
-        baked.lockFocus()
-        appearance.performAsCurrentDrawingAppearance {
-            image.draw(in: NSRect(origin: .zero, size: image.size))
-        }
-        baked.unlockFocus()
-        baked.isTemplate = false
-        return baked
-    }
-
     private static func textSize(for text: String) -> NSSize {
         (text as NSString).size(withAttributes: [.font: font])
     }
@@ -140,17 +123,19 @@ enum MenuBarLabelRenderer {
         if !summary.isNeutral, summary.severity != .healthy {
             return severityColor(for: summary.severity)
         }
-        return summary.needsAttention ? severityColor(for: .critical) : .labelColor
+        return summary.needsAttention ? severityColor(for: .critical) : .white
     }
 
+    /// Menu bar palette pinned dark (Jul 2026). SwiftUI rasterizes `Image(nsImage:)` against
+    /// the *system* appearance, so in light mode a dynamic severity `NSColor` bakes to its
+    /// light value (dark-brown amber) while a sibling `.labelColor` stays genuinely dynamic
+    /// and resolves white against the dark Tahoe menu bar — a mixed palette (brown "38%" next
+    /// to white "64%"). The Tahoe menu bar always renders status items on a dark translucent
+    /// backplate over effectively any wallpaper, so we pin every menu-bar color to its
+    /// dark-scheme value — white ink and the dark severity palette — regardless of system
+    /// appearance. This also makes the render appearance-independent (no baking needed).
     private static func severityColor(for severity: UsageSeverity) -> NSColor {
-        // Dynamic so the status-item text re-resolves with the menu bar's own appearance
-        // (which follows the wallpaper/system, not the app), picking the scheme-tuned
-        // value from the shared severity palette.
-        NSColor(name: nil) { appearance in
-            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let rgb = HeadroomSeverityColorValues.color(for: severity, dark: dark)
-            return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1.0)
-        }
+        let rgb = HeadroomSeverityColorValues.color(for: severity, dark: true)
+        return NSColor(srgbRed: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1.0)
     }
 }

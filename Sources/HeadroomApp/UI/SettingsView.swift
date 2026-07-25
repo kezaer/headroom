@@ -214,18 +214,11 @@ struct SettingsView: View {
         }
     }
 
-    /// Pins the preview pill to the settings window's appearance (not the system's) so it
-    /// shows the same light/dark render as the window it sits in — including when the Theme
-    /// toggle forces an appearance that differs from the OS.
-    private var previewAppearance: NSAppearance? {
-        NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
-    }
-
     /// Keys the preview pill's cross-fade to the preference changes that re-render it
-    /// (live data ticks don't need choreography). Includes `colorScheme` so switching theme
-    /// re-bakes the specimen.
+    /// (live data ticks don't need choreography). The specimen's palette is pinned dark to
+    /// match the real menu bar, so it no longer depends on `colorScheme`.
     private var menuBarPreviewKey: String {
-        "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.rawValue)-\(claudeMenuBarWindowSource.rawValue)-\(codexMenuBarWindowSource.rawValue)-\(colorScheme)"
+        "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.rawValue)-\(claudeMenuBarWindowSource.rawValue)-\(codexMenuBarWindowSource.rawValue)"
     }
 
     private var menuBarTile: some View {
@@ -238,15 +231,25 @@ struct SettingsView: View {
                     // Invisible percentage-on twin reserves the slot at its widest
                     // state, so toggling the percentage never reflows the caption or
                     // changes the strip height — the swap happens inside a fixed box.
-                    MenuBarLabel(meters: store.menuBarMeters, showsPercentage: true, bakeAppearance: previewAppearance)
+                    MenuBarLabel(meters: store.menuBarMeters, showsPercentage: true)
                         .hidden()
                     // `.id` swap: the outgoing and incoming pills overlap leading-
                     // aligned and dissolve, instead of the NSImage hard-cutting.
-                    MenuBarLabel(meters: store.menuBarMeters, showsPercentage: store.showMenuBarPercentage, bakeAppearance: previewAppearance)
+                    MenuBarLabel(meters: store.menuBarMeters, showsPercentage: store.showMenuBarPercentage)
                         .id(menuBarPreviewKey)
                         .transition(.opacity)
                 }
                 .animation(reduceMotion ? nil : Self.settleAnimation, value: menuBarPreviewKey)
+                // The label is pinned to its dark palette (white ink + dark severity
+                // colors), representative of the Tahoe menu bar's dark translucent backplate.
+                // A light preview well would render that white ink invisibly, so the specimen
+                // sits on its own dark plate — a faithful preview of what the menu bar shows.
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    Color(white: 0.15),
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
                 Text("Live preview — follows the choices below")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
