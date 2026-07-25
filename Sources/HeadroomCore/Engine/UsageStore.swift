@@ -320,7 +320,10 @@ public final class UsageStore {
 
     /// Preset failure for a just-added account so its row appears instantly instead of
     /// waiting out a full (possibly 20–30s) probe of an account that isn't signed in yet.
-    public static let finishSignInMessage = "Finish sign-in to add this account"
+    // `nonisolated`: an immutable Sendable constant with no isolation needs, so the shared
+    // demo fixtures (`DemoFixture.multiFixture`, demo mode Jul 2026) can reference it off the
+    // main actor without pulling the whole builder onto `@MainActor`.
+    public nonisolated static let finishSignInMessage = "Finish sign-in to add this account"
 
     public func renameAccount(_ key: AccountKey, to label: String) {
         guard let accountRegistry else { return }

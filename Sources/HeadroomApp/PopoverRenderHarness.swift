@@ -84,95 +84,13 @@ enum PopoverRenderHarness {
         case dualWaiting
     }
 
-    /// Multi-account layouts under review (H3a band design): two accounts, three, five
-    /// (max cap + popover scroll — all render at the regular meter scale now), and a
-    /// mixed-health stack (one live, one waiting on sign-in, one transiently stale).
-    enum MultiAccountScenario: String, CaseIterable {
-        case multiTwo = "multi-2"
-        case multiThree = "multi-3"
-        case multiFive = "multi-5"
-        case multiMixed = "multi-mixed"
-    }
+    /// Scenario set + fixture builders now live on `DemoFixture` (demo mode, Jul 2026) so the
+    /// live `--demo <scenario>` launch mode and this offscreen harness share one source of
+    /// truth. These aliases keep the harness call sites (and its byte-identical output) intact.
+    typealias MultiAccountScenario = DemoFixture.MultiAccountScenario
 
-    private struct MultiAccountFixture {
-        let accounts: [ProviderAccount]
-        let providers: [any UsageProvider]
-    }
-
-    /// One deterministic account fixture: label + plan + varied utilizations so the
-    /// severity ramp (healthy/low/critical) and plan pills all appear in review shots.
-    private static func demoAccount(
-        provider providerID: ProviderID,
-        id: String,
-        label: String,
-        plan: String,
-        fiveHour: Double,
-        weekly: Double,
-        freshness: Freshness = .live,
-        builtIn: Bool = false
-    ) -> (account: ProviderAccount, provider: any UsageProvider) {
-        let accountID: AccountID = builtIn ? .primary : AccountID(id)
-        let account = ProviderAccount(id: accountID, providerID: providerID, label: label, isBuiltIn: builtIn)
-        let windows: [UsageWindow]
-        switch freshness {
-        case .stale(let reason) where reason.isPermanent:
-            windows = []
-        default:
-            windows = [
-                UsageWindow(kind: .fiveHour, utilization: fiveHour, resetsAt: Date().addingTimeInterval(3.2 * 3600), resetLabel: "Resets 2:15pm"),
-                UsageWindow(kind: .weekly, utilization: weekly, resetsAt: Date().addingTimeInterval(4 * 86_400), resetLabel: "Resets Jul 20"),
-            ]
-        }
-        let snapshot = UsageSnapshot(
-            providerID: providerID,
-            windows: windows,
-            planLabel: plan,
-            capturedAt: Date().addingTimeInterval(-135),
-            freshness: freshness
-        )
-        let displayName = providerID == .claude ? "Claude" : "Codex"
-        return (account, DemoUsageProvider(id: providerID, displayName: displayName, snapshot: snapshot, accountID: accountID))
-    }
-
-    private static func multiFixture(for scenario: MultiAccountScenario) -> MultiAccountFixture {
-        var pairs: [(account: ProviderAccount, provider: any UsageProvider)] = []
-        switch scenario {
-        case .multiTwo:
-            pairs = [
-                demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
-                demoAccount(provider: .claude, id: "work", label: "Work", plan: "Pro", fiveHour: 71, weekly: 88),
-                demoAccount(provider: .codex, id: "codex-main", label: "Main", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
-            ]
-        case .multiThree:
-            pairs = [
-                demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
-                demoAccount(provider: .claude, id: "work", label: "Work", plan: "Pro", fiveHour: 71, weekly: 88),
-                demoAccount(provider: .claude, id: "studio", label: "Studio", plan: "Max", fiveHour: 12, weekly: 41),
-                demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
-                demoAccount(provider: .codex, id: "codex-work", label: "Work", plan: "Pro", fiveHour: 54, weekly: 79),
-            ]
-        case .multiFive:
-            pairs = [
-                demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
-                demoAccount(provider: .claude, id: "work", label: "Work", plan: "Pro", fiveHour: 71, weekly: 88),
-                demoAccount(provider: .claude, id: "studio", label: "Studio", plan: "Max", fiveHour: 12, weekly: 41),
-                demoAccount(provider: .claude, id: "agency", label: "Agency", plan: "Team", fiveHour: 47, weekly: 55),
-                demoAccount(provider: .claude, id: "lab", label: "Lab", plan: "Pro", fiveHour: 93, weekly: 97),
-                demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
-                demoAccount(provider: .codex, id: "codex-work", label: "Work", plan: "Pro", fiveHour: 54, weekly: 79),
-                demoAccount(provider: .codex, id: "codex-studio", label: "Studio", plan: "Plus", fiveHour: 22, weekly: 48),
-            ]
-        case .multiMixed:
-            pairs = [
-                demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
-                demoAccount(provider: .claude, id: "work", label: "Work", plan: "Pro", fiveHour: 0, weekly: 0,
-                            freshness: .stale(.notLoggedIn(UsageStore.finishSignInMessage))),
-                demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
-                demoAccount(provider: .codex, id: "codex-work", label: "Work", plan: "Pro", fiveHour: 54, weekly: 79,
-                            freshness: .stale(.transient("Couldn't reach Codex — will retry"))),
-            ]
-        }
-        return MultiAccountFixture(accounts: pairs.map(\.account), providers: pairs.map(\.provider))
+    private static func multiFixture(for scenario: MultiAccountScenario) -> DemoFixture.MultiAccountFixture {
+        DemoFixture.multiFixture(for: scenario)
     }
 
     private static func renderMulti(scenario: MultiAccountScenario, dark: Bool, to url: URL) async -> Bool {
