@@ -9,11 +9,19 @@ struct UsageBarView: View {
     @Environment(\.colorScheme) private var scheme
     @State private var appeared = false
 
-    private var percent: Int { Int(window.percentRemaining.rounded()) }
-    private var fraction: Double { min(1, max(0, window.percentRemaining / 100)) }
+    private var percent: Int? {
+        window.displayPercentRemaining.map { Int($0.rounded()) }
+    }
+    private var percentText: String { percent.map { "\($0)%" } ?? "—" }
+    private var fraction: Double {
+        min(1, max(0, (window.displayPercentRemaining ?? 0) / 100))
+    }
     private var animatedFraction: Double { reduceMotion || appeared ? fraction : 0 }
+    private var isEffectivelyDimmed: Bool { dimmed || !window.freshness.isLive }
     private var fillColor: Color {
-        dimmed ? Color.secondary.opacity(0.48) : HeadroomTheme.severityColor(for: window.severity, scheme: scheme)
+        isEffectivelyDimmed
+            ? Color.secondary.opacity(0.48)
+            : HeadroomTheme.severityColor(for: window.severity, scheme: scheme)
     }
 
     var body: some View {
@@ -22,21 +30,33 @@ struct UsageBarView: View {
                 Text(displayLabel)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text(MirrorPresentation.resetText(for: window, now: now))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
-                    .lineLimit(1)
-                    .layoutPriority(-1)
+                if let state = MirrorPresentation.windowStateText(for: window) {
+                    Text(state)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(HeadroomTheme.secondaryText(scheme))
+                }
+                if !window.freshness.isUnavailable {
+                    Text(MirrorPresentation.resetText(for: window, now: now))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
+                        .lineLimit(1)
+                        .layoutPriority(-1)
+                }
                 Spacer(minLength: 8)
-                if MirrorPresentation.showsLowChip(severity: window.severity, dimmed: dimmed) {
+                if MirrorPresentation.showsLowChip(
+                    severity: window.severity,
+                    dimmed: isEffectivelyDimmed
+                ) {
                     lowChip
                 }
-                Text("\(percent)%")
+                Text(percentText)
                     .font(.headline.monospacedDigit())
                     .contentTransition(.numericText())
-                Text("left")
-                    .font(.caption)
-                    .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
+                if percent != nil {
+                    Text("left")
+                        .font(.caption)
+                        .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
+                }
             }
 
             GeometryReader { proxy in
@@ -49,9 +69,9 @@ struct UsageBarView: View {
             }
             .frame(height: 9)
         }
-        .opacity(dimmed ? 0.68 : 1)
+        .opacity(isEffectivelyDimmed ? 0.68 : 1)
         .animation(reduceMotion ? nil : HeadroomTheme.valueSpring, value: fraction)
-        .animation(reduceMotion ? nil : HeadroomTheme.valueSpring, value: dimmed)
+        .animation(reduceMotion ? nil : HeadroomTheme.valueSpring, value: isEffectivelyDimmed)
         .onAppear {
             guard !appeared else { return }
             if reduceMotion {
@@ -64,7 +84,7 @@ struct UsageBarView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(displayLabel) usage")
-        .accessibilityValue("\(percent) percent remaining, \(MirrorPresentation.resetText(for: window, now: now))")
+        .accessibilityValue(accessibilityValue)
     }
 
     private var lowChip: some View {
@@ -90,5 +110,19 @@ struct UsageBarView: View {
     private func fillWidth(in availableWidth: CGFloat) -> CGFloat {
         guard animatedFraction > 0 else { return 0 }
         return max(9, availableWidth * animatedFraction)
+    }
+
+    private var accessibilityValue: String {
+        var parts: [String] = []
+        if let percent {
+            parts.append("\(percent) percent remaining")
+        }
+        if let state = MirrorPresentation.windowStateText(for: window) {
+            parts.append(state)
+        }
+        if !window.freshness.isUnavailable {
+            parts.append(MirrorPresentation.resetText(for: window, now: now))
+        }
+        return parts.joined(separator: ", ")
     }
 }

@@ -15,6 +15,55 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(decoded == .snapshot(envelope))
     }
 
+    @Test func currentSnapshotSchemaRejectsFreshnessBlindClientsButAcceptsLegacyPayloads() throws {
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
+        #expect(SyncedWidgetSnapshotEnvelope.schemaVersion == 1)
+
+        let legacySnapshot = WidgetSnapshotEnvelope(
+            schemaVersion: 1,
+            generatedAt: generatedAt,
+            status: .enabled,
+            providers: liveSnapshot.providers
+        )
+        let envelope = makeSyncedEnvelope(snapshot: legacySnapshot)
+
+        let decoded = SyncedWidgetSnapshotCodec.decode(
+            try SyncedWidgetSnapshotCodec.encode(envelope)
+        )
+
+        #expect(decoded == .snapshot(envelope))
+    }
+
+    @Test func futureSnapshotSchemaIsIncompatible() throws {
+        let futureSnapshot = WidgetSnapshotEnvelope(
+            schemaVersion: WidgetSnapshotEnvelope.schemaVersion + 1,
+            generatedAt: generatedAt,
+            status: .enabled,
+            providers: []
+        )
+        let envelope = makeSyncedEnvelope(snapshot: futureSnapshot)
+
+        #expect(
+            SyncedWidgetSnapshotCodec.decode(try SyncedWidgetSnapshotCodec.encode(envelope))
+                == .incompatibleSchema
+        )
+    }
+
+    @Test func windowEncodingKeepsLegacyIDAndMissingFreshnessDefaultsToLive() throws {
+        let window = liveSnapshot.providers[0].windows[0]
+        let encoded = try JSONEncoder().encode(window)
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        #expect(object["id"] as? String == window.id)
+        object.removeValue(forKey: "freshness")
+
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(WidgetWindowSummary.self, from: legacyData)
+
+        #expect(decoded.id == window.id)
+        #expect(decoded.freshness == .live)
+    }
+
     @Test func liveSnapshotWithAPISpendRoundTrips() throws {
         let envelope = makeSyncedEnvelope(snapshot: liveSnapshotWithAPISpend)
 

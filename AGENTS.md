@@ -31,8 +31,9 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
 
 - `Sources/HeadroomCore` — all testable logic (no SwiftUI):
   - `Models/` — `UsageSnapshot`/`UsageWindow` (with `resetLabel`), `FailureReason`,
-    `Freshness` (`.pending`/`.live`/`.stale`), `UsageProvider` protocol, `Countdown`,
-    `Account` (`AccountID`/`AccountKey`/`ProviderAccount`).
+    snapshot `Freshness` (`.pending`/`.live`/`.stale`), per-window
+    `UsageWindowFreshness` (`.live`/`.stale`/`.unavailable`), `UsageProvider` protocol,
+    `Countdown`, `Account` (`AccountID`/`AccountKey`/`ProviderAccount`).
   - `Providers/` — `ClaudeProvider` (via `ClaudeUsageSource`), `ClaudeUsageCLIProbe`
     (openpty + posix_spawn), `ClaudeUsageParser`, `CodexProvider` (+ `UsageHTTPClient`,
     DTOs), `CodexConnection`, shared login-shell `CLIExecutableResolver`, `RedirectBlocker`,
@@ -118,6 +119,16 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   ("Current session", "Current week (…)", "N% used", "Resets …"), not line positions, and
   fails safe (empty → transient stale). If Claude redesigns the panel, update the parser and
   the fixture in `ClaudeProviderTests.swift`; use `--probe-claude` to see the live panel.
+- **Claude `/usage` captures can be valid but partial.** The current-session and overall-weekly
+  windows may be fresh while a separately rendered or rate-limited model row such as
+  `Weekly (Fable)` is absent. Do not mark the whole snapshot stale, silently stamp a retained
+  row with the new capture time, or keep its numeric value past reset. `UsageContinuityPolicy`
+  owns the per-window lifecycle: retain the row as `.stale` with its original observation time,
+  change it to `.unavailable` (and hide the old percentage) after its validity window, then
+  remove it after the bounded fallback lifetime. Only a fresh source row returns it to `.live`.
+  Preserve this provenance through the continuity cache and widget projection; bump the widget
+  schema for any incompatible freshness semantics. See
+  `docs/solutions/logic-errors/claude-partial-usage-window-freshness.md`.
 - **Codex window kind comes from `limit_window_seconds`, NOT the primary/secondary slot**
   (`#codex-window-kind`, `CodexWindowClassifier`). Slot position is plan-dependent: the
   `prolite` plan returns its *weekly* window in `primary_window` with `secondary_window: null`,
@@ -147,5 +158,7 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
 ## Follow-ups
 
 See `BUGS.md` for deferred items (backoff, Xcode signing for persistent permission grants).
+Durable provider and debugging learnings live in `docs/solutions/`; check them before changing
+provider parsing or continuity behavior.
 Codex field names are now verified against a live `wham/usage` capture — see the
 `#codex-window-kind` gotcha above and `docs/solutions/codex-window-kind-mislabel.md`.

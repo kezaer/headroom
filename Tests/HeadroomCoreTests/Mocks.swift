@@ -100,6 +100,23 @@ final class MutableStubProvider: UsageProvider, @unchecked Sendable {
     func fetchSnapshot() async -> UsageSnapshot { lock.withLock { _snapshot } }
 }
 
+final class MutableDateSource: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ value: Date) {
+        self.value = value
+    }
+
+    func now() -> Date {
+        lock.withLock { value }
+    }
+
+    func set(_ value: Date) {
+        lock.withLock { self.value = value }
+    }
+}
+
 /// Provider double that counts how many times it was fetched.
 final class CountingProvider: UsageProvider, @unchecked Sendable {
     let id: ProviderID

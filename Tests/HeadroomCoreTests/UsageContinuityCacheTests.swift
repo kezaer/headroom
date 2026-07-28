@@ -17,7 +17,8 @@ struct UsageContinuityCacheTests {
                     kind: .other("Weekly (Fable)"),
                     utilization: 39,
                     resetsAt: reset,
-                    resetLabel: "Resets Jul 23 at 9:59am"
+                    resetLabel: "Resets Jul 23 at 9:59am",
+                    freshness: .stale(observedAt: capturedAt)
                 ),
             ], plan: "Max", at: capturedAt),
             for: primary
@@ -35,6 +36,7 @@ struct UsageContinuityCacheTests {
         #expect(restored[primary]?.windows.first?.resetLabel == "Resets Jul 23 at 9:59am")
         #expect(restored[primary]?.planLabel == "Max")
         #expect(restored[primary]?.capturedAt == capturedAt)
+        #expect(restored[primary]?.windows.first?.freshness == .stale(observedAt: capturedAt))
         #expect(restored[work]?.windows.map(\.kind) == [.weekly])
         if case .stale = restored[primary]?.freshness {} else {
             Issue.record("restored continuity data must never claim to be live")

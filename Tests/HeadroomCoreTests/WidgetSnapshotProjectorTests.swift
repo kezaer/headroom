@@ -273,6 +273,61 @@ struct WidgetSnapshotProjectorTests {
         #expect(envelope.providers[0].limitingExtraWeeklyWindow?.roundedPercentRemaining == 38)
     }
 
+    @Test func retainedClaudeSubLimitCarriesLastKnownStateIntoWidgets() {
+        let observedAt = now.addingTimeInterval(-3_600)
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [
+                .claude: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+                    UsageWindow(
+                        kind: .other("Weekly (Fable)"),
+                        utilization: 62,
+                        resetsAt: reset,
+                        freshness: .stale(observedAt: observedAt)
+                    ),
+                ], at: now),
+            ],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        #expect(envelope.providers[0].freshness == .live)
+        #expect(
+            envelope.providers[0].extraWeeklyWindows.first?.freshness
+                == .stale(observedAt: observedAt)
+        )
+    }
+
+    @Test func unavailableClaudeSubLimitDoesNotExposeItsOldPercentageToWidgets() {
+        let unavailableSince = now.addingTimeInterval(-60)
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [
+                .claude: .live(.claude, windows: [
+                    UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+                    UsageWindow(
+                        kind: .other("Weekly (Fable)"),
+                        utilization: 62,
+                        resetsAt: reset,
+                        freshness: .unavailable(since: unavailableSince)
+                    ),
+                ], at: now),
+            ],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        let fable = envelope.providers[0].extraWeeklyWindows.first
+        #expect(fable?.freshness == .unavailable(since: unavailableSince))
+        #expect(fable?.displayPercentRemaining == nil)
+        #expect(envelope.providers[0].limitingExtraWeeklyWindow == nil)
+    }
+
     @Test func matchingWeeklySubLimitDoesNotAddWidgetHeaderStatus() {
         let envelope = WidgetSnapshotProjector.project(
             snapshots: [

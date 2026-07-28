@@ -35,11 +35,6 @@ public enum DemoFixture {
         UsageSnapshot(
             providerID: .codex,
             windows: [
-                // The 5-hour window is part of the locked demo scenario (Codex 91% / 64%)
-                // that the widgets, the iPhone mirror, and the marketing popover all share.
-                // It was dropped in bc3fe052 while tuning large-widget density tiers, which
-                // silently desynced the popover from the widget renders beside it.
-                UsageWindow(kind: .fiveHour, utilization: 9, resetsAt: soon(hours: 3, minutes: 12, seconds: 30), resetLabel: "Resets in 3h 12m"),
                 UsageWindow(kind: .weekly, utilization: 36, resetsAt: soon(days: 6, hours: 4, minutes: 30), resetLabel: "Resets in 6d 4h"),
             ],
             planLabel: "Prolite",

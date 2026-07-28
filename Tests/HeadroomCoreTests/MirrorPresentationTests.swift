@@ -92,6 +92,21 @@ struct MirrorPresentationTests {
         #expect(MirrorPresentation.windows(for: provider).map(\.label) == ["Session", "Weekly (Fable)"])
     }
 
+    @Test func unavailableWindowHidesPercentageAndUsesUnavailableResetCopy() {
+        let unavailable = WidgetWindowSummary(
+            kind: .other("Weekly (Fable)"),
+            label: "Weekly (Fable)",
+            percentRemaining: 54,
+            resetsAt: now,
+            resetLabel: "Resets Jul 9",
+            severity: .healthy,
+            freshness: .unavailable(since: now.addingTimeInterval(-60))
+        )
+
+        #expect(unavailable.displayPercentRemaining == nil)
+        #expect(MirrorPresentation.resetText(for: unavailable, now: now) == "Unavailable")
+    }
+
     private func window(
         resetLabel: String?,
         resetsAt: Date? = nil,

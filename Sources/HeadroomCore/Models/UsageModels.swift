@@ -60,6 +60,32 @@ public enum UsagePercentageMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Per-window provenance for snapshots that mix a fresh provider capture with a
+/// retained model-specific sub-limit. A last-known percentage remains displayable but
+/// must never inherit a newer snapshot timestamp; once its validity window expires it
+/// becomes unavailable and consumers must hide the old percentage.
+public enum UsageWindowFreshness: Sendable, Equatable {
+    case live
+    case stale(observedAt: Date)
+    case unavailable(since: Date)
+
+    public var isLive: Bool {
+        if case .live = self { return true }
+        return false
+    }
+
+    public var isUnavailable: Bool {
+        if case .unavailable = self { return true }
+        return false
+    }
+
+    public var observedAt: Date? {
+        guard case .stale(let observedAt) = self else { return nil }
+        return observedAt
+    }
+
+}
+
 /// One usage window: how much has been consumed and when it resets.
 ///
 /// `resetsAt` is always the server-provided reset time — never a client-side guess
@@ -73,12 +99,20 @@ public struct UsageWindow: Sendable, Equatable {
     /// its compact relative presentation from `resetsAt`. Nil for providers that give
     /// only a machine reset timestamp (Codex).
     public let resetLabel: String?
+    public let freshness: UsageWindowFreshness
 
-    public init(kind: WindowKind, utilization: Double, resetsAt: Date, resetLabel: String? = nil) {
+    public init(
+        kind: WindowKind,
+        utilization: Double,
+        resetsAt: Date,
+        resetLabel: String? = nil,
+        freshness: UsageWindowFreshness = .live
+    ) {
         self.kind = kind
         self.utilization = utilization
         self.resetsAt = resetsAt
         self.resetLabel = resetLabel
+        self.freshness = freshness
     }
 
     /// Percentage of the window still available (R1/R2). Clamped to 0…100 so an
@@ -97,6 +131,16 @@ public struct UsageWindow: Sendable, Equatable {
     /// `percentRemaining` — never animated — so the bar and menu-bar glyph can encode
     /// urgency at a glance without violating the standing "no pulsing indicators" rule.
     public var severity: UsageSeverity { UsageSeverity(percentRemaining: percentRemaining) }
+
+    public func withFreshness(_ freshness: UsageWindowFreshness) -> UsageWindow {
+        UsageWindow(
+            kind: kind,
+            utilization: utilization,
+            resetsAt: resetsAt,
+            resetLabel: resetLabel,
+            freshness: freshness
+        )
+    }
 }
 
 /// How close a window is to running out. Drives the semantic color ramp

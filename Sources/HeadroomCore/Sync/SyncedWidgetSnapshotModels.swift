@@ -54,7 +54,7 @@ public enum SyncedWidgetSnapshotCodec {
         do {
             let envelope = try decoder.decode(SyncedWidgetSnapshotEnvelope.self, from: data)
             guard envelope.schemaVersion == SyncedWidgetSnapshotEnvelope.schemaVersion,
-                  envelope.snapshot.schemaVersion == WidgetSnapshotEnvelope.schemaVersion
+                  WidgetSnapshotEnvelope.supports(schemaVersion: envelope.snapshot.schemaVersion)
             else { return .incompatibleSchema }
             return .snapshot(envelope)
         } catch {

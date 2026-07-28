@@ -33,12 +33,21 @@ struct UsageBarView: View {
     private var barHeight: CGFloat { 8 }
     private var rowSpacing: CGFloat { 5 }
 
+    private var isEffectivelyDimmed: Bool { dimmed || !window.freshness.isLive }
+
     /// True only when this row should paint its numeral critical instead of chipping it
     /// (H3a): live (not dimmed) critical, in the chipless multi-account path.
-    private var usesCriticalInk: Bool { chiplessCriticalInk && !dimmed && severity == .critical }
+    private var usesCriticalInk: Bool {
+        chiplessCriticalInk && !isEffectivelyDimmed && severity == .critical
+    }
 
-    private var pct: Int { percentageMode.roundedPercentage(for: window) }
-    private var fraction: Double { percentageMode.fraction(for: window) }
+    private var pct: Int? {
+        window.freshness.isUnavailable ? nil : percentageMode.roundedPercentage(for: window)
+    }
+    private var percentText: String { pct.map { "\($0)%" } ?? "—" }
+    private var fraction: Double {
+        window.freshness.isUnavailable ? 0 : percentageMode.fraction(for: window)
+    }
     private var severity: UsageSeverity { window.severity }
 
     /// One spring drives the fill width, its color band, and the rolling percentage so the
@@ -50,11 +59,27 @@ struct UsageBarView: View {
 
     /// Desaturated grey while stale; the live severity color otherwise.
     private var fillColor: Color {
-        dimmed ? Color.secondary.opacity(0.55) : ProviderStyle.severityColor(for: severity, scheme: scheme)
+        isEffectivelyDimmed
+            ? Color.secondary.opacity(0.55)
+            : ProviderStyle.severityColor(for: severity, scheme: scheme)
     }
 
-    private var resetText: String {
-        Countdown.resetText(resetsAt: window.resetsAt, now: now)
+    private var resetText: String? {
+        window.freshness.isUnavailable
+            ? nil
+            : Countdown.resetText(resetsAt: window.resetsAt, now: now)
+    }
+
+    private var stateText: String? {
+        switch window.freshness {
+        case .live:
+            nil
+        case .stale(let observedAt):
+            Countdown.updatedLabel(capturedAt: observedAt, now: now)
+                .map { "Last known \($0)" } ?? "Last known"
+        case .unavailable:
+            "Unavailable"
+        }
     }
 
     private func fillWidth(in availableWidth: Double) -> Double {
@@ -73,7 +98,7 @@ struct UsageBarView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label) usage")
-        .accessibilityValue("\(pct) percent \(percentageMode.term), \(resetText)")
+        .accessibilityValue(accessibilityValue)
         .animation(valueAnimation, value: severity)
     }
 
@@ -89,7 +114,14 @@ struct UsageBarView: View {
                     .foregroundStyle(ProviderStyle.secondaryText(scheme: scheme))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if inlineReset {
+                if let stateText {
+                    Text("· \(stateText)")
+                        .font(.system(size: resetSize, weight: .medium))
+                        .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                if inlineReset, let resetText {
                     // fixedSize so the reset reports its full width to ViewThatFits — the
                     // inline candidate must be rejected (dropping to the sub-line) rather
                     // than accepted by silently compressing the reset.
@@ -100,24 +132,26 @@ struct UsageBarView: View {
                         .fixedSize()
                 }
                 Spacer(minLength: 6)
-                if !dimmed, severity == .critical, !chiplessCriticalInk {
+                if !isEffectivelyDimmed, severity == .critical, !chiplessCriticalInk {
                     lowChip
                         .transition(.opacity)
                 }
-                Text("\(pct)%")
+                Text(percentText)
                     // Semibold, matching the widgets' bold numerals — the glance payload
                     // leads the row. H3a: goes critical-ink (chipless multi-account) when the
                     // "Low" chip is suppressed, so urgency still reads on the numeral itself.
                     .font(.system(size: percentSize, weight: .semibold).monospacedDigit())
                     .foregroundStyle(usesCriticalInk ? ProviderStyle.criticalText(scheme: scheme) : .primary)
                     .contentTransition(.numericText())
-                    .animation(valueAnimation, value: pct)
-                Text(percentageMode.term)
-                    .font(.system(size: termSize))
-                    .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
+                    .animation(valueAnimation, value: percentText)
+                if pct != nil {
+                    Text(percentageMode.term)
+                        .font(.system(size: termSize))
+                        .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
+                }
             }
             bar
-            if !inlineReset {
+            if !inlineReset, let resetText {
                 Text(resetText)
                     .font(.system(size: resetSize).monospacedDigit())
                     .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
@@ -160,6 +194,20 @@ struct UsageBarView: View {
         case .weekly: return "Weekly"
         case .other(let raw): return Self.normalizeOther(raw)
         }
+    }
+
+    private var accessibilityValue: String {
+        var parts: [String] = []
+        if let pct {
+            parts.append("\(pct) percent \(percentageMode.term)")
+        }
+        if let stateText {
+            parts.append(stateText)
+        }
+        if let resetText {
+            parts.append(resetText)
+        }
+        return parts.joined(separator: ", ")
     }
 
     /// Presentation-only tidy of Codex's constructed window labels so their period suffix
