@@ -3,7 +3,8 @@ import Foundation
 /// A redaction-safe snapshot built for WidgetKit. It contains only display-ready usage
 /// values, never provider credentials, request metadata, raw CLI output, or paths.
 public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
+    public static let oldestSupportedSchemaVersion = 1
 
     public let schemaVersion: Int
     public let generatedAt: Date
@@ -44,6 +45,10 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
 
     public static func disabled(generatedAt: Date) -> WidgetSnapshotEnvelope {
         WidgetSnapshotEnvelope(generatedAt: generatedAt, status: .disabled, providers: [], apiSpendProviders: [])
+    }
+
+    public static func supports(schemaVersion: Int) -> Bool {
+        (oldestSupportedSchemaVersion...Self.schemaVersion).contains(schemaVersion)
     }
 
     /// Weekly provider-by-provider values for the smallest widget. This never creates
@@ -126,7 +131,9 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
     /// different whole-number value than the provider's primary weekly limit.
     /// Large widgets use this as compact header context instead of adding another meter.
     public var limitingExtraWeeklyWindow: WidgetWindowSummary? {
-        guard let extraWindow = extraWeeklyWindows.min(by: {
+        guard let extraWindow = extraWeeklyWindows.lazy.filter({
+            $0.displayPercentRemaining != nil
+        }).min(by: {
             $0.percentRemaining < $1.percentRemaining
         }) else {
             return nil
@@ -187,6 +194,7 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
     public let resetsAt: Date
     public let resetLabel: String?
     public let severity: WidgetUsageSeverity
+    public let freshness: WidgetWindowFreshness
 
     public init(
         kind: WidgetWindowKind,
@@ -194,7 +202,8 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         percentRemaining: Double,
         resetsAt: Date,
         resetLabel: String?,
-        severity: WidgetUsageSeverity
+        severity: WidgetUsageSeverity,
+        freshness: WidgetWindowFreshness = .live
     ) {
         self.id = kind.id
         self.kind = kind
@@ -203,10 +212,50 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         self.resetsAt = resetsAt
         self.resetLabel = resetLabel
         self.severity = severity
+        self.freshness = freshness
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case label
+        case percentRemaining
+        case resetsAt
+        case resetLabel
+        case severity
+        case freshness
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(WidgetWindowKind.self, forKey: .kind)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? kind.id
+        label = try container.decode(String.self, forKey: .label)
+        percentRemaining = try container.decode(Double.self, forKey: .percentRemaining)
+        resetsAt = try container.decode(Date.self, forKey: .resetsAt)
+        resetLabel = try container.decodeIfPresent(String.self, forKey: .resetLabel)
+        severity = try container.decode(WidgetUsageSeverity.self, forKey: .severity)
+        freshness = try container.decodeIfPresent(WidgetWindowFreshness.self, forKey: .freshness) ?? .live
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(label, forKey: .label)
+        try container.encode(percentRemaining, forKey: .percentRemaining)
+        try container.encode(resetsAt, forKey: .resetsAt)
+        try container.encodeIfPresent(resetLabel, forKey: .resetLabel)
+        try container.encode(severity, forKey: .severity)
+        try container.encode(freshness, forKey: .freshness)
     }
 
     public var roundedPercentRemaining: Int {
         Int(percentRemaining.rounded())
+    }
+
+    public var displayPercentRemaining: Double? {
+        freshness.isUnavailable ? nil : percentRemaining
     }
 
     /// Shortens model-specific labels for constrained widget headers. For example,
@@ -222,6 +271,27 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         let contentEnd = label.index(before: label.endIndex)
         guard contentStart < contentEnd else { return label }
         return String(label[contentStart..<contentEnd])
+    }
+}
+
+public enum WidgetWindowFreshness: Codable, Equatable, Sendable {
+    case live
+    case stale(observedAt: Date)
+    case unavailable(since: Date)
+
+    public var isLive: Bool {
+        if case .live = self { return true }
+        return false
+    }
+
+    public var isStale: Bool {
+        if case .stale = self { return true }
+        return false
+    }
+
+    public var isUnavailable: Bool {
+        if case .unavailable = self { return true }
+        return false
     }
 }
 

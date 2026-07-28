@@ -87,8 +87,20 @@ public enum WidgetSnapshotProjector {
             percentRemaining: window.percentRemaining,
             resetsAt: window.resetsAt,
             resetLabel: window.resetLabel,
-            severity: widgetSeverity(window.severity)
+            severity: widgetSeverity(window.severity),
+            freshness: widgetFreshness(window.freshness)
         )
+    }
+
+    private static func widgetFreshness(_ freshness: UsageWindowFreshness) -> WidgetWindowFreshness {
+        switch freshness {
+        case .live:
+            .live
+        case .stale(let observedAt):
+            .stale(observedAt: observedAt)
+        case .unavailable(let since):
+            .unavailable(since: since)
+        }
     }
 
     private static func widgetKind(

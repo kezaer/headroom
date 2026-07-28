@@ -112,8 +112,21 @@ struct UsageStoreTests {
             .weekly,
             .other("Weekly (Fable)"),
         ])
-        #expect(store.snapshot(for: .claude).freshness == .stale(.transient("Partial Claude usage — will retry")))
+        #expect(store.snapshot(for: .claude).freshness == .live)
+        #expect(store.snapshot(for: .claude).capturedAt == partialCapture)
+        #expect(
+            store.snapshot(for: .claude).windows.first { $0.kind == .weekly }?.freshness
+                == .live
+        )
+        #expect(
+            store.snapshot(for: .claude).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .stale(observedAt: initialCapture)
+        )
         #expect(phoneExporter.exports.last?.providers.first?.extraWeeklyWindows.map(\.compactLabel) == ["Fable"])
+        #expect(
+            phoneExporter.exports.last?.providers.first?.extraWeeklyWindows.first?.freshness
+                == .stale(observedAt: initialCapture)
+        )
 
         provider.set(.live(.claude, windows: [
             UsageWindow(kind: .fiveHour, utilization: 0, resetsAt: reset),
@@ -121,7 +134,64 @@ struct UsageStoreTests {
         ], at: nextCycleCapture))
         await store.refreshAll()
 
-        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [.fiveHour, .weekly])
+        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [
+            .fiveHour,
+            .weekly,
+            .other("Weekly (Fable)"),
+        ])
+        #expect(
+            store.snapshot(for: .claude).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .unavailable(since: currentReset)
+        )
+
+        let unavailableExpiryCapture = nextCycleCapture.addingTimeInterval(8 * 24 * 60 * 60)
+        provider.set(.live(.claude, windows: [
+            UsageWindow(
+                kind: .weekly,
+                utilization: 1,
+                resetsAt: unavailableExpiryCapture.addingTimeInterval(7 * 24 * 60 * 60)
+            ),
+        ], at: unavailableExpiryCapture))
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [.weekly])
+    }
+
+    @Test func freshClaudeSubLimitReplacesLastKnownState() async {
+        let initialCapture = Date(timeIntervalSince1970: 2_000_000)
+        let partialCapture = initialCapture.addingTimeInterval(60)
+        let recoveredCapture = partialCapture.addingTimeInterval(60)
+        let reset = recoveredCapture.addingTimeInterval(3_600)
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: reset),
+                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 39, resetsAt: reset),
+            ], at: initialCapture)
+        )
+        let store = UsageStore(providers: [provider], preferences: freshPreferences())
+
+        await store.refreshAll()
+        provider.set(.live(.claude, windows: [
+            UsageWindow(kind: .weekly, utilization: 26, resetsAt: reset),
+        ], at: partialCapture))
+        await store.refreshAll()
+        #expect(
+            store.snapshot(for: .claude).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .stale(observedAt: initialCapture)
+        )
+
+        provider.set(.live(.claude, windows: [
+            UsageWindow(kind: .weekly, utilization: 27, resetsAt: reset),
+            UsageWindow(kind: .other("Weekly (Fable)"), utilization: 41, resetsAt: reset),
+        ], at: recoveredCapture))
+        await store.refreshAll()
+
+        let recovered = store.snapshot(for: .claude)
+            .windows.first { $0.kind == .other("Weekly (Fable)") }
+        #expect(recovered?.freshness == .live)
+        #expect(recovered?.utilization == 41)
     }
 
     @Test func cachedClaudeSubLimitSurvivesPartialFirstRefreshAfterRelaunch() async {
@@ -163,6 +233,10 @@ struct UsageStoreTests {
         if case .stale = store.snapshot(for: key).freshness {} else {
             Issue.record("restored launch data should be stale")
         }
+        #expect(
+            store.snapshot(for: key).windows.first { $0.kind == .weekly }?.freshness
+                == .stale(observedAt: initialCapture)
+        )
 
         await store.refreshAll()
 
@@ -172,7 +246,53 @@ struct UsageStoreTests {
             .other("Weekly (Fable)"),
         ])
         #expect(store.snapshot(for: key).windows.first?.utilization == 6)
-        #expect(store.snapshot(for: key).freshness == .stale(.transient("Partial Claude usage — will retry")))
+        #expect(store.snapshot(for: key).freshness == .live)
+        #expect(
+            store.snapshot(for: key).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .stale(observedAt: initialCapture)
+        )
+        #expect(
+            store.snapshot(for: key).windows.first { $0.kind == .weekly }?.freshness
+                == .live
+        )
+    }
+
+    @Test func transientFailuresCannotKeepUnavailableClaudeSubLimitForever() async {
+        let initialCapture = Date(timeIntervalSince1970: 2_000_000)
+        let reset = initialCapture.addingTimeInterval(60)
+        let unavailableCapture = reset.addingTimeInterval(60)
+        let futureWeeklyReset = reset.addingTimeInterval(30 * 24 * 60 * 60)
+        let dateSource = MutableDateSource(initialCapture)
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: reset),
+                UsageWindow(kind: .other("Weekly (Fable)"), utilization: 39, resetsAt: reset),
+            ], at: initialCapture)
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            now: dateSource.now
+        )
+
+        await store.refreshAll()
+        provider.set(.live(.claude, windows: [
+            UsageWindow(kind: .weekly, utilization: 26, resetsAt: futureWeeklyReset),
+        ], at: unavailableCapture))
+        await store.refreshAll()
+        #expect(
+            store.snapshot(for: .claude).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .unavailable(since: reset)
+        )
+
+        dateSource.set(reset.addingTimeInterval(8 * 24 * 60 * 60))
+        provider.set(.stale(for: .claude, reason: .transient("blip")))
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [.weekly])
+        #expect(store.snapshot(for: .claude).windows.first?.freshness == .stale(observedAt: unavailableCapture))
     }
 
     @Test func cachedClaudeSubLimitWithUnknownResetSurvivesRelaunchAndPartialRefresh() async {
@@ -217,10 +337,14 @@ struct UsageStoreTests {
             .weekly,
             .other("Weekly (Fable)"),
         ])
-        #expect(store.snapshot(for: key).freshness == .stale(.transient("Partial Claude usage — will retry")))
+        #expect(store.snapshot(for: key).freshness == .live)
+        #expect(
+            store.snapshot(for: key).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .stale(observedAt: initialCapture)
+        )
     }
 
-    @Test func cachedUnknownResetExpiresAfterItsFallbackLifetime() {
+    @Test func cachedUnknownResetBecomesUnavailableAfterItsFallbackLifetime() {
         let initialCapture = Date(timeIntervalSince1970: 2_000_000)
         let defaults = freshContinuityDefaults()
         let key = AccountKey(providerID: .claude, accountID: .primary)
@@ -243,7 +367,19 @@ struct UsageStoreTests {
             now: { initialCapture.addingTimeInterval(8 * 24 * 60 * 60) }
         )
 
-        #expect(store.snapshot(for: key).freshness == .pending)
+        #expect(store.snapshot(for: key).freshness == .stale(.transient("Last known usage — refreshing")))
+        #expect(store.snapshot(for: key).windows.first?.freshness == .unavailable(
+            since: initialCapture.addingTimeInterval(7 * 24 * 60 * 60)
+        ))
+
+        let laterRelaunch = UsageStore(
+            providers: [StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude))],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { initialCapture.addingTimeInterval(15 * 24 * 60 * 60) }
+        )
+
+        #expect(laterRelaunch.snapshot(for: key).freshness == .pending)
     }
 
     @Test func genuinelyPastClaudeResetIsNotTreatedAsUnknown() {
@@ -271,7 +407,11 @@ struct UsageStoreTests {
             now: { restorationDate }
         )
 
-        #expect(store.snapshot(for: key).freshness == .pending)
+        #expect(store.snapshot(for: key).freshness == .stale(.transient("Last known usage — refreshing")))
+        #expect(
+            store.snapshot(for: key).windows.first?.freshness
+                == .unavailable(since: capturedAt.addingTimeInterval(-24 * 60 * 60))
+        )
     }
 
     @Test func codexResetAtCaptureIsNeverTreatedAsClaudeUnknownSentinel() {
@@ -335,7 +475,11 @@ struct UsageStoreTests {
                 .weekly,
                 .other("Weekly (Fable)"),
             ])
-            #expect(store.snapshot(for: key).capturedAt == initialCapture)
+            #expect(store.snapshot(for: key).capturedAt == capturedAt)
+            #expect(
+                store.snapshot(for: key).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                    == .stale(observedAt: initialCapture)
+            )
         }
 
         let relaunched = UsageStore(
@@ -345,7 +489,14 @@ struct UsageStoreTests {
             now: { initialCapture.addingTimeInterval(7 * 24 * 60 * 60) }
         )
 
-        #expect(relaunched.snapshot(for: key).windows.map(\.kind) == [.weekly])
+        #expect(relaunched.snapshot(for: key).windows.map(\.kind) == [
+            .weekly,
+            .other("Weekly (Fable)"),
+        ])
+        #expect(
+            relaunched.snapshot(for: key).windows.first { $0.kind == .other("Weekly (Fable)") }?.freshness
+                == .unavailable(since: initialCapture.addingTimeInterval(7 * 24 * 60 * 60))
+        )
     }
 
     @Test func permanentFailureClearsPersistedContinuityBeforeRelaunch() async {
@@ -383,7 +534,7 @@ struct UsageStoreTests {
         #expect(relaunched.snapshot(for: key).freshness == .pending)
     }
 
-    @Test func relaunchIgnoresExpiredCachedWindows() {
+    @Test func relaunchMarksExpiredCachedClaudeSubLimitUnavailable() {
         let restorationDate = Date(timeIntervalSince1970: 2_000_000)
         let capturedAt = restorationDate.addingTimeInterval(-3_600)
         let defaults = freshContinuityDefaults()
@@ -407,8 +558,14 @@ struct UsageStoreTests {
             now: { restorationDate }
         )
 
-        #expect(store.snapshot(for: key).windows.isEmpty)
-        #expect(store.snapshot(for: key).freshness == .pending)
+        #expect(store.snapshot(for: key).windows.map(\.kind) == [.other("Weekly (Fable)")])
+        #expect(
+            store.snapshot(for: key).windows.first?.freshness
+                == .unavailable(since: restorationDate.addingTimeInterval(-1))
+        )
+        if case .stale = store.snapshot(for: key).freshness {} else {
+            Issue.record("restored unavailable data should remain globally stale until refresh")
+        }
     }
 
     @Test func relaunchDropsOnlyExpiredCachedWindows() {

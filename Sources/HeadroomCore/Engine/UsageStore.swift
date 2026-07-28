@@ -114,6 +114,7 @@ public final class UsageStore {
     private let accountRegistry: AccountRegistry?
     private let accountStorage: any AccountStorageManaging
     private let continuityCache: (any UsageContinuityCaching)?
+    private let now: @Sendable () -> Date
     /// Counts timer-driven cycles for the not-signed-in poll backoff.
     private var timerCycleCount = 0
     /// Builds the concrete provider for a newly added account. Lives in the composition
@@ -136,7 +137,7 @@ public final class UsageStore {
         accountStorage: any AccountStorageManaging = DefaultAccountStorage(),
         providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)? = nil,
         continuityCache: (any UsageContinuityCaching)? = nil,
-        now: @Sendable () -> Date = { Date() },
+        now: @escaping @Sendable () -> Date = { Date() },
         widgetExporter: (any WidgetSnapshotExporting)? = nil,
         phoneSyncExporter: (any WidgetSnapshotExporting)? = nil
     ) {
@@ -147,6 +148,7 @@ public final class UsageStore {
         self.accountStorage = accountStorage
         self.providerFactory = providerFactory
         self.continuityCache = continuityCache
+        self.now = now
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
         self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
@@ -187,56 +189,11 @@ public final class UsageStore {
         for providerID: ProviderID,
         after restorationDate: Date
     ) -> UsageSnapshot {
-        guard let cached, cached.providerID == providerID else {
-            return .pending(for: providerID)
-        }
-        let unexpiredWindows = cached.windows.filter {
-            Self.isContinuityWindowValid(
-                $0,
-                providerID: providerID,
-                capturedAt: cached.capturedAt,
-                at: restorationDate
-            )
-        }
-        guard !unexpiredWindows.isEmpty else { return .pending(for: providerID) }
-        return UsageSnapshot(
-            providerID: providerID,
-            windows: unexpiredWindows,
-            planLabel: cached.planLabel,
-            capturedAt: cached.capturedAt,
-            freshness: .stale(.transient("Last known usage — refreshing"))
+        UsageContinuityPolicy.restoredSnapshot(
+            cached,
+            for: providerID,
+            at: restorationDate
         )
-    }
-
-    /// Claude falls back to `capturedAt` when a repaint contains a percentage but no
-    /// parseable reset line. Treat that sentinel as an unknown reset with a bounded
-    /// lifetime instead of expiring it immediately at the next process launch.
-    private static func isContinuityWindowValid(
-        _ window: UsageWindow,
-        providerID: ProviderID,
-        capturedAt: Date?,
-        at comparisonDate: Date
-    ) -> Bool {
-        guard providerID == .claude,
-              let capturedAt,
-              abs(window.resetsAt.timeIntervalSince(capturedAt)) < 1
-        else {
-            return window.resetsAt > comparisonDate
-        }
-        return comparisonDate.timeIntervalSince(window.resetsAt) < fallbackLifetime(for: window.kind)
-    }
-
-    private static func fallbackLifetime(for kind: WindowKind) -> TimeInterval {
-        switch kind {
-        case .fiveHour:
-            return 5 * 60 * 60
-        case .weekly:
-            return 7 * 24 * 60 * 60
-        case .other(let label):
-            return label.localizedCaseInsensitiveContains("weekly")
-                ? 7 * 24 * 60 * 60
-                : 24 * 60 * 60
-        }
     }
 
     /// Account metadata for every provider instance. Explicit `accounts` (render
@@ -671,18 +628,11 @@ public final class UsageStore {
         guard accounts(for: key.providerID).contains(where: { $0.key == key }),
               !removingAccounts.contains(key)
         else { return }
-        let next: UsageSnapshot
-        if case .stale(let reason) = fresh.freshness,
-           fresh.windows.isEmpty,
-           let prior = snapshots[key], !prior.windows.isEmpty {
-            next = prior.markedStale(reason)
-        } else if key.providerID == .claude,
-                  fresh.freshness == .live,
-                  let prior = snapshots[key] {
-            next = preservingClaudeWeeklySubLimits(in: fresh, from: prior)
-        } else {
-            next = fresh
-        }
+        let next = UsageContinuityPolicy.mergedSnapshot(
+            fresh,
+            with: snapshots[key],
+            at: now()
+        )
         // Skip the assignment when nothing changed so an unchanging state (e.g. a
         // provider that stays logged-out) doesn't invalidate observers every cycle.
         if snapshots[key] != next { snapshots[key] = next }
@@ -695,49 +645,9 @@ public final class UsageStore {
             continuityCache?.remove(for: key)
         } else if !snapshot.windows.isEmpty {
             continuityCache?.save(snapshot, for: key)
+        } else {
+            continuityCache?.remove(for: key)
         }
-    }
-
-    /// Claude's `/usage` panel can finish one repaint before its model-specific weekly
-    /// limits arrive. That partial capture is otherwise valid and therefore `.live`, so
-    /// replacing the whole snapshot makes Fable disappear until a later complete poll.
-    /// Retain a missing sub-limit only until its prior reset time, or a bounded
-    /// window-kind lifetime when Claude omitted the reset line. Use the parsed timestamp
-    /// rather than Claude's human label because TUI repaints can format that label differently.
-    /// Mark the mixed snapshot stale so retained values are never presented as newly read.
-    private func preservingClaudeWeeklySubLimits(
-        in fresh: UsageSnapshot,
-        from prior: UsageSnapshot
-    ) -> UsageSnapshot {
-        guard fresh.windows.contains(where: { $0.kind == .weekly }),
-              let capturedAt = fresh.capturedAt
-        else {
-            return fresh
-        }
-        let freshKinds = Set(fresh.windows.map(\.kind))
-        let retained = prior.windows.filter { window in
-            guard case .other(let label) = window.kind,
-                  label.localizedCaseInsensitiveContains("weekly"),
-                  !freshKinds.contains(window.kind)
-            else { return false }
-            return Self.isContinuityWindowValid(
-                window,
-                providerID: fresh.providerID,
-                capturedAt: prior.capturedAt,
-                at: capturedAt
-            )
-        }
-        guard !retained.isEmpty else { return fresh }
-        return UsageSnapshot(
-            providerID: fresh.providerID,
-            windows: fresh.windows + retained,
-            planLabel: fresh.planLabel,
-            // A partial repaint did not re-observe the retained sub-limit. Keep the
-            // prior capture time so repeated partial polls cannot renew its fallback
-            // lifetime indefinitely.
-            capturedAt: prior.capturedAt ?? fresh.capturedAt,
-            freshness: .stale(.transient("Partial Claude usage — will retry"))
-        )
     }
 
     private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {

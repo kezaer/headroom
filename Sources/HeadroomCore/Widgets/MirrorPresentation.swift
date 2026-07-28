@@ -53,6 +53,9 @@ public enum MirrorPresentation {
     }
 
     public static func resetText(for window: WidgetWindowSummary, now: Date) -> String {
+        if window.freshness.isUnavailable {
+            return "Unavailable"
+        }
         if let resetLabel = window.resetLabel, !resetLabel.isEmpty {
             return resetLabel
         }
@@ -62,6 +65,17 @@ public enum MirrorPresentation {
             return "Resets now"
         }
         return "Resets in \(countdown)"
+    }
+
+    public static func windowStateText(for window: WidgetWindowSummary) -> String? {
+        switch window.freshness {
+        case .live:
+            nil
+        case .stale:
+            "Last known"
+        case .unavailable:
+            "Unavailable"
+        }
     }
 
     public static func updatedLabel(generatedAt: Date?, now: Date) -> String? {

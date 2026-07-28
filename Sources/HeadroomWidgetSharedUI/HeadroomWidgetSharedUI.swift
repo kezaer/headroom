@@ -120,6 +120,12 @@ public struct HeadroomWidgetUsageMeter: View {
                     .font(labelFont)
                     .foregroundStyle(HeadroomWidgetStyle.secondaryText(scheme: scheme))
                     .lineLimit(1)
+                if window?.freshness.isStale == true {
+                    Text("· Last known")
+                        .font(resetFont.weight(.medium))
+                        .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
+                        .lineLimit(1)
+                }
                 if let resetText {
                     Text("· \(resetText)")
                         .font(resetFont)
@@ -131,14 +137,20 @@ public struct HeadroomWidgetUsageMeter: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(percentText)
                         .font(percentFont)
-                        .foregroundStyle(window == nil ? HeadroomWidgetStyle.secondaryText(scheme: scheme) : .primary)
+                        .foregroundStyle(
+                            window == nil || window?.freshness.isLive == false
+                                ? HeadroomWidgetStyle.secondaryText(scheme: scheme)
+                                : .primary
+                        )
                         .widgetAccentable()
-                    Text("left")
-                        .font(.footnote)
-                        .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
-                        .minimumScaleFactor(0.82)
+                    if window?.displayPercentRemaining != nil {
+                        Text("left")
+                            .font(.footnote)
+                            .foregroundStyle(HeadroomWidgetStyle.tertiaryText(scheme: scheme))
+                            .minimumScaleFactor(0.82)
+                    }
                 }
-                if window?.severity == .critical {
+                if window?.severity == .critical, window?.freshness.isLive == true {
                     Text("Low")
                         .font(.footnote.weight(.semibold))
                         .kerning(0.2)
@@ -148,9 +160,9 @@ public struct HeadroomWidgetUsageMeter: View {
                 }
             }
             HeadroomWidgetUsageBar(
-                percentRemaining: window?.percentRemaining ?? 0,
+                percentRemaining: window?.displayPercentRemaining ?? 0,
                 severity: window?.severity ?? .healthy,
-                dimmed: window == nil,
+                dimmed: window == nil || window?.freshness.isLive == false,
                 height: barHeight
             )
         }
@@ -212,8 +224,8 @@ public struct HeadroomWidgetUsageMeter: View {
     }
 
     private var percentText: String {
-        guard let window else { return "--" }
-        return "\(Int(window.percentRemaining.rounded()))%"
+        guard let value = window?.displayPercentRemaining else { return "—" }
+        return "\(Int(value.rounded()))%"
     }
 
     private var labelText: String {
@@ -222,6 +234,7 @@ public struct HeadroomWidgetUsageMeter: View {
 
     private var resetText: String? {
         guard let window, showsResetInline else { return nil }
+        if window.freshness.isUnavailable { return "Unavailable" }
         if let label = window.resetLabel { return label }
         guard let now else { return nil }
         if window.resetsAt <= now { return "Resets now" }
@@ -229,11 +242,20 @@ public struct HeadroomWidgetUsageMeter: View {
     }
 
     private var accessibilityValue: String {
-        var parts = ["\(Int((window?.percentRemaining ?? 0).rounded())) percent remaining"]
-        if let resetText {
+        var parts: [String] = []
+        if let value = window?.displayPercentRemaining {
+            parts.append("\(Int(value.rounded())) percent remaining")
+        }
+        if window?.freshness.isStale == true {
+            parts.append("Last known")
+        }
+        if window?.freshness.isUnavailable == true {
+            parts.append("Unavailable")
+        }
+        if let resetText, window?.freshness.isUnavailable != true {
             parts.append(resetText)
         }
-        if window?.severity == .critical {
+        if window?.severity == .critical, window?.freshness.isLive == true {
             parts.append("low")
         }
         return parts.joined(separator: ", ")
