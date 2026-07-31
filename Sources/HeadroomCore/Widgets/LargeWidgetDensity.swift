@@ -9,17 +9,20 @@ public enum LargeWidgetDensity: Equatable, Sendable {
     case roomy
     case regular
     case compact
+    case ultraCompact
 
     public enum Scale: Equatable, Sendable {
         case hero
         case standard
         case dense
+        case ultraDense
 
         public var barHeight: Double {
             switch self {
             case .hero: 8
             case .standard: 6
             case .dense: 5
+            case .ultraDense: 4
             }
         }
 
@@ -28,6 +31,7 @@ public enum LargeWidgetDensity: Equatable, Sendable {
             case .hero: 7
             case .standard: 6
             case .dense: 4
+            case .ultraDense: 3
             }
         }
     }
@@ -36,21 +40,32 @@ public enum LargeWidgetDensity: Equatable, Sendable {
     /// extra weekly sub-limit meter + one for the spend strip. Subscription meters include
     /// weekly and 5-hour windows; extra rows are model-specific weekly limits like Fable.
     public init(providerCount: Int, meterCount: Int, hasSpend: Bool) {
-        let rows = providerCount + meterCount + (hasSpend ? 1 : 0)
+        self.init(providerCount: providerCount, meterCount: meterCount, spendCount: hasSpend ? 1 : 0)
+    }
+
+    public init(providerCount: Int, meterCount: Int, spendCount: Int) {
+        let rows = providerCount + meterCount + max(0, spendCount)
         if rows <= 5 {
             self = .roomy
         } else if rows <= 7 {
             self = .regular
-        } else {
+        } else if rows <= 11 {
             self = .compact
+        } else {
+            self = .ultraCompact
         }
     }
 
     public init(envelope: WidgetSnapshotEnvelope) {
+        // The established 1–2 provider layout renders API entries in one horizontal
+        // strip. Higher provider counts may wrap them, so account for each entry there.
+        let spendRows = envelope.providers.count <= 2
+            ? min(1, envelope.apiSpendProviders.count)
+            : envelope.apiSpendProviders.count
         self.init(
             providerCount: envelope.providers.count,
             meterCount: envelope.providers.reduce(0) { $0 + $1.subscriptionWindows.count + $1.extraWeeklyWindows.count },
-            hasSpend: !envelope.apiSpendProviders.isEmpty
+            spendCount: spendRows
         )
     }
 
@@ -60,6 +75,7 @@ public enum LargeWidgetDensity: Equatable, Sendable {
         case .roomy: 14
         case .regular: 11
         case .compact: 8
+        case .ultraCompact: 5
         }
     }
 
@@ -69,6 +85,7 @@ public enum LargeWidgetDensity: Equatable, Sendable {
         case .roomy: 9
         case .regular: 8
         case .compact: 6
+        case .ultraCompact: 4
         }
     }
 
@@ -78,6 +95,7 @@ public enum LargeWidgetDensity: Equatable, Sendable {
         case .roomy: 12
         case .regular: 11
         case .compact: 8
+        case .ultraCompact: 5
         }
     }
 
@@ -86,6 +104,7 @@ public enum LargeWidgetDensity: Equatable, Sendable {
         case .roomy: .hero
         case .regular: .standard
         case .compact: .dense
+        case .ultraCompact: .ultraDense
         }
     }
 
@@ -106,6 +125,7 @@ public enum LargeWidgetDensity: Equatable, Sendable {
         case .roomy: 24
         case .regular: 20
         case .compact: 18
+        case .ultraCompact: 16
         }
     }
 

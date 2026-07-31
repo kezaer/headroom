@@ -191,6 +191,7 @@ public struct HeadroomWidgetUsageMeter: View {
             case .hero: return .subheadline.weight(.medium)
             case .standard: return .footnote.weight(.medium)
             case .dense: return .caption.weight(.medium)
+            case .ultraDense: return .caption2.weight(.medium)
             }
         }
         return compact ? .caption.weight(.medium) : .caption
@@ -202,6 +203,7 @@ public struct HeadroomWidgetUsageMeter: View {
             case .hero: return .caption.monospacedDigit()
             case .standard: return .caption.monospacedDigit()
             case .dense: return .caption2.monospacedDigit()
+            case .ultraDense: return .caption2.monospacedDigit()
             }
         }
         return compact ? .caption.monospacedDigit() : .caption2.monospacedDigit()
@@ -213,6 +215,7 @@ public struct HeadroomWidgetUsageMeter: View {
             case .hero: return .title3.bold().monospacedDigit()
             case .standard: return .headline.bold().monospacedDigit()
             case .dense: return .subheadline.bold().monospacedDigit()
+            case .ultraDense: return .caption.bold().monospacedDigit()
             }
         }
         // The percentage is the glance value, so it outsizes its label. scale (the large

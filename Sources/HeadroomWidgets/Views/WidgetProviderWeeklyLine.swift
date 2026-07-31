@@ -10,6 +10,7 @@ struct WidgetProviderWeeklyLine: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        let window = provider.primarySubscriptionWindow
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 WidgetProviderIcon(providerID: provider.id, size: 16)
@@ -22,9 +23,9 @@ struct WidgetProviderWeeklyLine: View {
                     .allowsTightening(true)
                     .layoutPriority(1)
                 Spacer(minLength: 2)
-                Text(percent(provider.weeklyWindow))
+                Text(percent(window))
                     .font(.title3.bold().monospacedDigit())
-                    .foregroundStyle(provider.weeklyWindow == nil ? WidgetProviderStyle.secondaryText(scheme: scheme) : .primary)
+                    .foregroundStyle(window == nil ? WidgetProviderStyle.secondaryText(scheme: scheme) : .primary)
                     .widgetAccentable()
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -32,9 +33,9 @@ struct WidgetProviderWeeklyLine: View {
                     .frame(width: 42, alignment: .trailing)
             }
             WidgetUsageBar(
-                percentRemaining: provider.weeklyWindow?.percentRemaining ?? 0,
-                severity: provider.weeklyWindow?.severity ?? .healthy,
-                dimmed: provider.weeklyWindow == nil
+                percentRemaining: window?.percentRemaining ?? 0,
+                severity: window?.severity ?? .healthy,
+                dimmed: window == nil
             )
         }
     }

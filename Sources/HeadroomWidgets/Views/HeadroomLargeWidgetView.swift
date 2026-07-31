@@ -62,9 +62,12 @@ private struct LargeProviderSection: View {
         VStack(alignment: .leading, spacing: CGFloat(density.headerSpacing)) {
             header
             VStack(alignment: .leading, spacing: CGFloat(density.meterSpacing)) {
-                WidgetUsageMeter(window: window(.weekly), fallbackLabel: "Weekly", now: now, showsResetInline: true, scale: density.scale)
-                if let fiveHourWindow = window(.fiveHour) {
-                    WidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", now: now, showsResetInline: true, scale: density.scale)
+                if provider.displaySubscriptionWindows.isEmpty {
+                    WidgetUsageMeter(window: nil, fallbackLabel: "Weekly", now: now, showsResetInline: true, scale: density.scale)
+                } else {
+                    ForEach(provider.displaySubscriptionWindows) { window in
+                        WidgetUsageMeter(window: window, fallbackLabel: window.label, now: now, showsResetInline: true, scale: density.scale)
+                    }
                 }
                 ForEach(provider.extraWeeklyWindows) { extraWindow in
                     WidgetUsageMeter(window: extraWindow, fallbackLabel: "Weekly", now: now, showsResetInline: true, scale: density.scale)
@@ -92,14 +95,10 @@ private struct LargeProviderSection: View {
         }
     }
 
-    private func window(_ kind: WidgetWindowKind) -> WidgetWindowSummary? {
-        provider.subscriptionWindows.first { $0.kind == kind }
-    }
-
     private func providerHeaderFont() -> Font {
         switch density.providerHeaderFontStep {
         case .hero: return .headline.weight(.semibold)
-        case .standard, .dense: return .subheadline.weight(.semibold)
+        case .standard, .dense, .ultraDense: return .subheadline.weight(.semibold)
         }
     }
 }

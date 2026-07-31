@@ -19,7 +19,7 @@ struct HeadroomSmallWidgetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Weekly left")
+            Text(envelope.providers.contains(where: { $0.primarySubscriptionWindow?.isBillingPeriod == true }) ? "Usage left" : "Weekly left")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(WidgetProviderStyle.secondaryText(scheme: scheme))
             ForEach(envelope.providers) { provider in

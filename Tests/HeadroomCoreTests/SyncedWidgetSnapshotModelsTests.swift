@@ -64,6 +64,54 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(decoded.freshness == .live)
     }
 
+    @Test func billingPeriodUsesAdditiveV2Discriminator() throws {
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
+        let window = WidgetWindowSummary(
+            kind: .other("Monthly"),
+            label: "Monthly",
+            percentRemaining: 64,
+            resetsAt: reset,
+            resetLabel: nil,
+            severity: .healthy,
+            freshness: .stale(observedAt: generatedAt),
+            billingPeriodDuration: 30 * 24 * 60 * 60
+        )
+
+        let encoded = try JSONEncoder().encode(window)
+        let decoded = try JSONDecoder().decode(WidgetWindowSummary.self, from: encoded)
+        #expect(decoded.isBillingPeriod)
+        #expect(decoded.isSubscriptionWindow)
+        #expect(decoded.freshness == .stale(observedAt: generatedAt))
+
+        var legacyObject = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacyObject.removeValue(forKey: "billingPeriodDuration")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+        let legacy = try JSONDecoder().decode(WidgetWindowSummary.self, from: legacyData)
+        #expect(legacy.kind == .other("Monthly"))
+        #expect(!legacy.isBillingPeriod)
+        #expect(!legacy.isSubscriptionWindow)
+        #expect(legacy.freshness == .stale(observedAt: generatedAt))
+    }
+
+    @Test func unsupportedInnerSchemaWinsOverMalformedPayload() {
+        let payload = """
+        {
+          "schemaVersion": 1,
+          "publishedAt": 2100,
+          "sourceID": "test-mac",
+          "sourcePlatform": "macOS",
+          "snapshot": {
+            "schemaVersion": 999,
+            "generatedAt": "malformed-on-purpose",
+            "status": {"not": "valid"},
+            "providers": "not-an-array"
+          }
+        }
+        """
+
+        #expect(SyncedWidgetSnapshotCodec.decode(Data(payload.utf8)) == .incompatibleSchema)
+    }
+
     @Test func liveSnapshotWithAPISpendRoundTrips() throws {
         let envelope = makeSyncedEnvelope(snapshot: liveSnapshotWithAPISpend)
 

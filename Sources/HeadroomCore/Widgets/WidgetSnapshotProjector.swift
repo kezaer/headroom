@@ -88,8 +88,14 @@ public enum WidgetSnapshotProjector {
             resetsAt: window.resetsAt,
             resetLabel: window.resetLabel,
             severity: widgetSeverity(window.severity),
-            freshness: widgetFreshness(window.freshness)
+            freshness: widgetFreshness(window.freshness),
+            billingPeriodDuration: billingPeriodDuration(window.kind)
         )
+    }
+
+    private static func billingPeriodDuration(_ kind: WindowKind) -> TimeInterval? {
+        guard case .billingPeriod(_, let duration) = kind else { return nil }
+        return duration
     }
 
     private static func widgetFreshness(_ freshness: UsageWindowFreshness) -> WidgetWindowFreshness {

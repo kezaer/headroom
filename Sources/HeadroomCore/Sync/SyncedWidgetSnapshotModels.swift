@@ -52,15 +52,26 @@ public enum SyncedWidgetSnapshotCodec {
     public static func decode(_ data: Data?) -> SyncedWidgetSnapshotDecodeResult {
         guard let data else { return .missing }
         do {
-            let envelope = try decoder.decode(SyncedWidgetSnapshotEnvelope.self, from: data)
-            guard envelope.schemaVersion == SyncedWidgetSnapshotEnvelope.schemaVersion,
-                  WidgetSnapshotEnvelope.supports(schemaVersion: envelope.snapshot.schemaVersion)
+            let header = try decoder.decode(SyncedWidgetSnapshotHeader.self, from: data)
+            guard header.schemaVersion == SyncedWidgetSnapshotEnvelope.schemaVersion,
+                  WidgetSnapshotEnvelope.supports(schemaVersion: header.snapshot.schemaVersion)
             else { return .incompatibleSchema }
+            let envelope = try decoder.decode(SyncedWidgetSnapshotEnvelope.self, from: data)
             return .snapshot(envelope)
         } catch {
             return .corrupt
         }
     }
+}
+
+/// The iCloud path checks compatibility before decoding the full tree so an unsupported
+/// payload cannot be mislabeled corrupt because a future child shape is unknown. The
+/// local macOS `WidgetSnapshotCache` intentionally has no supports gate; it is written
+/// and read by the same installed app version.
+private struct SyncedWidgetSnapshotHeader: Decodable {
+    struct Snapshot: Decodable { let schemaVersion: Int }
+    let schemaVersion: Int
+    let snapshot: Snapshot
 }
 
 public enum SyncedWidgetSnapshotResolution {
