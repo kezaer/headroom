@@ -383,31 +383,40 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
     }
 }
 
-/// Which provider's preferred usage window drives how full the menu-bar vessel is drawn.
-/// The glyph follows the selected percentage mode for that provider. `.none` keeps a
-/// static decorative fill (the identity mark), decoupled from any single provider.
-public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatable {
-    case none
-    case claude
-    case codex
-    case both
+/// Which providers get menu-bar meters. Automatic mode preserves the shipped default:
+/// one summary for the tightest enabled window with the decorative static vessel fill.
+/// Explicit selection renders one meter per selected provider in registry order.
+public enum MenuBarFillSource: Sendable, Equatable, Hashable {
+    case auto
+    case providers(Set<ProviderID>)
 
-    /// The provider whose preferred window sets the fill, or nil for static/both modes.
-    public var providerID: ProviderID? {
+    /// Source-compatible spellings for older call sites and persisted-fixture setup.
+    /// These are migration aliases, not additional runtime states.
+    public static let none: Self = .auto
+    public static let claude: Self = .providers([.claude])
+    public static let codex: Self = .providers([.codex])
+    public static let both: Self = .providers([.claude, .codex])
+
+    public var providerIDs: Set<ProviderID>? {
+        guard case .providers(let ids) = self else { return nil }
+        return ids
+    }
+
+    /// Stable identity for animation and diagnostics; never depends on Set iteration.
+    public var sortedIdentifier: String {
         switch self {
-        case .none, .both: return nil
-        case .claude: return .claude
-        case .codex: return .codex
+        case .auto:
+            return "auto"
+        case .providers(let ids):
+            return "providers:" + ids.map(\.raw).sorted().joined(separator: ",")
         }
     }
 
-    public var label: String {
-        switch self {
-        case .none: return "None"
-        case .claude: return "Claude"
-        case .codex: return "Codex"
-        case .both: return "Both"
-        }
+    public func filtered(to availableProviders: [ProviderID]) -> Self {
+        guard case .providers(let selected) = self else { return .auto }
+        let available = Set(availableProviders)
+        let filtered = selected.intersection(available)
+        return filtered.isEmpty ? .auto : .providers(filtered)
     }
 }
 

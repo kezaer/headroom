@@ -33,6 +33,13 @@ public enum APIKeyProvider: String, Sendable, CaseIterable {
         case .anthropic: return "Anthropic"
         }
     }
+
+    public var providerID: ProviderID {
+        switch self {
+        case .openAI: return .codex
+        case .anthropic: return .claude
+        }
+    }
 }
 
 public protocol APIKeyStoring: Sendable {

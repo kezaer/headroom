@@ -73,11 +73,31 @@ struct PreferencesTests {
         #expect(prefs.usagePercentageMode == .remaining)
     }
 
-    @Test func menuBarFillSourceSupportsBothProviders() {
-        let prefs = Preferences(defaults: freshDefaults())
-        #expect(prefs.menuBarFillSource == .none)
-        prefs.menuBarFillSource = .both
-        #expect(prefs.menuBarFillSource == .both)
+    @Test func menuBarFillSourceMigratesEveryLegacyValue() {
+        let defaults = freshDefaults()
+        let prefs = Preferences(defaults: defaults)
+        #expect(prefs.menuBarFillSource == .auto)
+
+        let migrations: [(String, MenuBarFillSource)] = [
+            ("none", .auto),
+            ("both", .providers([.claude, .codex])),
+            ("claude", .providers([.claude])),
+            ("codex", .providers([.codex])),
+        ]
+        for (raw, expected) in migrations {
+            defaults.set(raw, forKey: "menuBarFillSource")
+            #expect(prefs.menuBarFillSource == expected)
+        }
+    }
+
+    @Test func menuBarProviderSetPersistsInDeterministicOrder() {
+        let defaults = freshDefaults()
+        let prefs = Preferences(defaults: defaults)
+        prefs.menuBarFillSource = .providers([.grok, .claude, .codex])
+
+        #expect(defaults.string(forKey: "menuBarFillSource") == "providers")
+        #expect(defaults.stringArray(forKey: "menuBarFillProviders") == ["claude", "codex", "grok"])
+        #expect(prefs.menuBarFillSource == .providers([.claude, .codex, .grok]))
     }
 
     @Test func menuBarWindowSourcesDefaultAndPersistIndependently() {

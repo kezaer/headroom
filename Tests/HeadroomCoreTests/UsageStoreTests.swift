@@ -877,7 +877,7 @@ struct UsageStoreTests {
         #expect(store.menuBarSummary.detail == "Codex 5h")
     }
 
-    @Test func menuBarFillSourcePersistsThroughStore() {
+    @Test func menuBarProviderSelectionDropsProvidersMissingFromRegistry() {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
@@ -889,8 +889,53 @@ struct UsageStoreTests {
 
         #expect(store.menuBarFillSource == .none)   // default
         store.setMenuBarFillSource(.both)
-        #expect(store.menuBarFillSource == .both)
-        #expect(preferences.menuBarFillSource == .both)
+        #expect(store.menuBarFillSource == .providers([.claude]))
+        #expect(preferences.menuBarFillSource == .providers([.claude]))
+    }
+
+    @Test func threeProviderMenuBarSetUsesRegistryOrderAcrossReloads() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.menuBarFillSource = .providers([.grok, .claude, .codex])
+        let providers: [any UsageProvider] = [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 10, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+            ])),
+            StubProvider(id: .grok, displayName: "Grok", snapshot: .live(.grok, windows: [
+                UsageWindow(kind: .billingPeriod(label: "Monthly", duration: 30 * 86_400), utilization: 30, resetsAt: reset),
+            ])),
+        ]
+        let store = UsageStore(providers: providers, preferences: preferences)
+        await store.refreshAll()
+
+        #expect(store.menuBarMeters.map(\.summary.providerID) == [.claude, .codex, .grok])
+        let reloaded = UsageStore(providers: providers, preferences: preferences)
+        await reloaded.refreshAll()
+        #expect(reloaded.menuBarMeters.map(\.summary.providerID) == [.claude, .codex, .grok])
+    }
+
+    @Test func billingPeriodOnlyProviderFallsBackToItsRealWindow() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.menuBarFillSource = .providers([.grok])
+        let store = UsageStore(providers: [
+            StubProvider(id: .grok, displayName: "Grok", snapshot: .live(.grok, windows: [
+                UsageWindow(
+                    kind: .billingPeriod(label: "Monthly", duration: 30 * 86_400),
+                    utilization: 36,
+                    resetsAt: reset
+                ),
+            ])),
+        ], preferences: preferences)
+        await store.refreshAll()
+
+        #expect(store.menuBarMeters.map(\.summary.text) == ["64%"])
+        #expect(store.menuBarMeters.map(\.summary.detail) == ["Grok monthly"])
+        #expect(store.resolvedMenuBarWindowSource(for: .grok) == nil)
+        #expect(!store.hasSelectableMenuBarWindows(for: .grok))
     }
 
     @Test func menuBarMetersDefaultToSingleSummary() async {

@@ -24,8 +24,6 @@ struct AccountsSettingsTile: View {
     @FocusState private var focusedLabel: AccountKey?
     @FocusState private var focusedRemovalAction: AccountKey?
 
-    private static let providerIDs: [ProviderID] = [.claude, .codex]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Accounts")
@@ -33,7 +31,7 @@ struct AccountsSettingsTile: View {
                 .kerning(-0.2)
             SettingsHelpText(text: "Track several subscriptions side by side. Every account signs in through its official CLI in Terminal — Headroom never sees your credentials.")
 
-            ForEach(Array(Self.providerIDs.enumerated()), id: \.element) { index, providerID in
+            ForEach(Array(store.registeredProviderOrder.enumerated()), id: \.element) { index, providerID in
                 if index > 0 {
                     Rectangle()
                         .fill(ClaudeSetupStyle.hairline(dark: colorScheme == .dark))
@@ -110,7 +108,8 @@ struct AccountsSettingsTile: View {
             ForEach(accounts) { account in
                 accountRow(account)
             }
-            if !store.isSurfaceEnabled(subscriptionSurface(for: providerID)) {
+            if let surface = UsageSurface.subscription(for: providerID),
+               !store.isSurfaceEnabled(surface) {
                 // Without this hint, an account added while the surface is off would
                 // sit in "Needs sign-in" forever with no visible cause (code-review
                 // finding) — the disabled surface means it's never polled.
@@ -118,10 +117,6 @@ struct AccountsSettingsTile: View {
             }
         }
         .animation(reduceMotion ? nil : HeadroomMotion.settle, value: accounts.map(\.id))
-    }
-
-    private func subscriptionSurface(for providerID: ProviderID) -> UsageSurface {
-        providerID == .claude ? .claudeSubscription : .codexSubscription
     }
 
     // MARK: - Account row

@@ -365,6 +365,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Composition root (R13): the one place concrete providers are wired to the engine.
 /// Adding a third provider is a one-line append here plus a card — no engine change.
 enum AppComposition {
+    private struct SubscriptionProviderRegistration {
+        let id: ProviderID
+        let factory: @MainActor (ProviderAccount, CredentialStore, URL) -> any UsageProvider
+    }
+
+    /// Ordered composition registry. Adding a provider extends this table; Settings,
+    /// account management, polling, and presentation discover the resulting order from
+    /// the store instead of maintaining parallel provider literals.
+    @MainActor
+    private static var subscriptionProviderRegistry: [SubscriptionProviderRegistration] {
+        [
+            SubscriptionProviderRegistration(id: .claude, factory: makeClaudeProvider),
+            SubscriptionProviderRegistration(id: .codex, factory: makeCodexProvider),
+        ]
+    }
+
     @MainActor
     static func store(preferences: Preferences = Preferences()) -> UsageStore {
         if DemoFixture.isEnabled {
@@ -481,8 +497,8 @@ enum AppComposition {
     /// One provider instance per configured account, in registry order (built-in first).
     @MainActor
     private static func providers(credentials: CredentialStore, registry: AccountRegistry) -> [any UsageProvider] {
-        [ProviderID.claude, .codex].flatMap { id in
-            registry.accounts(for: id).map { provider(for: $0, credentials: credentials) }
+        subscriptionProviderRegistry.flatMap { registration in
+            registry.accounts(for: registration.id).map { provider(for: $0, credentials: credentials) }
         }
     }
 
@@ -496,44 +512,57 @@ enum AppComposition {
         credentials: CredentialStore,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) -> any UsageProvider {
+        guard let registration = subscriptionProviderRegistry.first(where: { $0.id == account.providerID }) else {
+            return UnavailableAccountProvider(account: account)
+        }
+        return registration.factory(account, credentials, builtInClaudeWorkspace)
+    }
+
+    @MainActor
+    private static func makeCodexProvider(
+        account: ProviderAccount,
+        credentials: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        guard !account.isBuiltIn else {
+            return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
+        }
+        let configuration = ProviderAccountConfiguration.make(for: account)
+        let reader = CodexAuthFileReader(path: configuration.codexAuthFile)
+        return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
+    }
+
+    @MainActor
+    private static func makeClaudeProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace: URL
+    ) -> any UsageProvider {
         let configuration = ProviderAccountConfiguration.make(
             for: account,
             builtInClaudeWorkspace: builtInClaudeWorkspace
         )
-        switch account.providerID {
-        case .codex:
-            guard !account.isBuiltIn else {
-                return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
-            }
-            let reader = CodexAuthFileReader(path: configuration.codexAuthFile)
-            return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
-        case .claude:
-            guard let workspace = configuration.claudeWorkspaceDirectory else {
-                return UnavailableAccountProvider(account: account)
-            }
-            // Provider configuration describes the path but deliberately has no file-system
-            // side effects. Provision it before the PTY receives it as its working directory.
-            guard (try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)) != nil else {
-                return UnavailableAccountProvider(account: account)
-            }
-            guard !account.isBuiltIn else {
-                return ClaudeProvider(
-                    source: ClaudeUsageCLIProbe(workingDirectory: workspace.path)
-                )
-            }
-            guard let configDirectory = configuration.claudeConfigDirectory else {
-                return UnavailableAccountProvider(account: account)
-            }
-            return ClaudeProvider(
-                source: ClaudeUsageCLIProbe(
-                    workingDirectory: workspace.path,
-                    environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
-                ),
-                accountID: account.id
-            )
-        default:
+        guard let workspace = configuration.claudeWorkspaceDirectory else {
             return UnavailableAccountProvider(account: account)
         }
+        // Provider configuration describes the path but deliberately has no file-system
+        // side effects. Provision it before the PTY receives it as its working directory.
+        guard (try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)) != nil else {
+            return UnavailableAccountProvider(account: account)
+        }
+        guard !account.isBuiltIn else {
+            return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: workspace.path))
+        }
+        guard let configDirectory = configuration.claudeConfigDirectory else {
+            return UnavailableAccountProvider(account: account)
+        }
+        return ClaudeProvider(
+            source: ClaudeUsageCLIProbe(
+                workingDirectory: workspace.path,
+                environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
+            ),
+            accountID: account.id
+        )
     }
 
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {

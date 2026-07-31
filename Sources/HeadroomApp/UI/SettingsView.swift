@@ -27,17 +27,15 @@ struct SettingsView: View {
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
     @State private var showMenuBarPercentage = false
     @State private var usagePercentageMode: UsagePercentageMode = .remaining
-    @State private var menuBarFillSource: MenuBarFillSource = .none
-    @State private var claudeMenuBarWindowSource: MenuBarWindowSource = .weekly
-    @State private var codexMenuBarWindowSource: MenuBarWindowSource = .weekly
+    @State private var menuBarFillSource: MenuBarFillSource = .auto
+    @State private var menuBarWindowSources: [ProviderID: MenuBarWindowSource] = [:]
     @State private var widgetsEnabled = true
     @State private var showCodexSparkCountersInApp = true
     @State private var showCodexSparkCountersInWidgets = false
     @State private var syncToIPhoneEnabled = false
     @State private var launchAtLogin = false
     @State private var apiSpendPeriod: APISpendPeriod = .currentMonth
-    @State private var openAIKey = ""
-    @State private var anthropicKey = ""
+    @State private var apiKeyDrafts: [APIKeyProvider: String] = [:]
     @State private var savedKeyProviders: Set<APIKeyProvider> = []
     @State private var replacingKeyProviders: Set<APIKeyProvider> = []
     @State private var credentialMessages: [APIKeyProvider: String] = [:]
@@ -218,7 +216,10 @@ struct SettingsView: View {
     /// (live data ticks don't need choreography). The specimen's palette is pinned dark to
     /// match the real menu bar, so it no longer depends on `colorScheme`.
     private var menuBarPreviewKey: String {
-        "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.rawValue)-\(claudeMenuBarWindowSource.rawValue)-\(codexMenuBarWindowSource.rawValue)"
+        let windows = store.registeredProviderOrder.map { id in
+            "\(id.raw)=\(menuBarWindowSources[id, default: .weekly].rawValue)"
+        }.joined(separator: ",")
+        return "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.sortedIdentifier)-\(windows)"
     }
 
     private var menuBarTile: some View {
@@ -269,18 +270,9 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 responsiveControlRow(label: "Show meters") {
-                    Picker("Show meters", selection: $menuBarFillSource) {
-                        ForEach(MenuBarFillSource.allCases, id: \.self) { source in
-                            Text(source.label).tag(source)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    .onChange(of: menuBarFillSource) { _, newValue in
-                        store.setMenuBarFillSource(newValue)
-                    }
+                    menuBarProviderSelectionMenu
                 }
-                SettingsHelpText(text: "Both shows Claude and Codex side by side. None keeps the static Headroom mark.")
+                SettingsHelpText(text: "Auto shows the tightest enabled limit. Select providers to show their meters side by side.")
             }
 
             VStack(alignment: .leading, spacing: 8) {
@@ -288,18 +280,76 @@ struct SettingsView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                menuBarWindowRow(
-                    providerID: .claude,
-                    selection: $claudeMenuBarWindowSource
-                )
-                menuBarWindowRow(
-                    providerID: .codex,
-                    selection: $codexMenuBarWindowSource
-                )
+                ForEach(store.registeredProviderOrder, id: \.self) { providerID in
+                    if store.hasSelectableMenuBarWindows(for: providerID) {
+                        menuBarWindowRow(
+                            providerID: providerID,
+                            selection: menuBarWindowBinding(for: providerID)
+                        )
+                    }
+                }
 
                 SettingsHelpText(text: "Each provider's percentage, fill, and color follow its preferred window.")
             }
         }
+    }
+
+    private var menuBarProviderSelectionMenu: some View {
+        Menu {
+            Button {
+                applyMenuBarFillSource(.auto)
+            } label: {
+                HStack {
+                    Text("Auto")
+                    if menuBarFillSource == .auto { Image(systemName: "checkmark") }
+                }
+            }
+            Divider()
+            ForEach(store.registeredProviderOrder, id: \.self) { providerID in
+                let selected = menuBarFillSource.providerIDs?.contains(providerID) == true
+                Button {
+                    toggleMenuBarProvider(providerID)
+                } label: {
+                    HStack {
+                        Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
+                        if selected { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        } label: {
+            Text(menuBarSelectionLabel)
+        }
+        .fixedSize()
+    }
+
+    private var menuBarSelectionLabel: String {
+        guard let selected = menuBarFillSource.providerIDs else { return "Auto" }
+        let names = store.registeredProviderOrder.filter { selected.contains($0) }.map {
+            store.displayNames[$0] ?? $0.raw.capitalized
+        }
+        return names.isEmpty ? "Auto" : names.joined(separator: " + ")
+    }
+
+    private func toggleMenuBarProvider(_ providerID: ProviderID) {
+        var selected = menuBarFillSource.providerIDs ?? []
+        if selected.contains(providerID) {
+            selected.remove(providerID)
+        } else {
+            selected.insert(providerID)
+        }
+        applyMenuBarFillSource(selected.isEmpty ? .auto : .providers(selected))
+    }
+
+    private func applyMenuBarFillSource(_ source: MenuBarFillSource) {
+        menuBarFillSource = source
+        store.setMenuBarFillSource(source)
+    }
+
+    private func menuBarWindowBinding(for providerID: ProviderID) -> Binding<MenuBarWindowSource> {
+        Binding(
+            get: { menuBarWindowSources[providerID] ?? store.menuBarWindowSource(for: providerID) },
+            set: { menuBarWindowSources[providerID] = $0 }
+        )
     }
 
     private var widgetsTile: some View {
@@ -339,8 +389,11 @@ struct SettingsView: View {
                 }
                 SettingsHelpText(text: "Changes the numbers, words, and meter direction in the app and menu bar.")
             }
-            surfaceSwitchRow(.claudeSubscription)
-            surfaceSwitchRow(.codexSubscription)
+            ForEach(store.registeredProviderOrder, id: \.self) { providerID in
+                if let surface = UsageSurface.subscription(for: providerID) {
+                    surfaceSwitchRow(surface)
+                }
+            }
             Toggle("Show Codex Spark counters in app", isOn: $showCodexSparkCountersInApp)
                 .onChange(of: showCodexSparkCountersInApp) { _, newValue in
                     store.setShowCodexSparkCountersInApp(newValue)
@@ -350,20 +403,18 @@ struct SettingsView: View {
 
     private var apiSpendTile: some View {
         settingsTile("API Spend") {
-            apiProviderRows(
-                surface: .anthropicAPI,
-                provider: .anthropic,
-                title: "Anthropic admin key",
-                placeholder: "sk-ant-admin…",
-                text: $anthropicKey
-            )
-            apiProviderRows(
-                surface: .openAIAPI,
-                provider: .openAI,
-                title: "OpenAI admin key",
-                placeholder: "sk-…",
-                text: $openAIKey
-            )
+            ForEach(store.registeredAPISpendProviderOrder, id: \.self) { providerID in
+                if let provider = APIKeyProvider.allCases.first(where: { $0.providerID == providerID }),
+                   let surface = UsageSurface.api(for: providerID) {
+                    apiProviderRows(
+                        surface: surface,
+                        provider: provider,
+                        title: provider.adminKeyTitle,
+                        placeholder: provider.keyPlaceholder,
+                        text: apiKeyDraftBinding(for: provider)
+                    )
+                }
+            }
             // Period trails the provider rows it modifies (it used to lead them).
             responsiveControlRow(label: "Period") {
                 Picker("Period", selection: $apiSpendPeriod) {
@@ -450,14 +501,15 @@ struct SettingsView: View {
 
     private func providerWindowLabel(_ providerID: ProviderID) -> some View {
         ZStack(alignment: .leading) {
-            providerWindowLabelContent(.claude).hidden()
-            providerWindowLabelContent(.codex).hidden()
+            ForEach(store.registeredProviderOrder, id: \.self) { id in
+                providerWindowLabelContent(id).hidden()
+            }
             providerWindowLabelContent(providerID)
         }
     }
 
-    /// Both rows reserve the wider provider label so their flexible picker slots receive
-    /// identical proposals at compact window widths.
+    /// Every row reserves the widest registered provider label so flexible picker slots
+    /// receive identical proposals at compact window widths.
     private func providerWindowLabelContent(_ providerID: ProviderID) -> some View {
         HStack(spacing: 7) {
             ProviderLogoView(providerID: providerID, size: 15)
@@ -593,6 +645,13 @@ struct SettingsView: View {
         )
     }
 
+    private func apiKeyDraftBinding(for provider: APIKeyProvider) -> Binding<String> {
+        Binding(
+            get: { apiKeyDrafts[provider, default: ""] },
+            set: { apiKeyDrafts[provider] = $0 }
+        )
+    }
+
     private func configuredAPIKeyRow(provider: APIKeyProvider, title: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -723,8 +782,9 @@ struct SettingsView: View {
         showMenuBarPercentage = store.showMenuBarPercentage
         usagePercentageMode = store.usagePercentageMode
         menuBarFillSource = store.menuBarFillSource
-        claudeMenuBarWindowSource = store.menuBarWindowSource(for: .claude)
-        codexMenuBarWindowSource = store.menuBarWindowSource(for: .codex)
+        menuBarWindowSources = Dictionary(uniqueKeysWithValues: store.registeredProviderOrder.map {
+            ($0, store.menuBarWindowSource(for: $0))
+        })
         widgetsEnabled = store.widgetsEnabled
         showCodexSparkCountersInApp = store.showCodexSparkCountersInApp
         showCodexSparkCountersInWidgets = store.showCodexSparkCountersInWidgets
@@ -779,10 +839,7 @@ struct SettingsView: View {
     }
 
     private func clearField(for provider: APIKeyProvider) {
-        switch provider {
-        case .anthropic: anthropicKey = ""
-        case .openAI: openAIKey = ""
-        }
+        apiKeyDrafts[provider] = ""
     }
 
     /// Success feedback auto-dismisses on the popover's Connected-chip cadence (4s).
@@ -796,6 +853,22 @@ struct SettingsView: View {
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
             credentialMessages[provider] = nil
+        }
+    }
+}
+
+private extension APIKeyProvider {
+    var adminKeyTitle: String {
+        switch self {
+        case .anthropic: return "Anthropic admin key"
+        case .openAI: return "OpenAI admin key"
+        }
+    }
+
+    var keyPlaceholder: String {
+        switch self {
+        case .anthropic: return "sk-ant-admin…"
+        case .openAI: return "sk-…"
         }
     }
 }

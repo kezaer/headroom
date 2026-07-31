@@ -44,8 +44,8 @@ public struct MenuBarSummary: Sendable, Equatable {
     }
 }
 
-/// One compact status unit for the menu bar. Single-provider modes render one meter;
-/// `Both` renders one per enabled provider so Claude and Codex can be scanned together.
+/// One compact status unit for the menu bar. Automatic mode renders one summary;
+/// an explicit provider selection renders one meter per provider.
 public struct MenuBarMeter: Sendable, Equatable {
     public let summary: MenuBarSummary
     /// 0...1 fill for the vessel, or nil for the static decorative level.
@@ -60,7 +60,9 @@ public struct MenuBarMeter: Sendable, Equatable {
 private struct ResolvedMenuBarWindow {
     let id: ProviderID
     let window: UsageWindow
-    let source: MenuBarWindowSource
+    let kind: WindowKind
+
+    var shortLabel: String { kind.shortLabel.lowercased() }
 }
 
 public enum AccountRemovalState: Sendable, Equatable {
@@ -177,11 +179,11 @@ public final class UsageStore {
         })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
         self.usagePercentageMode = preferences.usagePercentageMode
-        self.menuBarFillSource = preferences.menuBarFillSource
-        self.menuBarWindowSources = [
-            .claude: preferences.menuBarWindowSource(for: .claude),
-            .codex: preferences.menuBarWindowSource(for: .codex),
-        ]
+        let registeredProviderIDs = providers.map(\.id).uniqued()
+        self.menuBarFillSource = preferences.menuBarFillSource.filtered(to: registeredProviderIDs)
+        self.menuBarWindowSources = Dictionary(uniqueKeysWithValues: registeredProviderIDs.map {
+            ($0, preferences.menuBarWindowSource(for: $0))
+        })
         self.showCodexSparkCountersInApp = preferences.showCodexSparkCountersInApp
         self.showCodexSparkCountersInWidgets = preferences.showCodexSparkCountersInWidgets
         self.enabledSurfaces = Set(UsageSurface.allCases.filter { preferences.isSurfaceEnabled($0) })
@@ -227,17 +229,28 @@ public final class UsageStore {
     }
 
     public var providerOrder: [ProviderID] {
-        providers.map(\.id).uniqued().filter { id in
+        registeredProviderOrder.filter { id in
             guard let surface = UsageSurface.subscription(for: id) else { return false }
             return enabledSurfaces.contains(surface)
         }
     }
 
+    /// Every composed subscription provider, including surfaces currently switched off.
+    /// Settings/account management use this registry order; display surfaces use
+    /// `providerOrder`, which additionally applies the user's surface toggles.
+    public var registeredProviderOrder: [ProviderID] {
+        providers.map(\.id).uniqued()
+    }
+
     public var apiSpendProviderOrder: [ProviderID] {
-        apiSpendProviders.map(\.id).filter { id in
+        registeredAPISpendProviderOrder.filter { id in
             guard let surface = UsageSurface.api(for: id) else { return false }
             return enabledSurfaces.contains(surface)
         }
+    }
+
+    public var registeredAPISpendProviderOrder: [ProviderID] {
+        apiSpendProviders.map(\.id).uniqued()
     }
 
     // MARK: - Accounts
@@ -386,8 +399,9 @@ public final class UsageStore {
     }
 
     public func setMenuBarFillSource(_ source: MenuBarFillSource) {
-        preferences.menuBarFillSource = source
-        menuBarFillSource = source
+        let filtered = source.filtered(to: registeredProviderOrder)
+        preferences.menuBarFillSource = filtered
+        menuBarFillSource = filtered
     }
 
     public func menuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource {
@@ -402,7 +416,22 @@ public final class UsageStore {
     /// The source currently rendered after availability fallback. Settings compares
     /// this with the preferred source so a provider removing a window is never silent.
     public func resolvedMenuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource? {
-        menuBarWindow(for: id)?.source
+        guard let kind = menuBarWindow(for: id)?.kind else { return nil }
+        return MenuBarWindowSource.allCases.first { $0.kind == kind }
+    }
+
+    public func resolvedMenuBarWindowKind(for id: ProviderID) -> WindowKind? {
+        menuBarWindow(for: id)?.kind
+    }
+
+    public func hasSelectableMenuBarWindows(for id: ProviderID) -> Bool {
+        let windows = snapshot(for: id).windows
+        // Pending/no-data providers retain the existing selector until their real
+        // shape is known; a live billing-period-only provider then hides it.
+        guard !windows.isEmpty else { return true }
+        return windows.contains { window in
+            MenuBarWindowSource.allCases.contains { $0.kind == window.kind }
+        }
     }
 
     public func setShowCodexSparkCountersInApp(_ enabled: Bool) {
@@ -422,23 +451,25 @@ public final class UsageStore {
     /// per Settings). Reads
     /// from the last-known windows regardless of
     /// freshness, so a transient failure doesn't make the pill jump. Nil when the
-    /// source is `.none` or that provider has no supported window yet — the label then
-    /// falls back to a static decorative fill.
+    /// source is automatic or that provider has no supported window yet — the label
+    /// then falls back to a static decorative fill.
     public var menuBarFill: Double? {
-        guard let id = menuBarFillSource.providerID,
+        guard case .providers(let ids) = menuBarFillSource,
+              ids.count == 1,
+              let id = ids.first,
               let resolved = menuBarWindow(for: id)
         else { return nil }
         return usagePercentageMode.fraction(for: resolved.window)
     }
 
-    /// Render-ready menu bar meters. In `Both` mode each enabled provider gets its own
-    /// vessel/percentage pair; other modes keep the existing single compact summary.
+    /// Render-ready menu bar meters. Explicit selection gives each chosen provider its
+    /// own vessel/percentage pair; automatic mode keeps the existing compact summary.
     public var menuBarMeters: [MenuBarMeter] {
-        guard menuBarFillSource == .both else {
+        guard case .providers(let selected) = menuBarFillSource else {
             return [MenuBarMeter(summary: menuBarSummary, fill: menuBarFill)]
         }
 
-        let meters = providerOrder.map { providerMenuBarMeter(for: $0) }
+        let meters = providerOrder.filter { selected.contains($0) }.map { providerMenuBarMeter(for: $0) }
         return meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
     }
 
@@ -785,7 +816,7 @@ public final class UsageStore {
         return MenuBarSummary(
             text: "\(pct)%",
             providerID: best.id,
-            detail: "\(name) \(best.source.shortLabel)",
+            detail: "\(name) \(best.shortLabel)",
             isNeutral: false,
             percentageMode: usagePercentageMode,
             severity: best.window.severity,
@@ -794,10 +825,14 @@ public final class UsageStore {
     }
 
     private func menuBarBestWindow() -> ResolvedMenuBarWindow? {
-        if let id = menuBarFillSource.providerID {
-            return menuBarWindow(for: id)
+        let candidateIDs: [ProviderID]
+        switch menuBarFillSource {
+        case .auto:
+            candidateIDs = providerOrder
+        case .providers(let selected):
+            candidateIDs = providerOrder.filter { selected.contains($0) }
         }
-        return providerOrder.compactMap { menuBarWindow(for: $0) }
+        return candidateIDs.compactMap { menuBarWindow(for: $0) }
             .min { $0.window.percentRemaining < $1.window.percentRemaining }
     }
 
@@ -824,7 +859,7 @@ public final class UsageStore {
             summary: MenuBarSummary(
                 text: "\(pct)%",
                 providerID: id,
-                detail: "\(name) \(resolved.source.shortLabel)",
+                detail: "\(name) \(resolved.shortLabel)",
                 isNeutral: false,
                 percentageMode: usagePercentageMode,
                 severity: resolved.window.severity,
@@ -853,10 +888,13 @@ public final class UsageStore {
         let candidates = [preferred] + MenuBarWindowSource.allCases.filter { $0 != preferred }
         for source in candidates {
             if let window = snapshot.windows.first(where: { $0.kind == source.kind }) {
-                return ResolvedMenuBarWindow(id: id, window: window, source: source)
+                return ResolvedMenuBarWindow(id: id, window: window, kind: window.kind)
             }
         }
-        return nil
+        guard let window = snapshot.windows.min(by: { $0.percentRemaining < $1.percentRemaining }) else {
+            return nil
+        }
+        return ResolvedMenuBarWindow(id: id, window: window, kind: window.kind)
     }
 
 }
