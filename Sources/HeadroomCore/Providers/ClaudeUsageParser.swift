@@ -27,6 +27,15 @@ public enum ClaudeUsageParser {
 
         var i = 0
         while i < lines.count {
+            // Print-mode reports (`claude -p "/usage"`) carry a whole window on one
+            // line: "Current week (Fable): 7% used · resets Aug 6 at 10am (…)". The
+            // interactive panel never puts the percent on the label line, so this
+            // shape cannot collide with the TUI scan below.
+            if let inline = inlineWindow(in: lines[i]) {
+                byKind[inline.kind] = inline
+                i += 1
+                continue
+            }
             guard let kind = windowKind(for: lines[i]) else { i += 1; continue }
             // Scan the next few lines for this window's percent + reset text.
             var percent: Double?
@@ -62,6 +71,18 @@ public enum ClaudeUsageParser {
         let tier = String(m.1).capitalized
         if let mult = m.2 { return "\(tier) \(String(mult).lowercased())" }
         return tier
+    }
+
+    /// Parses the single-line window shape of the non-interactive `/usage` report:
+    /// "<label>: N% used · resets <when>". Returns nil for every interactive-panel
+    /// line (label lines carry no percent; bar lines carry no window label).
+    static func inlineWindow(in line: String) -> ParsedUsageWindow? {
+        guard let colon = line.firstIndex(of: ":"),
+              let kind = windowKind(for: String(line[..<colon]))
+        else { return nil }
+        let rest = String(line[line.index(after: colon)...])
+        guard let percent = percentUsed(in: rest) else { return nil }
+        return ParsedUsageWindow(kind: kind, percentUsed: percent, resetLabel: resetText(in: rest))
     }
 
     // MARK: line classifiers

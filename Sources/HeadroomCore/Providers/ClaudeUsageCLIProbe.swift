@@ -12,7 +12,11 @@ public protocol ClaudeUsageSource: Sendable {
 /// Outcome of a capture attempt — lets the provider distinguish "no CLI" from a
 /// transient read failure so it can show the right degrade message.
 public enum ClaudePanelResult: Sendable, Equatable {
-    case panel(String)
+    /// `text` is the captured usage report (interactive panel or print-mode report).
+    /// `planHint` is the subscription tier from `claude auth status --json` — the
+    /// print-mode report omits the "· Claude Max" header the panel carries, so the
+    /// provider falls back to this when the text yields no tier.
+    case panel(text: String, planHint: String?)
     /// The CLI booted into a first-run screen (theme picker / login-method selector) —
     /// this config home has no signed-in account. Typed here, at the layer that saw
     /// the screen, so the provider never re-derives it from marker strings.
@@ -80,10 +84,11 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         // Run the blocking pty work off the cooperative pool.
         return await withCheckedContinuation { continuation in
             Thread.detachNewThread { [environmentOverrides] in
-                switch Self.runAuthStatus(
+                let auth = Self.runAuthCheck(
                     claudePath: claudePath,
                     environmentOverrides: environmentOverrides
-                ) {
+                )
+                switch auth.status {
                 case .loggedOut:
                     continuation.resume(returning: .loginRequired)
                     return
@@ -93,12 +98,26 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
                 case .loggedIn:
                     break
                 }
+                // Print-first capture: `claude -p "/usage"` writes the settled report
+                // in one shot — no TUI repaints to garble labels and no partial paint
+                // for the separately fetched model rows, which is the failure class
+                // that intermittently dropped "Weekly (Fable)". Any miss (old CLI,
+                // unparseable output, timeout) falls back to the PTY panel unchanged.
+                if let report = Self.runPrintUsage(
+                    claudePath: claudePath,
+                    workingDirectory: workingDirectory,
+                    environmentOverrides: environmentOverrides
+                ) {
+                    continuation.resume(returning: .panel(text: report, planHint: auth.planHint))
+                    return
+                }
                 let result = Self.runBlocking(
                     claudePath: claudePath,
                     workingDirectory: workingDirectory,
                     environmentOverrides: environmentOverrides,
                     boot: bootTimeout,
-                    panel: panelTimeout
+                    panel: panelTimeout,
+                    planHint: auth.planHint
                 )
                 continuation.resume(returning: result)
             }
@@ -134,39 +153,127 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         return loggedIn ? .loggedIn : .loggedOut
     }
 
-    private static func runAuthStatus(
+    /// The subscription tier from `auth status --json` ("max" → "Max"), mapped
+    /// through an allowlist so an unknown future value never becomes a garbled pill.
+    static func subscriptionPlanHint(_ data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["subscriptionType"] as? String
+        else { return nil }
+        switch type.lowercased() {
+        case "max": return "Max"
+        case "pro": return "Pro"
+        case "free": return "Free"
+        case "team": return "Team"
+        case "enterprise": return "Enterprise"
+        default: return nil
+        }
+    }
+
+    struct AuthCheck: Sendable {
+        let status: ClaudeAuthStatus
+        let planHint: String?
+    }
+
+    private static func runAuthCheck(
         claudePath: String,
         environmentOverrides: [String: String]
-    ) -> ClaudeAuthStatus {
+    ) -> AuthCheck {
+        guard let data = runForOutput(
+            claudePath: claudePath,
+            arguments: ["auth", "status", "--json"],
+            environmentOverrides: environmentOverrides,
+            deadline: 5
+        ) else {
+            return AuthCheck(status: .unsupported, planHint: nil)
+        }
+        return AuthCheck(status: classifyAuthStatus(data), planHint: subscriptionPlanHint(data))
+    }
+
+    /// Gate for the print-first capture. 2.1.217 is the oldest CLI verified to run
+    /// `/usage` locally under `-p`; an unverified older build could forward it to the
+    /// model as a prompt — spending real usage every poll — so anything below the
+    /// floor (or unparseable) stays on the PTY path.
+    static func printUsageSupported(versionOutput: String) -> Bool {
+        guard let m = versionOutput.firstMatch(of: /(\d+)\.(\d+)\.(\d+)/),
+              let major = Int(m.1), let minor = Int(m.2), let patch = Int(m.3)
+        else { return false }
+        return (major, minor, patch) >= (2, 1, 217)
+    }
+
+    /// One-shot non-interactive capture: `claude -p "/usage"` prints the full settled
+    /// usage report (same compliant principle — the official client makes the request,
+    /// this reads its stdout). Returns nil unless the output parses into at least one
+    /// usage window, so a cost report, an error, or model chatter can never be
+    /// mistaken for the panel.
+    private static func runPrintUsage(
+        claudePath: String,
+        workingDirectory: String,
+        environmentOverrides: [String: String]
+    ) -> String? {
+        guard let versionData = runForOutput(
+            claudePath: claudePath,
+            arguments: ["--version"],
+            environmentOverrides: environmentOverrides,
+            deadline: 5
+        ), printUsageSupported(versionOutput: String(decoding: versionData, as: UTF8.self))
+        else { return nil }
+        guard let data = runForOutput(
+            claudePath: claudePath,
+            arguments: ["-p", "/usage", "--no-session-persistence"],
+            environmentOverrides: environmentOverrides,
+            workingDirectory: workingDirectory,
+            deadline: 20
+        ) else { return nil }
+        let text = ANSI.strip(String(decoding: data, as: UTF8.self))
+        return ClaudeUsageParser.parse(text).isEmpty ? nil : text
+    }
+
+    /// Spawn `claude` with pipes (no pty), enforce a hard deadline, and return stdout.
+    /// A timeout returns nil rather than partial output — callers treat that as "this
+    /// surface is unavailable" and degrade. Output is read after exit, which is safe
+    /// for these small reports; a pathological giant write would stall the child into
+    /// the deadline kill and degrade the same way.
+    private static func runForOutput(
+        claudePath: String,
+        arguments: [String],
+        environmentOverrides: [String: String],
+        workingDirectory: String? = nil,
+        deadline seconds: TimeInterval
+    ) -> Data? {
         let process = Process()
         let output = Pipe()
+        let cwd = workingDirectory ?? FileManager.default.currentDirectoryPath
         process.executableURL = URL(fileURLWithPath: claudePath)
-        process.arguments = ["auth", "status", "--json"]
+        process.arguments = arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
         process.environment = environment(
             inherited: ProcessInfo.processInfo.environment,
             overrides: environmentOverrides,
             loginPath: loginPath(),
-            workingDirectory: FileManager.default.currentDirectoryPath
+            workingDirectory: cwd
         )
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()
         } catch {
-            return .unsupported
+            return nil
         }
 
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(seconds)
         while process.isRunning, Date() < deadline { usleep(20_000) }
         if process.isRunning {
             process.terminate()
             let terminationDeadline = Date().addingTimeInterval(1)
             while process.isRunning, Date() < terminationDeadline { usleep(20_000) }
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            process.waitUntilExit()
+            return nil
         }
         process.waitUntilExit()
-        return classifyAuthStatus(output.fileHandleForReading.readDataToEndOfFile())
+        return output.fileHandleForReading.readDataToEndOfFile()
     }
 
     // MARK: pty mechanics
@@ -176,7 +283,8 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         workingDirectory: String,
         environmentOverrides: [String: String],
         boot: TimeInterval,
-        panel: TimeInterval
+        panel: TimeInterval,
+        planHint: String? = nil
     ) -> ClaudePanelResult {
         var master: Int32 = -1
         var slave: Int32 = -1
@@ -284,7 +392,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         teardown()
 
         let captured = ANSI.strip(String(decoding: buffer, as: UTF8.self))
-        return captured.isEmpty ? .transientCapture : .panel(captured)
+        return captured.isEmpty ? .transientCapture : .panel(text: captured, planHint: planHint)
     }
 
     /// The one marker list for the CLI's first-run screens — shared by the boot bail

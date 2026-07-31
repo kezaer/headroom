@@ -29,6 +29,23 @@ Resets Jul 2 at 10am (America/Los_Angeles)
 What's contributing to your limits usage?
 """
 
+/// A real capture of `claude -p "/usage"` — the print-mode report the probe now
+/// prefers. Each window ships whole on one line, with no TUI repaints to survive.
+private let printUsageReportFixture = """
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 6% used · resets Jul 31 at 5:20pm (America/Los_Angeles)
+Current week (all models): 4% used · resets Aug 6 at 10am (America/Los_Angeles)
+Current week (Fable): 7% used · resets Aug 6 at 10am (America/Los_Angeles)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 27 requests · 2 sessions
+  Top skills: /compound-engineering:ce-plan 24%
+  Top plugins: compound-engineering 24%
+"""
+
 struct ClaudeUsageParserTests {
     @Test func parsesSettledWindows() {
         let windows = ClaudeUsageParser.parse(usagePanelFixture)
@@ -84,6 +101,35 @@ struct ClaudeUsageParserTests {
         #expect(window?.resetLabel == "Resets Jul 9 at 9:59am")
     }
 
+    @Test func parsesPrintModeReport() {
+        let windows = ClaudeUsageParser.parse(printUsageReportFixture)
+        #expect(windows.count == 3)
+        #expect(windows[0].kind == .fiveHour)
+        #expect(windows[0].percentUsed == 6)
+        #expect(windows[0].resetLabel == "Resets Jul 31 at 5:20pm")
+
+        #expect(windows[1].kind == .weekly)
+        #expect(windows[1].percentUsed == 4)
+        #expect(windows[1].resetLabel == "Resets Aug 6 at 10am")
+
+        #expect(windows[2].kind == .other("Weekly (Fable)"))
+        #expect(windows[2].percentUsed == 7)
+        #expect(windows[2].resetLabel == "Resets Aug 6 at 10am")
+    }
+
+    @Test func printModeCostReportParsesEmpty() {
+        // `-p "/usage"` on an API-key (non-subscription) login prints a cost report
+        // instead — it must never be mistaken for a usage capture.
+        let costReport = """
+        Total cost:            $0.0000
+        Total duration (API):  0s
+        Total duration (wall): 0s
+        Total code changes:    0 lines added, 0 lines removed
+        Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+        """
+        #expect(ClaudeUsageParser.parse(costReport).isEmpty)
+    }
+
     @Test func extractsPlanTierFromHeader() {
         // The tier appears in the panel header line, e.g. "… · Claude Max".
         #expect(ClaudeUsageParser.plan(in: "Fable 5 with high effort · Claude Max  ~/dir") == "Max")
@@ -106,7 +152,7 @@ struct ClaudeProviderTests {
     }
 
     @Test func panelBecomesLiveSnapshot() async {
-        let snap = await provider(.panel(usagePanelFixture)).fetchSnapshot()
+        let snap = await provider(.panel(text: usagePanelFixture, planHint: nil)).fetchSnapshot()
         #expect(snap.freshness == .live)
         #expect(snap.windows.count == 3)
         // percentUsed 100 -> 0 remaining; 38 -> 62 remaining.
@@ -122,8 +168,52 @@ struct ClaudeProviderTests {
         ████ 16% used
         Resets 8:10pm (America/Los_Angeles)
         """
-        let snap = await provider(.panel(panel)).fetchSnapshot()
+        let snap = await provider(.panel(text: panel, planHint: nil)).fetchSnapshot()
         #expect(snap.planLabel == "Max")
+    }
+
+    @Test func printReportBecomesLiveSnapshotWithPlanHint() async {
+        // The print-mode report has no "· Claude Max" header, so the tier comes from
+        // the probe's auth-status hint.
+        let snap = await provider(.panel(text: printUsageReportFixture, planHint: "Max")).fetchSnapshot()
+        #expect(snap.freshness == .live)
+        #expect(snap.windows.count == 3)
+        #expect(snap.windows.first { $0.kind == .other("Weekly (Fable)") }?.percentRemaining == 93)
+        #expect(snap.planLabel == "Max")
+    }
+
+    @Test func panelHeaderTierWinsOverPlanHint() async {
+        // The interactive panel's own header carries multiplier fidelity ("Max 20x")
+        // that auth-status lacks — text wins when both are present.
+        let panel = """
+        Opus 4.8 · Claude Max 20x
+        Current session
+        ████ 16% used
+        Resets 8:10pm (America/Los_Angeles)
+        """
+        let snap = await provider(.panel(text: panel, planHint: "Max")).fetchSnapshot()
+        #expect(snap.planLabel == "Max 20x")
+    }
+
+    @Test func printUsageVersionGate() {
+        // 2.1.217 is the oldest CLI verified to dispatch /usage locally in print mode.
+        #expect(ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "2.1.217 (Claude Code)"))
+        #expect(ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "2.1.220 (Claude Code)"))
+        #expect(ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "2.2.0 (Claude Code)"))
+        #expect(ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "3.0.0 (Claude Code)"))
+        #expect(!ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "2.1.216 (Claude Code)"))
+        #expect(!ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "1.0.98 (Claude Code)"))
+        #expect(!ClaudeUsageCLIProbe.printUsageSupported(versionOutput: ""))
+        #expect(!ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "not a version"))
+    }
+
+    @Test func subscriptionPlanHintMapsKnownTiers() {
+        #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"subscriptionType":"max"}"#.utf8)) == "Max")
+        #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"subscriptionType":"pro"}"#.utf8)) == "Pro")
+        // Unknown tiers and malformed JSON fail safe to no pill.
+        #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"subscriptionType":"mystery"}"#.utf8)) == nil)
+        #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data("garbage".utf8)) == nil)
+        #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"loggedIn":true}"#.utf8)) == nil)
     }
 
     @Test func missingCLIDegradesToNotLoggedIn() async {

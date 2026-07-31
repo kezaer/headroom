@@ -67,9 +67,10 @@ enum Entry {
                 print("RESULT: workspace trust required")
             case .unknownUI:
                 print("RESULT: unrecognized Claude surface (no input sent)")
-            case .panel(let text):
+            case .panel(let text, let planHint):
                 let windows = ClaudeUsageParser.parse(text)
-                print("RESULT: parsed \(windows.count) window(s)")
+                let plan = ClaudeUsageParser.plan(in: text) ?? planHint
+                print("RESULT: parsed \(windows.count) window(s)\(plan.map { " · plan \($0)" } ?? "")")
                 for w in windows {
                     print("  • \(w.kind)  \(Int(w.percentUsed))% used  reset=\(w.resetLabel == nil ? "absent" : "present")")
                 }
