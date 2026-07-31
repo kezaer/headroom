@@ -130,7 +130,7 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
     public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
         let key = Key.surfaceEnabled(surface)
         guard defaults.object(forKey: key) != nil else {
-            return surface.isSubscription
+            return surface.isEnabledByDefault
         }
         return defaults.bool(forKey: key)
     }

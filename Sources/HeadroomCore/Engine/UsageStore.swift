@@ -152,7 +152,10 @@ public final class UsageStore {
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
         self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
-        self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
+        self.apiSpendDisplayNames = Dictionary(
+            apiSpendProviders.map { ($0.id, $0.displayName) },
+            uniquingKeysWith: { first, _ in first }
+        )
         // Uniquing, never trapping: a duplicated persisted account entry must degrade
         // to one row, not a launch crash loop (code-review finding).
         let cachedSnapshots = continuityCache?.load() ?? [:]
@@ -224,11 +227,17 @@ public final class UsageStore {
     }
 
     public var providerOrder: [ProviderID] {
-        providers.map(\.id).uniqued().filter { enabledSurfaces.contains(subscriptionSurface(for: $0)) }
+        providers.map(\.id).uniqued().filter { id in
+            guard let surface = UsageSurface.subscription(for: id) else { return false }
+            return enabledSurfaces.contains(surface)
+        }
     }
 
     public var apiSpendProviderOrder: [ProviderID] {
-        apiSpendProviders.map(\.id).filter { enabledSurfaces.contains(apiSurface(for: $0)) }
+        apiSpendProviders.map(\.id).filter { id in
+            guard let surface = UsageSurface.api(for: id) else { return false }
+            return enabledSurfaces.contains(surface)
+        }
     }
 
     // MARK: - Accounts
@@ -429,8 +438,7 @@ public final class UsageStore {
             return [MenuBarMeter(summary: menuBarSummary, fill: menuBarFill)]
         }
 
-        let ids = [ProviderID.claude, .codex].filter { providerOrder.contains($0) }
-        let meters = ids.map { providerMenuBarMeter(for: $0) }
+        let meters = providerOrder.map { providerMenuBarMeter(for: $0) }
         return meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
     }
 
@@ -520,8 +528,8 @@ public final class UsageStore {
 
     private func refreshSubscriptions(source: RefreshSource = .manual, exportAfter: Bool = true) async {
         let candidates = providers.filter { provider in
-            enabledSurfaces.contains(subscriptionSurface(for: provider.id))
-                && !shouldSkipOnTimer(provider: provider, source: source)
+            guard let surface = UsageSurface.subscription(for: provider.id) else { return false }
+            return enabledSurfaces.contains(surface) && !shouldSkipOnTimer(provider: provider, source: source)
         }
         let (stream, continuation) = AsyncStream.makeStream(
             of: (AccountKey, UsageSnapshot).self,
@@ -562,7 +570,9 @@ public final class UsageStore {
         let spendPeriod = preferences.apiSpendPeriod
         let spendResults = await withTaskGroup(of: (ProviderID, APISpendSnapshot).self) { group in
             for provider in apiSpendProviders {
-                guard enabledSurfaces.contains(apiSurface(for: provider.id)) else { continue }
+                guard let surface = UsageSurface.api(for: provider.id),
+                      enabledSurfaces.contains(surface)
+                else { continue }
                 group.addTask { (provider.id, await provider.fetchSpend(period: spendPeriod)) }
             }
             var acc: [(ProviderID, APISpendSnapshot)] = []
@@ -594,14 +604,15 @@ public final class UsageStore {
     private func isNeverSignedIn(_ reason: FailureReason) -> Bool {
         if case .notLoggedIn = reason { return true }
         guard case .providerSetup(let outcome) = reason else { return false }
-        return outcome == .claudeLoginRequired || outcome == .codexAuthAbsent
+        return outcome.isNeverSignedIn
     }
 
     private func fetchAccountIfEligible(_ key: AccountKey) async {
         guard let provider = providers.first(where: { $0.accountKey == key }),
               accounts(for: key.providerID).contains(where: { $0.key == key }),
               !removingAccounts.contains(key),
-              enabledSurfaces.contains(subscriptionSurface(for: key.providerID))
+              let surface = UsageSurface.subscription(for: key.providerID),
+              enabledSurfaces.contains(surface)
         else { return }
         let fresh = await provider.fetchSnapshot()
         merge(key: key, fresh: fresh)
@@ -848,13 +859,6 @@ public final class UsageStore {
         return nil
     }
 
-    private func subscriptionSurface(for id: ProviderID) -> UsageSurface {
-        id == .claude ? .claudeSubscription : .codexSubscription
-    }
-
-    private func apiSurface(for id: ProviderID) -> UsageSurface {
-        id == .claude ? .anthropicAPI : .openAIAPI
-    }
 }
 
 private extension Array where Element == ProviderID {

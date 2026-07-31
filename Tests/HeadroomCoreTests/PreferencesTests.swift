@@ -141,13 +141,30 @@ struct PreferencesTests {
         let prefs = Preferences(defaults: freshDefaults())
         #expect(prefs.isSurfaceEnabled(.claudeSubscription))
         #expect(prefs.isSurfaceEnabled(.codexSubscription))
+        #expect(!prefs.isSurfaceEnabled(.grokSubscription))
+        #expect(!prefs.isSurfaceEnabled(.cursorSubscription))
         #expect(!prefs.isSurfaceEnabled(.anthropicAPI))
         #expect(!prefs.isSurfaceEnabled(.openAIAPI))
+        #expect(!prefs.isSurfaceEnabled(.xaiAPI))
+        #expect(!prefs.isSurfaceEnabled(.cursorAPI))
 
         prefs.setSurfaceEnabled(false, for: .claudeSubscription)
         prefs.setSurfaceEnabled(true, for: .openAIAPI)
         #expect(!prefs.isSurfaceEnabled(.claudeSubscription))
         #expect(prefs.isSurfaceEnabled(.openAIAPI))
+    }
+
+    @Test func usageSurfaceRawValuesRemainStable() {
+        #expect(UsageSurface.allCases.map(\.rawValue) == [
+            "claudeSubscription",
+            "codexSubscription",
+            "grokSubscription",
+            "cursorSubscription",
+            "anthropicAPI",
+            "openAIAPI",
+            "xaiAPI",
+            "cursorAPI",
+        ])
     }
 
     @Test func apiSpendPeriodDefaultsAndPersists() {

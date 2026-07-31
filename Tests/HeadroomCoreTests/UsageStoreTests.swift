@@ -1206,6 +1206,32 @@ struct UsageStoreTests {
         #expect(preferences.isSurfaceEnabled(.openAIAPI))
     }
 
+    @Test func unknownSubscriptionProviderIsExcludedInsteadOfUsingCodexSurface() {
+        let unknown = ProviderID("future-provider")
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .codexSubscription)
+        let store = UsageStore(
+            providers: [StubProvider(id: unknown, displayName: "Future", snapshot: .pending(for: unknown))],
+            preferences: preferences
+        )
+
+        #expect(store.providerOrder.isEmpty)
+    }
+
+    @Test func grokSubscriptionUsesItsOwnSurfaceToggle() {
+        let preferences = freshPreferences()
+        let provider = StubProvider(
+            id: .grok,
+            displayName: "Grok",
+            snapshot: .pending(for: .grok)
+        )
+        let store = UsageStore(providers: [provider], preferences: preferences)
+
+        #expect(store.providerOrder.isEmpty)
+        store.setSurfaceEnabled(true, for: .grokSubscription)
+        #expect(store.providerOrder == [.grok])
+    }
+
     @Test func apiSpendOnlyRefreshDoesNotFetchSubscriptions() async {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

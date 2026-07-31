@@ -6,6 +6,8 @@ public struct ProviderID: Hashable, Sendable, Codable, CustomStringConvertible {
 
     public static let claude = ProviderID("claude")
     public static let codex = ProviderID("codex")
+    public static let grok = ProviderID("grok")
+    public static let cursor = ProviderID("cursor")
 
     public var description: String { raw }
 }

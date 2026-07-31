@@ -287,13 +287,19 @@ public struct UsageSnapshot: Sendable, Equatable {
 public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
     case claudeSubscription
     case codexSubscription
+    case grokSubscription
+    case cursorSubscription
     case anthropicAPI
     case openAIAPI
+    case xaiAPI
+    case cursorAPI
 
     public var providerID: ProviderID {
         switch self {
         case .claudeSubscription, .anthropicAPI: return .claude
         case .codexSubscription, .openAIAPI: return .codex
+        case .grokSubscription, .xaiAPI: return .grok
+        case .cursorSubscription, .cursorAPI: return .cursor
         }
     }
 
@@ -301,16 +307,39 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
         switch self {
         case .claudeSubscription: return "Claude subscription"
         case .codexSubscription: return "Codex subscription"
+        case .grokSubscription: return "Grok subscription"
+        case .cursorSubscription: return "Cursor subscription"
         case .anthropicAPI: return "Anthropic API spend"
         case .openAIAPI: return "OpenAI API spend"
+        case .xaiAPI: return "xAI API spend"
+        case .cursorAPI: return "Cursor on-demand spend"
         }
     }
 
     public var isSubscription: Bool {
         switch self {
-        case .claudeSubscription, .codexSubscription: return true
-        case .anthropicAPI, .openAIAPI: return false
+        case .claudeSubscription, .codexSubscription, .grokSubscription, .cursorSubscription:
+            return true
+        case .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
+            return false
         }
+    }
+
+    public var isEnabledByDefault: Bool {
+        switch self {
+        case .claudeSubscription, .codexSubscription:
+            return true
+        case .grokSubscription, .cursorSubscription, .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
+            return false
+        }
+    }
+
+    public static func subscription(for providerID: ProviderID) -> UsageSurface? {
+        allCases.first { $0.providerID == providerID && $0.isSubscription }
+    }
+
+    public static func api(for providerID: ProviderID) -> UsageSurface? {
+        allCases.first { $0.providerID == providerID && !$0.isSubscription }
     }
 }
 

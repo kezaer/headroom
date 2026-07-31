@@ -46,6 +46,17 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         }
     }
 
+    /// True only when the account has never completed its first official CLI login.
+    /// Timer backoff keys off this typed state rather than enumerating providers.
+    public var isNeverSignedIn: Bool {
+        switch self {
+        case .claudeLoginRequired, .codexAuthAbsent:
+            true
+        default:
+            false
+        }
+    }
+
     public var recoveryPresentation: ProviderRecoveryPresentation {
         switch self {
         case .claudeCLIMissing:

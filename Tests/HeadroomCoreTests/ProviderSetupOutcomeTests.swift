@@ -43,4 +43,11 @@ import Testing
         #expect(FailureReason.providerSetup(.claudeLoginRequired).isPermanent)
         #expect(FailureReason.providerSetup(.codexPermissionDenied).isPermanent)
     }
+
+    @Test func neverSignedInClassificationIsTyped() {
+        #expect(ProviderSetupOutcome.claudeLoginRequired.isNeverSignedIn)
+        #expect(ProviderSetupOutcome.codexAuthAbsent.isNeverSignedIn)
+        #expect(!ProviderSetupOutcome.claudeCLIMissing.isNeverSignedIn)
+        #expect(!ProviderSetupOutcome.codexRejectedAuth.isNeverSignedIn)
+    }
 }
