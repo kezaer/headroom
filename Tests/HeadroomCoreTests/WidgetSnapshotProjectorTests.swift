@@ -364,4 +364,22 @@ struct WidgetSnapshotProjectorTests {
         #expect(decoded.providers[0].id == "other")
         #expect(decoded.providers[0].windows[0].kind == .weekly)
     }
+
+    @Test func periodAndUnknownWindowsSurviveForGenericProviders() {
+        let other = ProviderID("other")
+        let monthly = WindowKind.billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60)
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [other: .live(other, windows: [
+                UsageWindow(kind: monthly, utilization: 20, resetsAt: reset),
+                UsageWindow(kind: .other("Pool"), utilization: 40, resetsAt: reset),
+            ])],
+            providerOrder: [other],
+            displayNames: [other: "Other"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        #expect(envelope.providers[0].windows.map(\.kind) == [.other("Monthly"), .other("Pool")])
+    }
 }

@@ -113,6 +113,7 @@ public enum ClaudeUsageParser {
         switch kind {
         case .fiveHour: return 0
         case .weekly: return 1
+        case .billingPeriod: return 1
         case .other: return 2
         }
     }

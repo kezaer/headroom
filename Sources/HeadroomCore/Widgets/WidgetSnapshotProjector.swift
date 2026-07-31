@@ -113,6 +113,8 @@ public enum WidgetSnapshotProjector {
             return .fiveHour
         case .weekly:
             return .weekly
+        case .billingPeriod(let label, _):
+            return .other(label)
         case .other(let label):
             if providerID == .codex {
                 return (showsCodexSparkCounters && kind.isCodexSparkCounter) ? .other(label) : nil
@@ -120,7 +122,10 @@ public enum WidgetSnapshotProjector {
             // Claude reports model-specific weekly sub-limits (e.g. "Weekly (Fable)") as
             // extra `.other` windows. Retain them so a more restrictive sub-limit can
             // appear as compact context in the large-widget header.
-            return label.localizedCaseInsensitiveContains("weekly") ? .other(label) : nil
+            if providerID == .claude {
+                return label.localizedCaseInsensitiveContains("weekly") ? .other(label) : nil
+            }
+            return .other(label)
         }
     }
 

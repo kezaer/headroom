@@ -76,6 +76,42 @@ struct UsageStoreTests {
         if case .stale = after.freshness {} else { Issue.record("should be stale") }
     }
 
+    @Test func monthlyPeriodContinuityExpiresWithoutRenewingObservation() {
+        let day: TimeInterval = 24 * 60 * 60
+        let observedAt = Date(timeIntervalSince1970: 2_000_000)
+        let resetsAt = observedAt.addingTimeInterval(30 * day)
+        let kind = WindowKind.billingPeriod(label: "Monthly", duration: 30 * day)
+        let prior = UsageSnapshot.live(.grok, windows: [
+            UsageWindow(kind: kind, utilization: 35, resetsAt: resetsAt),
+        ], at: observedAt)
+        let failure = UsageSnapshot.stale(for: .grok, reason: .transient("down"))
+
+        let retained = UsageContinuityPolicy.mergedSnapshot(
+            failure,
+            with: prior,
+            at: observedAt.addingTimeInterval(2 * day)
+        )
+        #expect(retained.windows.first?.freshness == .stale(observedAt: observedAt))
+
+        let unavailable = UsageContinuityPolicy.mergedSnapshot(
+            failure,
+            with: retained,
+            at: resetsAt.addingTimeInterval(day)
+        )
+        #expect(unavailable.windows.first?.freshness == .unavailable(since: resetsAt))
+        #expect(unavailable.windows.first?.utilization == 35)
+
+        let removed = UsageContinuityPolicy.mergedSnapshot(
+            failure,
+            with: unavailable,
+            at: resetsAt.addingTimeInterval(31 * day)
+        )
+        #expect(removed.windows.isEmpty)
+
+        let recovered = UsageContinuityPolicy.mergedSnapshot(prior, with: unavailable, at: observedAt)
+        #expect(recovered.windows.first?.freshness == .live)
+    }
+
     @Test func partialClaudeLiveCaptureKeepsCurrentWeeklySubLimit() async {
         let initialCapture = Date(timeIntervalSince1970: 2_000_000)
         let partialCapture = Date(timeIntervalSince1970: 2_050_000)
@@ -1027,6 +1063,25 @@ struct UsageStoreTests {
         ])
         // The raw snapshot (widget export, menu bar) is untouched.
         #expect(store.snapshot(for: .claude).windows.first?.kind == .fiveHour)
+    }
+
+
+    @Test func appDisplaySnapshotRanksPeriodWithWeeklyAheadOfFiveHour() async {
+        let monthly = WindowKind.billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60)
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        let store = UsageStore(
+            providers: [StubProvider(id: .grok, displayName: "Grok", snapshot: .live(.grok, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset),
+                UsageWindow(kind: monthly, utilization: 20, resetsAt: reset),
+                UsageWindow(kind: .other("Pool"), utilization: 30, resetsAt: reset),
+            ]))],
+            preferences: preferences
+        )
+
+        await store.refreshAll()
+
+        #expect(store.appDisplaySnapshot(for: .grok).windows.map(\.kind) == [monthly, .fiveHour, .other("Pool")])
     }
 
     /// Fresh-suite preferences so tests never read the developer's real UserDefaults —

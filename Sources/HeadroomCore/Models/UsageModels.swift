@@ -1,10 +1,11 @@
 import Foundation
 
-/// Which limit window a `UsageWindow` describes. `.other` carries an unrecognized
-/// window's label verbatim so a new server-side window never fails decoding (KTD6).
+/// Which limit window a `UsageWindow` describes. Billing periods preserve their
+/// source-declared label and duration; `.other` keeps unrecognized windows honest.
 public enum WindowKind: Sendable, Equatable, Hashable {
     case fiveHour
     case weekly
+    case billingPeriod(label: String, duration: TimeInterval)
     case other(String)
 
     /// Short human label rendered verbatim on widget surfaces (via
@@ -13,6 +14,7 @@ public enum WindowKind: Sendable, Equatable, Hashable {
         switch self {
         case .fiveHour: return "5h"
         case .weekly: return "Weekly"
+        case .billingPeriod(let label, _): return label
         case .other(let label): return label
         }
     }
@@ -23,6 +25,44 @@ public enum WindowKind: Sendable, Equatable, Hashable {
     public var isCodexSparkCounter: Bool {
         guard case .other(let label) = self else { return false }
         return label.localizedCaseInsensitiveContains("spark")
+    }
+}
+
+/// Classifies provider-declared billing periods without inferring identity from row
+/// position or presentation copy. Unknown durations stay honest `.other` windows.
+public enum BillingPeriodWindowClassifier {
+    private static let day: TimeInterval = 24 * 60 * 60
+
+    public static func kind(periodType: String?, durationSeconds: TimeInterval?) -> WindowKind {
+        let declaredDuration = durationSeconds.flatMap { duration in
+            duration.isFinite && duration > 0 ? duration : nil
+        }
+        switch periodType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "weekly", "week":
+            return .billingPeriod(label: "Weekly", duration: declaredDuration ?? 7 * day)
+        case "monthly", "month":
+            return .billingPeriod(label: "Monthly", duration: declaredDuration ?? 30 * day)
+        default:
+            break
+        }
+
+        guard let declaredDuration else {
+            let label = periodType?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .other(label.flatMap { $0.isEmpty ? nil : $0 } ?? "Billing period")
+        }
+        if declaredDuration == 7 * day {
+            return .billingPeriod(label: "Weekly", duration: declaredDuration)
+        }
+        if (28 * day...31 * day).contains(declaredDuration) {
+            return .billingPeriod(label: "Monthly", duration: declaredDuration)
+        }
+        return .other(durationLabel(seconds: declaredDuration))
+    }
+
+    private static func durationLabel(seconds: TimeInterval) -> String {
+        let hours = (seconds / 3_600).rounded()
+        if hours < 48 { return "\(Int(hours))h" }
+        return "\(Int((seconds / day).rounded()))d"
     }
 }
 

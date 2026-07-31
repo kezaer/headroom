@@ -61,6 +61,33 @@ struct UsageContinuityCacheTests {
         #expect(cache.load()[work] == nil)
     }
 
+    @Test func billingPeriodRestoresWithFutureResetAndOriginalObservation() {
+        let defaults = freshDefaults()
+        let cache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .grok, accountID: .primary)
+        let observedAt = Date(timeIntervalSince1970: 2_000_000)
+        let duration: TimeInterval = 30 * 24 * 60 * 60
+        let resetsAt = observedAt.addingTimeInterval(duration)
+        let kind = WindowKind.billingPeriod(label: "Monthly", duration: duration)
+        cache.save(
+            .live(.grok, windows: [
+                UsageWindow(kind: kind, utilization: 25, resetsAt: resetsAt),
+            ], at: observedAt),
+            for: key
+        )
+
+        let cached = UsageContinuityCache(defaults: defaults).load()[key]
+        let restored = UsageContinuityPolicy.restoredSnapshot(
+            cached,
+            for: .grok,
+            at: observedAt.addingTimeInterval(2 * 24 * 60 * 60)
+        )
+
+        #expect(restored.windows.first?.kind == kind)
+        #expect(restored.windows.first?.freshness == .stale(observedAt: observedAt))
+        #expect(restored.windows.first?.resetsAt == resetsAt)
+    }
+
     @Test func corruptPersistenceFailsSafe() {
         let defaults = freshDefaults()
         defaults.set(Data("not-json".utf8), forKey: "usageContinuitySnapshots.v1")

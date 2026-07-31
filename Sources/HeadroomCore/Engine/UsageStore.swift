@@ -704,7 +704,7 @@ public final class UsageStore {
     private func weeklyFirst(_ snapshot: UsageSnapshot) -> UsageSnapshot {
         func rank(_ kind: WindowKind) -> Int {
             switch kind {
-            case .weekly: return 0
+            case .weekly, .billingPeriod: return 0
             case .fiveHour: return 1
             case .other: return 2
             }
