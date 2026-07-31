@@ -18,6 +18,7 @@ final class MockFetcher: UsageFetching, @unchecked Sendable {
     private var index = 0
     private(set) var lastHeaders: [String: String] = [:]
     private(set) var lastURL: URL?
+    private(set) var requestedURLs: [URL] = []
     private(set) var requestCount = 0
 
     init(_ responses: [Result<HTTPResult, FailureReason>]) { self.responses = responses }
@@ -29,6 +30,7 @@ final class MockFetcher: UsageFetching, @unchecked Sendable {
         lock.withLock {
             lastHeaders = headers
             lastURL = url
+            requestedURLs.append(url)
             requestCount += 1
             let r = responses[min(index, responses.count - 1)]
             index += 1

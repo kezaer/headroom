@@ -506,13 +506,19 @@ public struct APISpendRange: Sendable, Equatable {
     }
 }
 
-/// Money-based API spend for one provider over a selected reporting period.
+public enum APISpendKind: String, Codable, Sendable, Equatable {
+    case periodSpend
+    case balance
+}
+
+/// Money-based API spend or remaining credit balance for one provider.
 public struct APISpendSnapshot: Sendable, Equatable {
     public let providerID: ProviderID
     public let displayName: String
     public let amount: Double?
     public let currency: String?
     public let periodLabel: String
+    public let kind: APISpendKind
     public let capturedAt: Date?
     public let freshness: Freshness
 
@@ -522,6 +528,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
         amount: Double?,
         currency: String?,
         periodLabel: String,
+        kind: APISpendKind = .periodSpend,
         capturedAt: Date?,
         freshness: Freshness
     ) {
@@ -530,6 +537,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
         self.amount = amount
         self.currency = currency
         self.periodLabel = periodLabel
+        self.kind = kind
         self.capturedAt = capturedAt
         self.freshness = freshness
     }
@@ -541,6 +549,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
             amount: nil,
             currency: nil,
             periodLabel: periodLabel,
+            kind: .periodSpend,
             capturedAt: nil,
             freshness: .pending
         )
@@ -553,6 +562,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
             amount: nil,
             currency: nil,
             periodLabel: periodLabel,
+            kind: .periodSpend,
             capturedAt: nil,
             freshness: .stale(reason)
         )
@@ -565,6 +575,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
             amount: amount,
             currency: currency,
             periodLabel: periodLabel,
+            kind: kind,
             capturedAt: capturedAt,
             freshness: .stale(reason)
         )

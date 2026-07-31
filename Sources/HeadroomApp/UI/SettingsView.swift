@@ -862,6 +862,7 @@ private extension APIKeyProvider {
         switch self {
         case .anthropic: return "Anthropic admin key"
         case .openAI: return "OpenAI admin key"
+        case .xAI: return "xAI management key"
         }
     }
 
@@ -869,6 +870,7 @@ private extension APIKeyProvider {
         switch self {
         case .anthropic: return "sk-ant-admin…"
         case .openAI: return "sk-…"
+        case .xAI: return "xai-…"
         }
     }
 }

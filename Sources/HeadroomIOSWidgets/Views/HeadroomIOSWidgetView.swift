@@ -126,7 +126,7 @@ struct HeadroomIOSWidgetView: View {
     // when that window is missing rather than dropping the row.
     private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
         let window = provider.primarySubscriptionWindow
-        VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 HeadroomWidgetProviderIcon(providerID: provider.id, size: 16)
                 Text(provider.displayName)

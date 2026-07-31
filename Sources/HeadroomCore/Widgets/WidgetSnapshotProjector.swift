@@ -70,6 +70,7 @@ public enum WidgetSnapshotProjector {
             amount: snapshot.amount,
             currency: snapshot.currency,
             periodLabel: snapshot.periodLabel,
+            kind: snapshot.kind,
             capturedAt: snapshot.capturedAt,
             freshness: freshness(snapshot.freshness)
         )

@@ -569,6 +569,7 @@ enum AppComposition {
         [
             AnthropicAPISpendProvider(credentials: credentials),
             OpenAIAPISpendProvider(credentials: credentials),
+            XAIAPISpendProvider(credentials: credentials),
         ]
     }
 

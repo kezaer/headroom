@@ -132,6 +132,221 @@ public struct AnthropicAPISpendProvider: APISpendProvider {
     }
 }
 
+public struct XAIAPISpendProvider: APISpendProvider {
+    public let id = ProviderID.grok
+    public let displayName = "xAI API"
+
+    private let credentials: CredentialStore
+    private let http: UsageFetching
+    private let now: @Sendable () -> Date
+    private let context = XAIManagementContext()
+
+    static let validationEndpoint = URL(string: "https://management-api.x.ai/auth/management-keys/validation")!
+    static let billingTeamsEndpoint = URL(string: "https://management-api.x.ai/v1/billing/teams")!
+
+    public init(
+        credentials: CredentialStore,
+        http: UsageFetching = RedirectBlockingHTTPClient(),
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.credentials = credentials
+        self.http = http
+        self.now = now
+    }
+
+    public func fetchSpend(period _: APISpendPeriod) async -> APISpendSnapshot {
+        switch await credentials.apiKey(for: .xAI) {
+        case .failure(let reason):
+            return stale("API balance", reason)
+        case .success(let key):
+            let headers = ["Authorization": "Bearer \(key)"]
+            let teamResult = await context.teamID(
+                apiKey: key,
+                validationEndpoint: Self.validationEndpoint,
+                headers: headers,
+                http: http
+            )
+            switch teamResult {
+            case .failure(let reason):
+                return stale("API balance", reason)
+            case .success(let teamID):
+                return await fetchBilling(teamID: teamID, headers: headers)
+            }
+        }
+    }
+
+    private func fetchBilling(teamID: String, headers: [String: String]) async -> APISpendSnapshot {
+        let teamURL = Self.billingTeamsEndpoint.appendingPathComponent(teamID)
+        let balanceURL = teamURL
+            .appendingPathComponent("prepaid")
+            .appendingPathComponent("balance")
+        switch await http.get(url: balanceURL, headers: headers) {
+        case .failure(let reason):
+            return stale("Prepaid balance", reason)
+        case .success(let result):
+            switch result.status {
+            case 200:
+                guard let dto = try? JSONDecoder().decode(XAIPrepaidBalanceDTO.self, from: result.body),
+                      let signedCents = dto.total?.val
+                else { return stale("Prepaid balance", .decode("Couldn't read xAI prepaid balance")) }
+                // The documented ledger represents available prepaid credit as a
+                // negative liability (for example -1000 means $10 remaining).
+                let remainingCents = max(0, -signedCents)
+                if remainingCents > 0 {
+                    return live(amount: remainingCents / 100, label: "Prepaid balance", kind: .balance)
+                }
+            case 401:
+                return stale("Prepaid balance", .needsReauth("xAI management key rejected"))
+            case 403:
+                return stale("Prepaid balance", .scopeDenied("xAI key lacks billing read access"))
+            default:
+                return stale("Prepaid balance", UsageWindowBuilder.genericFailure(for: result.status))
+            }
+        }
+
+        let previewURL = teamURL
+            .appendingPathComponent("postpaid")
+            .appendingPathComponent("invoice")
+            .appendingPathComponent("preview")
+        switch await http.get(url: previewURL, headers: headers) {
+        case .failure(let reason):
+            return stale("Current billing period", reason)
+        case .success(let result):
+            switch result.status {
+            case 200:
+                guard let dto = try? JSONDecoder().decode(XAIInvoicePreviewDTO.self, from: result.body),
+                      let cents = dto.coreInvoice?.amountAfterVAT ?? dto.coreInvoice?.totalWithCorrections?.val
+                else { return stale("Current billing period", .decode("Couldn't read xAI invoice preview")) }
+                return live(amount: max(0, cents) / 100, label: "Current billing period", kind: .periodSpend)
+            case 401:
+                return stale("Current billing period", .needsReauth("xAI management key rejected"))
+            case 403:
+                return stale("Current billing period", .scopeDenied("xAI key lacks billing read access"))
+            default:
+                return stale("Current billing period", UsageWindowBuilder.genericFailure(for: result.status))
+            }
+        }
+    }
+
+    private func live(amount: Double, label: String, kind: APISpendKind) -> APISpendSnapshot {
+        APISpendSnapshot(
+            providerID: id,
+            displayName: displayName,
+            amount: amount,
+            currency: "usd",
+            periodLabel: label,
+            kind: kind,
+            capturedAt: now(),
+            freshness: .live
+        )
+    }
+
+    private func stale(_ label: String, _ reason: FailureReason) -> APISpendSnapshot {
+        .stale(providerID: id, displayName: displayName, periodLabel: label, reason: reason)
+    }
+}
+
+private actor XAIManagementContext {
+    private var cachedTeam: (apiKey: String, teamID: String)?
+
+    func teamID(
+        apiKey: String,
+        validationEndpoint: URL,
+        headers: [String: String],
+        http: UsageFetching
+    ) async -> Result<String, FailureReason> {
+        if let cachedTeam, cachedTeam.apiKey == apiKey {
+            return .success(cachedTeam.teamID)
+        }
+        switch await http.get(url: validationEndpoint, headers: headers) {
+        case .failure(let reason):
+            return .failure(reason)
+        case .success(let result):
+            switch result.status {
+            case 200:
+                guard let dto = try? JSONDecoder().decode(XAIManagementKeyValidationDTO.self, from: result.body)
+                else { return .failure(.decode("Couldn't validate xAI management key")) }
+                let teamID: String?
+                switch dto.scope?.uppercased() {
+                case "SCOPE_TEAM":
+                    teamID = dto.scopeID ?? dto.teamID
+                case nil, "SCOPE_UNSPECIFIED":
+                    teamID = dto.teamID
+                default:
+                    teamID = nil
+                }
+                guard let teamID, !teamID.isEmpty else {
+                    return .failure(.scopeDenied("xAI management key must target one team"))
+                }
+                cachedTeam = (apiKey, teamID)
+                return .success(teamID)
+            case 401:
+                return .failure(.needsReauth("xAI management key rejected"))
+            case 403:
+                return .failure(.scopeDenied("xAI key lacks management read access"))
+            default:
+                return .failure(UsageWindowBuilder.genericFailure(for: result.status))
+            }
+        }
+    }
+}
+
+private struct XAIManagementKeyValidationDTO: Decodable {
+    let teamID: String?
+    let scope: String?
+    let scopeID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case teamID = "teamId"
+        case scope
+        case scopeID = "scopeId"
+    }
+}
+
+private struct XAIPrepaidBalanceDTO: Decodable {
+    let total: XAICentsDTO?
+}
+
+private struct XAIInvoicePreviewDTO: Decodable {
+    struct CoreInvoice: Decodable {
+        let amountAfterVAT: Double?
+        let totalWithCorrections: XAICentsDTO?
+
+        enum CodingKeys: String, CodingKey {
+            case amountAfterVAT = "amountAfterVat"
+            case totalWithCorrections = "totalWithCorr"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            amountAfterVAT = container.flexibleDouble(forKey: .amountAfterVAT)
+            totalWithCorrections = try? container.decode(XAICentsDTO.self, forKey: .totalWithCorrections)
+        }
+    }
+
+    let coreInvoice: CoreInvoice?
+}
+
+private struct XAICentsDTO: Decodable {
+    let val: Double?
+
+    enum CodingKeys: String, CodingKey { case val }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        val = container.flexibleDouble(forKey: .val)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func flexibleDouble(forKey key: Key) -> Double? {
+        if let value = try? decode(Double.self, forKey: key) { return value }
+        if let value = try? decode(Int.self, forKey: key) { return Double(value) }
+        if let value = try? decode(String.self, forKey: key) { return Double(value) }
+        return nil
+    }
+}
+
 private extension URL {
     func withOpenAICostQuery(_ range: APISpendRange) -> URL {
         var components = URLComponents(url: self, resolvingAgainstBaseURL: false)!

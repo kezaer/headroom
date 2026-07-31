@@ -71,12 +71,17 @@ struct APISpendMirrorView: View {
     }
 
     private func titleLine(_ summary: WidgetAPISpendSummary) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
+        let contextLabel = APISpendPresentation.contextLabel(
+            kind: summary.semanticKind,
+            periodLabel: summary.periodLabel
+        )
+
+        return HStack(alignment: .firstTextBaseline, spacing: 5) {
             Text(summary.displayName)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            Text("· \(summary.periodLabel)")
+            Text("· \(contextLabel)")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(HeadroomTheme.tertiaryText(scheme))
                 .lineLimit(1)

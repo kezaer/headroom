@@ -171,6 +171,8 @@ public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable 
     public let amount: Double?
     public let currency: String?
     public let periodLabel: String
+    /// Additive v2 field. Missing values from older writers mean period spend.
+    public let kind: APISpendKind?
     public let capturedAt: Date?
     public let freshness: WidgetProviderFreshness
 
@@ -180,6 +182,7 @@ public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable 
         amount: Double?,
         currency: String?,
         periodLabel: String,
+        kind: APISpendKind? = nil,
         capturedAt: Date?,
         freshness: WidgetProviderFreshness
     ) {
@@ -188,9 +191,12 @@ public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable 
         self.amount = amount
         self.currency = currency
         self.periodLabel = periodLabel
+        self.kind = kind
         self.capturedAt = capturedAt
         self.freshness = freshness
     }
+
+    public var semanticKind: APISpendKind { kind ?? .periodSpend }
 }
 
 public enum WidgetProviderFreshness: Codable, Equatable, Sendable {

@@ -19,11 +19,13 @@ public struct CodexCredential: Sendable, Equatable {
 public enum APIKeyProvider: String, Sendable, CaseIterable {
     case openAI
     case anthropic
+    case xAI
 
     var keychainService: String {
         switch self {
         case .openAI: return "Headroom OpenAI Admin API Key"
         case .anthropic: return "Headroom Anthropic Admin API Key"
+        case .xAI: return "Headroom xAI Management API Key"
         }
     }
 
@@ -31,6 +33,7 @@ public enum APIKeyProvider: String, Sendable, CaseIterable {
         switch self {
         case .openAI: return "OpenAI"
         case .anthropic: return "Anthropic"
+        case .xAI: return "xAI API"
         }
     }
 
@@ -38,6 +41,7 @@ public enum APIKeyProvider: String, Sendable, CaseIterable {
         switch self {
         case .openAI: return .codex
         case .anthropic: return .claude
+        case .xAI: return .grok
         }
     }
 }

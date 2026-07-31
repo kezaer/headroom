@@ -38,12 +38,17 @@ struct APISpendSectionView: View {
     }
 
     @ViewBuilder private func spendRow(_ snapshot: APISpendSnapshot) -> some View {
+        let contextLabel = APISpendPresentation.contextLabel(
+            kind: snapshot.kind,
+            periodLabel: store.apiSpendPeriod.displayLabel(now: now)
+        )
+
         HStack(alignment: .center, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(snapshot.displayName)
                         .font(.system(size: 14, weight: .semibold))
-                    Text("· \(store.apiSpendPeriod.displayLabel(now: now))")
+                    Text("· \(contextLabel)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
                 }
@@ -89,6 +94,11 @@ struct APISpendSectionView: View {
                     .font(.system(size: 17, weight: .semibold).monospacedDigit())
                     .foregroundStyle(snapshot.freshness == .live ? .primary : .secondary)
                     .privacySensitive()
+                if let qualifier = APISpendPresentation.qualifier(kind: snapshot.kind) {
+                    Text(qualifier)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
+                }
                 // Quiet escape hatch to top up: opens the provider's billing page (the
                 // screen with the actual "Buy credits" control) — we never run the
                 // purchase ourselves. Bare glyph per the popover's control language;

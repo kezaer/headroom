@@ -24,7 +24,35 @@ struct APISpendPresentationTests {
     @Test func addCreditsURLTargetsProviderBillingPages() {
         #expect(APISpendPresentation.addCreditsURL(for: .claude)?.absoluteString == "https://platform.claude.com/settings/billing")
         #expect(APISpendPresentation.addCreditsURL(for: .codex)?.absoluteString == "https://platform.openai.com/settings/organization/billing/overview")
+        #expect(APISpendPresentation.addCreditsURL(for: .grok)?.absoluteString == "https://console.x.ai")
         #expect(APISpendPresentation.addCreditsURL(for: ProviderID("someday")) == nil)
+    }
+
+    @Test func balancePresentationReadsAsRemainingWithoutChangingSpendCopy() {
+        let balance = WidgetAPISpendSummary(
+            id: ProviderID.grok.raw,
+            displayName: "xAI API",
+            amount: 42.1,
+            currency: "usd",
+            periodLabel: "Prepaid balance",
+            kind: .balance,
+            capturedAt: now,
+            freshness: .live
+        )
+        let spend = WidgetAPISpendSummary(
+            id: ProviderID.codex.raw,
+            displayName: "OpenAI API",
+            amount: 12.3,
+            currency: "usd",
+            periodLabel: "Current month",
+            capturedAt: now,
+            freshness: .live
+        )
+
+        #expect(APISpendPresentation.amountText(balance) == "$42.10 left")
+        #expect(APISpendPresentation.contextLabel(kind: .balance, periodLabel: balance.periodLabel) == "Remaining balance")
+        #expect(APISpendPresentation.amountText(spend) == "$12.30")
+        #expect(APISpendPresentation.contextLabel(kind: .periodSpend, periodLabel: spend.periodLabel) == "Current month")
     }
 
     @Test func statusTextUsesFreshness() {
