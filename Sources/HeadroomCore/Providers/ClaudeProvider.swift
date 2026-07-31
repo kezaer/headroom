@@ -34,7 +34,7 @@ public struct ClaudeProvider: UsageProvider {
             return stale(.providerSetup(.claudeUnknownUI))
         case .transientCapture:
             return stale(.providerSetup(.claudeTransientCapture))
-        case .panel(let text):
+        case .panel(let text, let planHint):
             let parsed = ClaudeUsageParser.parse(text)
             guard !parsed.isEmpty else {
                 return stale(.providerSetup(.claudeTransientCapture))
@@ -50,7 +50,9 @@ public struct ClaudeProvider: UsageProvider {
             return UsageSnapshot(
                 providerID: id,
                 windows: windows,
-                planLabel: ClaudeUsageParser.plan(in: text),
+                // Panel-text tier first ("Max 20x" fidelity); the auth-status hint
+                // covers the print-mode report, which omits the tier header.
+                planLabel: ClaudeUsageParser.plan(in: text) ?? planHint,
                 capturedAt: now(),
                 freshness: .live
             )

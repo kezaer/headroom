@@ -115,10 +115,20 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
 
 ## Gotchas
 
-- **`ClaudeUsageParser` is pinned to the current `/usage` layout.** It keys on stable shapes
+- **The Claude probe is print-first, PTY-fallback.** `ClaudeUsageCLIProbe` first runs
+  `claude -p "/usage" --no-session-persistence` (non-interactive, ~2s, atomic report — no
+  TUI repaints to garble labels, no partial paint of the separately fetched model rows).
+  That path is version-gated to ≥ 2.1.217, the oldest CLI verified to dispatch `/usage`
+  locally in print mode — below the floor an unverified CLI might forward "/usage" to the
+  model as a paid prompt, so older CLIs use the PTY panel path unchanged. Any print miss
+  (timeout, cost-report shape, unparseable output) also falls back to the PTY. Don't remove
+  the PTY path, and don't lower the version floor without verifying against that binary.
+- **`ClaudeUsageParser` is pinned to the current `/usage` layouts.** It keys on stable shapes
   ("Current session", "Current week (…)", "N% used", "Resets …"), not line positions, and
-  fails safe (empty → transient stale). If Claude redesigns the panel, update the parser and
-  the fixture in `ClaudeProviderTests.swift`; use `--probe-claude` to see the live panel.
+  fails safe (empty → transient stale). It reads both the interactive panel (label line, then
+  bar/percent lines) and the print-mode report ("Current week (Fable): 7% used · resets …"
+  on one line). If Claude redesigns either, update the parser and the fixtures in
+  `ClaudeProviderTests.swift`; use `--probe-claude` to see the live capture.
 - **Claude `/usage` captures can be valid but partial.** The current-session and overall-weekly
   windows may be fresh while a separately rendered or rate-limited model row such as
   `Weekly (Fable)` is absent. Do not mark the whole snapshot stale, silently stamp a retained
@@ -139,7 +149,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   token) — the DTO field names in `UsageDTOs.swift` were originally speculative.
 - **PTY probe robustness is intentional** — hard deadlines, guaranteed process-group kill,
   quiet-period capture across re-renders, login-shell PATH resolution (works from a bare
-  Finder-launch env), off-main-actor. Preserve these when editing `ClaudeUsageCLIProbe`.
+  Finder-launch env), off-main-actor. Preserve these when editing `ClaudeUsageCLIProbe`;
+  the PTY path is the live fallback for CLIs below the print-mode version floor.
 - **Codex setup must remain a CLI handoff.** Keep `CodexCLI.loginCommand`, provider recovery
   copy, Terminal execution, and clipboard fallback on `codex login`. Resolve the executable
   through `CLIExecutableResolver` so Finder launches still support Homebrew/NVM/asdf/mise
@@ -147,7 +158,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   generated script.
 - **ANSI stripping uses ICU escapes (`\x1B`), not Swift's `\u{1B}`** — the latter silently
   fails inside `.regularExpression`.
-- Each Claude poll spawns a full `claude` session (~20–30s). Fine at the 5-min default; don't
+- Each Claude poll spawns a full `claude` process (print path ~3–5s including the auth and
+  version pre-checks; the PTY fallback ~20–30s). Fine at the 5-min default; don't
   poll aggressively. Configured Claude accounts are probed **serially in one Claude lane** while
   Codex/network work can overlap; the account cap and enforced 2-min interval floor bound cost.
 - **Per-account isolation is env-var based and verified**: a fresh `CLAUDE_CONFIG_DIR`

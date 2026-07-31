@@ -25,10 +25,12 @@ official `claude` CLI's `/usage` panel instead.
     truncation (tested 24×80, 45×140, 100×200 — the tall run captures well past the `↓` fold
     and still has no Fable row; the only "Fable" string anywhere is the model name in the
     banner).
-  - **No alternate CLI surface exists.** There is no `claude usage` subcommand and no JSON
-    output for limits; the interactive `/usage` panel is the only source. The only way to
-    recover the value would be the usage endpoint / claude.ai session directly — prohibited
-    and server-side-blocked (see the hard constraint in AGENTS.md). Not an option.
+  - **~~No alternate CLI surface exists.~~ Superseded 2026-07-31:** `claude -p "/usage"`
+    (print mode) dispatches the command locally and prints the full settled report —
+    including per-model rows — as flat single-line text in ~2s, with no model call
+    (`$0.0000`). The probe now uses it first, version-gated to ≥ 2.1.217, with the PTY
+    panel as fallback. This removes the TUI capture/garbling failure class entirely; a
+    genuine server-side omission (as below) still surfaces through the continuity policy.
   - **Open product question:** the row currently just vanishes silently, which reads as a
     Headroom bug to users (independently reported by a second user). Decide whether to
     surface "unavailable" or stay silent. Possibly moot — Anthropic is reportedly narrowing
@@ -39,9 +41,10 @@ official `claude` CLI's `/usage` panel instead.
   positions, but a future Claude Code redesign of the panel could still break it. It fails
   safe (empty result → transient stale), and the `--probe-claude` diagnostic makes drift
   easy to spot. Add a version check / update the fixture if the panel changes.
-- **Each poll spawns a full `claude` session (~20–30s, some CPU).** Claude accounts now run
-  in one serial lane and the interval has an enforced 2-minute floor. Caching or adaptive
-  cadence could still reduce cost for users who configure several accounts.
+- **Each poll spawns a full `claude` process (print path ~3–5s; PTY fallback ~20–30s).**
+  Claude accounts still run in one serial lane and the interval has an enforced 2-minute
+  floor. Caching or adaptive cadence could still reduce cost for users who configure
+  several accounts.
 - **No live integration test for the PTY probe.** Provider tests use a fixture panel +
   mock source (fast, deterministic). The real `ClaudeUsageCLIProbe` is verified manually
   via `--probe-claude`; a machine-dependent integration test would need the CLI logged in.
