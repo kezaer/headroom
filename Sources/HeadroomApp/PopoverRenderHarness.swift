@@ -319,7 +319,7 @@ enum PopoverRenderHarness {
                 factory = { account in
                     DemoUsageProvider(
                         id: account.providerID,
-                        displayName: account.providerID == .claude ? "Claude" : "Codex",
+                        displayName: account.providerID.displayName,
                         snapshot: .pending(for: account.providerID),
                         accountID: account.id
                     )

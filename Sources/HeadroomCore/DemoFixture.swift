@@ -43,6 +43,44 @@ public enum DemoFixture {
         )
     }
 
+    /// Grok bills a single weekly credit pool (billing-period window), not Claude's
+    /// rolling 5h/weekly pair — mirror the real shape so the demo card reads honestly.
+    public static var grokSnapshot: UsageSnapshot {
+        UsageSnapshot(
+            providerID: .grok,
+            windows: [
+                UsageWindow(
+                    kind: BillingPeriodWindowClassifier.kind(periodType: "weekly", durationSeconds: nil),
+                    utilization: 44,
+                    resetsAt: soon(days: 3, hours: 2, minutes: 30),
+                    resetLabel: "Resets in 3d"
+                ),
+            ],
+            planLabel: "SuperGrok",
+            capturedAt: Date().addingTimeInterval(-135),
+            freshness: .live
+        )
+    }
+
+    /// Cursor bills a monthly included-usage pool (billing-period window) with a calendar
+    /// reset day — the shape the official `/usage` panel exposes.
+    public static var cursorSnapshot: UsageSnapshot {
+        UsageSnapshot(
+            providerID: .cursor,
+            windows: [
+                UsageWindow(
+                    kind: BillingPeriodWindowClassifier.kind(periodType: "monthly", durationSeconds: nil),
+                    utilization: 31,
+                    resetsAt: soon(days: 12),
+                    resetLabel: "Resets Sep 1"
+                ),
+            ],
+            planLabel: "Pro+",
+            capturedAt: Date().addingTimeInterval(-135),
+            freshness: .live
+        )
+    }
+
     // MARK: API spend (macOS only)
 
     public static var anthropicSpend: APISpendSnapshot {
@@ -75,6 +113,8 @@ public enum DemoFixture {
         switch id {
         case .claude: return day(month: 7, day: 28)
         case .codex: return day(month: 7, day: 15)
+        case .grok: return day(month: 8, day: 4)
+        case .cursor: return day(month: 9, day: 1)
         default: return nil
         }
     }
@@ -114,7 +154,16 @@ extension DemoFixture {
         case multiThree = "multi-3"
         case multiFive = "multi-5"
         case multiMixed = "multi-mixed"
+        // All four providers, one built-in account each — the four-provider screenshot/QA
+        // scenario (U12). Shows Claude/Codex's rolling windows beside Grok/Cursor's
+        // billing-period meters, exercising every brand mark and window shape at once.
+        case multiProviders = "multi-4"
     }
+
+    /// Canonical demo provider order, mirroring `AppComposition`'s subscription registry.
+    /// Parity checks derive their expected provider list from this instead of hardcoding a
+    /// Claude/Codex literal (KTD9 switch-site inventory).
+    public static let registeredProviderOrder: [ProviderID] = [.claude, .codex, .grok, .cursor]
 
     /// One scenario resolved to its accounts + one fixture provider per account.
     public struct MultiAccountFixture: Sendable {
@@ -153,8 +202,18 @@ extension DemoFixture {
             capturedAt: Date().addingTimeInterval(-135),
             freshness: freshness
         )
-        let displayName = providerID == .claude ? "Claude" : "Codex"
-        return (account, DemoUsageProvider(id: providerID, displayName: displayName, snapshot: snapshot, accountID: accountID))
+        return (account, DemoUsageProvider(id: providerID, displayName: providerID.displayName, snapshot: snapshot, accountID: accountID))
+    }
+
+    /// A single built-in account posed from a ready-made snapshot — used for the
+    /// billing-period providers (Grok/Cursor) whose window shape doesn't fit `demoAccount`'s
+    /// fixed 5h/weekly pair.
+    private static func builtInProviderPair(
+        provider providerID: ProviderID,
+        snapshot: UsageSnapshot
+    ) -> (account: ProviderAccount, provider: any UsageProvider) {
+        let account = ProviderAccount(id: .primary, providerID: providerID, label: providerID.displayName, isBuiltIn: true)
+        return (account, DemoUsageProvider(id: providerID, displayName: providerID.displayName, snapshot: snapshot, accountID: .primary))
     }
 
     public static func multiFixture(for scenario: MultiAccountScenario) -> MultiAccountFixture {
@@ -193,6 +252,13 @@ extension DemoFixture {
                 demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
                 demoAccount(provider: .codex, id: "codex-work", label: "Work", plan: "Pro", fiveHour: 54, weekly: 79,
                             freshness: .stale(.transient("Couldn't reach Codex — will retry"))),
+            ]
+        case .multiProviders:
+            pairs = [
+                demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
+                demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
+                builtInProviderPair(provider: .grok, snapshot: grokSnapshot),
+                builtInProviderPair(provider: .cursor, snapshot: cursorSnapshot),
             ]
         }
         return MultiAccountFixture(accounts: pairs.map(\.account), providers: pairs.map(\.provider))

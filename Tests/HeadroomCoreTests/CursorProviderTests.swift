@@ -29,11 +29,22 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(snapshot.providerID == .cursor)
         #expect(snapshot.planLabel == "Pro+")
         #expect(snapshot.windows.count == 1)
-        #expect(snapshot.windows.first?.utilization == 0)
-        #expect(snapshot.windows.first?.percentRemaining == 100)
+        // Fixture is a real non-zero live capture (Included 1% used); pins that the parser
+        // reads the rendered percentage, not a hardcoded zero.
+        #expect(snapshot.windows.first?.utilization == 1)
+        #expect(snapshot.windows.first?.percentRemaining == 99)
         #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60))
         #expect(snapshot.windows.first?.resetsAt == ISO8601DateFormatter().date(from: "2026-09-01T23:59:59Z"))
         #expect(snapshot.windows.first?.resetLabel == "Resets Sep 1")
+    }
+
+    @Test func includedPercentReadsAnArbitraryMidRangeValue() throws {
+        let text = try fixture().replacingOccurrences(
+            of: "Included        1% used",
+            with: "Included        73% used"
+        )
+        let parsed = try #require(CursorUsageParser.parse(text, now: augustFirst2026))
+        #expect(parsed.includedPercentUsed == 73)
     }
 
     @Test func displayedResetDayDoesNotExpireAtMidnight() throws {
@@ -50,7 +61,7 @@ private struct StubCursorSource: CursorUsageSource {
             with: "On-Demand       $12.50 / $100.00"
         )
         let parsed = try #require(CursorUsageParser.parse(text, now: augustFirst2026))
-        #expect(parsed.includedPercentUsed == 0)
+        #expect(parsed.includedPercentUsed == 1)
         #expect(parsed.onDemand == .fixed(usedDollars: 12.5, limitDollars: 100))
 
         let spend = await CursorOnDemandSpendProvider(

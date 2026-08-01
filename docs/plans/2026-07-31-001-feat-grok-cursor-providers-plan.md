@@ -189,6 +189,32 @@ Stage A (U1–U4) makes the app provider-count-agnostic and is provider-independ
 > a live parsed snapshot (Pro+, Monthly 0% used, resets Sep 1, on-demand disabled);
 > `swift test` (395) and `HeadroomAppTests` (8) green. PR #90 is unblocked.
 
+> **U11 + U12 landed — 2026-08-01:** Brand identity and the demo/parity/switch-site work
+> are implemented. **U11:** Grok and Cursor ship real monochrome logo marks (LobeHub
+> source, near-black light / near-white dark pairs) across all three render paths — raw
+> popover SVGs (`grok-light/dark`, `cursor-light/dark` in `HeadroomApp/Resources/BrandIcons`,
+> wired into the `.app` build's pbxproj), `BrandIcons.xcassets` imagesets with a `luminosity`
+> dark appearance (iOS + widgets), scheme-aware `ProviderStyle.svgResourceName(for:scheme:)`,
+> per-provider `HeadroomBrandColorValues`/`textAccent`/`opticalScale`, and `atom`/`cursorarrow`
+> SF Symbol fallbacks. Colors are first-pass identity (Phase 2 owns visual density). Copy
+> sweep: both widget `.description` strings are provider-agnostic; the menu-bar fill-source
+> picker was already per-provider. **U12:** the three display-name ternaries now use a
+> registry-backed `ProviderID.displayName`; `DemoFixture` gains `grokSnapshot`/`cursorSnapshot`
+> (billing-period), renewal dates, a `multi-4` four-provider scenario, and
+> `registeredProviderOrder`; `DemoScreenshotData` gains a `fourProviders` variant. New/updated
+> tests: brand-color exact-RGB + no-grey-identity guard (Core), `ProviderStyleIdentityTests`
+> (app), grok/cursor snapshot shape + four-provider registry-order parity. Verified: `swift
+> test` (401), `HeadroomAppTests` (10), `xcodebuild -scheme Headroom` build (actool compiled
+> the new imagesets), and an offscreen render confirming all four marks paint correctly in
+> both schemes. **Still deferred to Kyle:** U10 hard-limit presentation (needs a live
+> hard-limit capture — the test account is Pro+/on-demand-disabled/0%), xAI real-management-key
+> acceptance, and final four-provider visual QA sign-off. `CompanionPreviewSeed` is left as the
+> locked 2-provider case-study seed by design (portfolio phone pair); four-provider coverage
+> lives in the two purpose-built scenarios. Appendix A: the P0/P1 compile-enforced + silent
+> sites were dispositioned in U1–U7; this pass added the P1 brand-identity and P3
+> display-name/copy sites. A formal line-by-line Appendix A re-audit remains open for DoD
+> sign-off.
+
 | U-ID | Title | Key files | Depends on |
 |---|---|---|---|
 | U1 | Core surface mapping + registry plumbing | `Sources/HeadroomCore/Models/UsageModels.swift`, `Engine/UsageStore.swift`, `Settings/Preferences.swift` | — |

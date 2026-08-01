@@ -61,8 +61,8 @@ Codex reads the `auth.json` that official `codex login` wrote under that account
 `CODEX_HOME`. Sign-in is always a Terminal handoff to the official CLI
 through the account-scoped `SetupSessionCoordinator` — the OAuth
 constraint above applies to every account. The menu bar and widgets follow each
-provider's primary account; the popover shows all accounts (compact meter density from
-3 accounts up; the card list scrolls past a 640pt cap). Account management lives in
+provider's primary account; the popover shows all accounts at the regular meter scale and
+the card list scrolls past a 640pt cap. Account management lives in
 Settings → Accounts (`AccountsSettingsTile`); removal deletes the account's config home.
 
 ## Commands
@@ -154,6 +154,37 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   reports "Not logged in · Please run /login" and a fresh `CODEX_HOME` reports "Not
   logged in" — the CLIs never fall back to the default login. Don't "simplify" account
   probes by dropping the env override; that would silently read the wrong account.
+- **Grok billing is ACP-first with an HTTP fallback (transport swap, not a parser fix).**
+  `GrokFallbackUsageSource` tries the `grok agent stdio` ACP `x.ai/billing` method, then
+  the CLI billing HTTP path (some CLI versions return JSON-RPC `-32601` for the method).
+  Both hit the same free status method. The source model requires a genuine period end;
+  if it's absent Headroom fails safe to a transient stale snapshot because
+  `UsageWindow.resetsAt` is non-optional and inventing a reset would violate R4. Decode
+  preferred+fallback fields (schema migrated recently, deprecated cent fields) — don't
+  "fix" the parser when the source changed. `GROK_HOME` isolation is verified the same way
+  as Claude/Codex; re-diagnose with `--probe-grok`.
+- **Cursor usage comes from driving the official `cursor-agent` `/usage` TUI panel in a
+  PTY** (`CursorUsageCLIProbe`), same official-client boundary as Claude — never reuse
+  `WorkosCursorSessionToken`, read `state.vscdb`, or call private dashboard endpoints (ToS
+  §1.5). Load-bearing PTY details: answer the OSC 11 background query or the first paint
+  stalls; send Enter as Kitty CSI-u (`ESC [ 13 u`); two positive gates before that single
+  Enter — the `Ask (shift+tab to cycle)` ready prompt **and** the arrow-selected `/usage`
+  autocomplete row. The selection gate matches `/→\s+\/usage(?:\s|$)/`: the live TUI pads
+  the arrow with a *variable* number of spaces (`→  /usage`), so match whitespace-count-
+  tolerantly but keep `/usage` a whole token — never relax it to bare substring presence,
+  which would let a stray Enter submit a model prompt. Cursor is single-account (no
+  config-home isolation equivalent to `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`GROK_HOME` was
+  found). Re-diagnose the panel with `--probe-cursor`; see
+  `docs/solutions/cursor-agent-usage-feasibility.md`.
+- **Grok/Cursor bill as period pools, not rolling windows.** Both use
+  `.billingPeriod(label:duration:)` (`BillingPeriodWindowClassifier`), which the widget
+  projector maps to `.other(label)`. Their brand marks are **monochrome**, so unlike the
+  single-color Claude/Codex SVGs they ship a light/dark pair: the macOS popover selects by
+  `ColorScheme` (`ProviderStyle.svgResourceName(for:scheme:)` → `grok-light`/`grok-dark`,
+  `cursor-*`), and the `BrandIcons.xcassets` imagesets carry a `luminosity` dark appearance
+  so iOS and the widgets adapt natively. Accent/text-accent/optical-scale values are
+  first-pass identity (Phase 2 owns visual density). The four-provider demo is
+  `--demo multi-4` (popover) / the `fourProviders` `DemoScreenshotData` variant (iOS widget).
 
 ## Follow-ups
 

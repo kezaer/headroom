@@ -8,12 +8,14 @@ struct ProviderLogoView: View {
     let providerID: ProviderID
     var size: CGFloat = 16
 
+    @Environment(\.colorScheme) private var scheme
+
     var body: some View {
         // Per-provider optical-size correction inside a fixed slot (shared with iOS via
         // HeadroomCore), so Claude's edge-to-edge starburst and Codex's inset blob read as
         // equal weight across every surface.
         let scale = CGFloat(HeadroomBrandMark.opticalScale(for: providerID.raw))
-        if let image = BrandIconImage.image(for: providerID) {
+        if let image = BrandIconImage.image(for: providerID, scheme: scheme) {
             Image(nsImage: image)
                 .resizable()
                 .renderingMode(.original)
@@ -32,8 +34,8 @@ struct ProviderLogoView: View {
 }
 
 private enum BrandIconImage {
-    static func image(for providerID: ProviderID) -> NSImage? {
-        guard let name = ProviderStyle.svgResourceName(for: providerID),
+    static func image(for providerID: ProviderID, scheme: ColorScheme) -> NSImage? {
+        guard let name = ProviderStyle.svgResourceName(for: providerID, scheme: scheme),
               let url = url(forResource: name),
               let svg = NSImage(contentsOf: url) else {
             return nil

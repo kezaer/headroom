@@ -31,6 +31,8 @@ public enum DemoScreenshotData {
             return codexFiveHourReturnsEnvelope
         case "attention":
             return attentionEnvelope
+        case "fourProviders":
+            return fourProvidersEnvelope
         default:
             return fullEnvelope
         }
@@ -239,6 +241,73 @@ public enum DemoScreenshotData {
                         window(.weekly, label: "Weekly", percent: 64, reset: "Resets in 6d 4h", severity: .healthy),
                     ],
                     renewalDate: day(month: 7, day: 15)
+                ),
+            ],
+            apiSpendProviders: [
+                spend(
+                    id: ProviderID.claude.raw,
+                    displayName: "Anthropic API",
+                    amount: 142.67
+                ),
+                spend(
+                    id: ProviderID.codex.raw,
+                    displayName: "OpenAI API",
+                    amount: 58.90
+                ),
+            ]
+        )
+    }
+
+    /// `fourProviders`: Claude + Codex (rolling windows) beside Grok + Cursor
+    /// (billing-period meters, which project to `.other` widget windows), spend on. The
+    /// four-provider screenshot/QA scenario (U12) — exercises every brand mark at once.
+    /// Numbers mirror `DemoFixture.grokSnapshot`/`cursorSnapshot`.
+    private static var fourProvidersEnvelope: WidgetSnapshotEnvelope {
+        WidgetSnapshotEnvelope(
+            generatedAt: Date(),
+            status: .enabled,
+            providers: [
+                WidgetProviderSummary(
+                    id: ProviderID.claude.raw,
+                    displayName: "Claude",
+                    planLabel: "Max",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 38, reset: "Resets Jul 9", severity: .low),
+                        window(.fiveHour, label: "5h", percent: 72, reset: "Resets 2:15pm", severity: .healthy),
+                        window(.other("Weekly (Fable)"), label: "Weekly (Fable)", percent: 54, reset: "Resets Jul 9", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 28)
+                ),
+                WidgetProviderSummary(
+                    id: ProviderID.codex.raw,
+                    displayName: "Codex",
+                    planLabel: "Prolite",
+                    freshness: .live,
+                    windows: [
+                        window(.weekly, label: "Weekly", percent: 64, reset: "Resets in 6d 4h", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 7, day: 15)
+                ),
+                WidgetProviderSummary(
+                    id: ProviderID.grok.raw,
+                    displayName: "Grok",
+                    planLabel: "SuperGrok",
+                    freshness: .live,
+                    windows: [
+                        window(.other("Weekly"), label: "Weekly", percent: 56, reset: "Resets in 3d", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 8, day: 4)
+                ),
+                WidgetProviderSummary(
+                    id: ProviderID.cursor.raw,
+                    displayName: "Cursor",
+                    planLabel: "Pro+",
+                    freshness: .live,
+                    windows: [
+                        window(.other("Monthly"), label: "Monthly", percent: 69, reset: "Resets Sep 1", severity: .healthy),
+                    ],
+                    renewalDate: day(month: 9, day: 1)
                 ),
             ],
             apiSpendProviders: [

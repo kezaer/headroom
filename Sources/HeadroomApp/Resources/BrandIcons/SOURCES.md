@@ -4,5 +4,9 @@ These source SVGs are bundled for provider identity in Headroom's UI.
 
 - `claude-color.svg`: LobeHub static SVG icon package, `claude-color` icon. LobeHub lists the official site as `https://claude.ai`.
 - `codex-color.svg`: LobeHub static SVG icon package, `codex-color` icon. LobeHub lists the official site as `https://openai.com/codex`.
+- `grok-light.svg` / `grok-dark.svg`: LobeHub static SVG icon package, monochrome `grok` icon (`fill="currentColor"`), rendered here with an explicit near-black fill for light surfaces and near-white for dark. LobeHub lists the official site as `https://x.ai`.
+- `cursor-light.svg` / `cursor-dark.svg`: LobeHub static SVG icon package, monochrome `cursor` icon (`fill="currentColor"`), rendered here with an explicit near-black fill for light surfaces and near-white for dark. LobeHub lists the official site as `https://cursor.com`.
 
-OpenAI's brand guidelines say to use OpenAI marks only when directly related to OpenAI services, to follow their style guides and usage terms, and not to imply endorsement. Headroom uses the Codex mark only to identify the user's own Codex/ChatGPT usage source.
+The Grok and Cursor marks are monochrome brands, so each ships as a light/dark pair (the macOS popover selects by `ColorScheme`; the `BrandIcons.xcassets` imagesets carry a `luminosity` dark appearance so iOS and the widgets adapt natively). This mirrors how Claude/Codex ship a single color mark that reads on both schemes.
+
+OpenAI's brand guidelines say to use OpenAI marks only when directly related to OpenAI services, to follow their style guides and usage terms, and not to imply endorsement. Headroom uses each provider mark only to identify the user's own usage source for that provider, never to imply endorsement.

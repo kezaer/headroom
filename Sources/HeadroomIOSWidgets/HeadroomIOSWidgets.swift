@@ -14,7 +14,7 @@ struct HeadroomIOSUsageWidget: Widget {
             HeadroomIOSWidgetView(entry: entry)
         }
         .configurationDisplayName("Headroom")
-        .description("Claude and Codex usage headroom at a glance.")
+        .description("AI subscription usage headroom at a glance.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         .disfavoredLocations([.iPhoneWidgetsOnMac], for: [.systemSmall, .systemMedium, .systemLarge])
         // Content draws its own edge-to-edge background to dodge the Liquid Glass sheen on

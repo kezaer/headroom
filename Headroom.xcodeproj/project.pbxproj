@@ -48,6 +48,10 @@
 		3A697334A73277ADE44CA811 /* ProviderLogoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F363F18C043CEABFA7A2901B /* ProviderLogoView.swift */; };
 		3B642DC39FBAB7604199175E /* SOURCES.md in Resources */ = {isa = PBXBuildFile; fileRef = 7422AF9B5364DACBD9ED1198 /* SOURCES.md */; };
 		3CF30E86D1DEBD401B0D6CA3 /* codex-color.svg in Resources */ = {isa = PBXBuildFile; fileRef = 88E5257FBAB9CE287E59153B /* codex-color.svg */; };
+		B1B1B1B1B1B1B1B1B1B1B101 /* grok-light.svg in Resources */ = {isa = PBXBuildFile; fileRef = A1A1A1A1A1A1A1A1A1A1A101 /* grok-light.svg */; };
+		B1B1B1B1B1B1B1B1B1B1B102 /* grok-dark.svg in Resources */ = {isa = PBXBuildFile; fileRef = A1A1A1A1A1A1A1A1A1A1A102 /* grok-dark.svg */; };
+		B1B1B1B1B1B1B1B1B1B1B103 /* cursor-light.svg in Resources */ = {isa = PBXBuildFile; fileRef = A1A1A1A1A1A1A1A1A1A1A103 /* cursor-light.svg */; };
+		B1B1B1B1B1B1B1B1B1B1B104 /* cursor-dark.svg in Resources */ = {isa = PBXBuildFile; fileRef = A1A1A1A1A1A1A1A1A1A1A104 /* cursor-dark.svg */; };
 		3E62D7D58EF820AE37208A4F /* ClaudeUsageCLIProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12CF08DF6A70B0CE97F1C590 /* ClaudeUsageCLIProbe.swift */; };
 		3F2A371512FFA8EB447388EE /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 736B4254D382572E99EA6D1A /* Assets.xcassets */; };
 		3FB1C182943F1C4BC7E01BFA /* ClaudeUsageParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43C20FB297B9F64C76EAA8A /* ClaudeUsageParser.swift */; };
@@ -333,6 +337,10 @@
 		87CC53FEEE716121A11701F1 /* CodexConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexConnection.swift; sourceTree = "<group>"; };
 		8884B8D5664E9FA9DC416556 /* CodexSetupViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexSetupViews.swift; sourceTree = "<group>"; };
 		88E5257FBAB9CE287E59153B /* codex-color.svg */ = {isa = PBXFileReference; path = "codex-color.svg"; sourceTree = "<group>"; };
+		A1A1A1A1A1A1A1A1A1A1A101 /* grok-light.svg */ = {isa = PBXFileReference; path = "grok-light.svg"; sourceTree = "<group>"; };
+		A1A1A1A1A1A1A1A1A1A1A102 /* grok-dark.svg */ = {isa = PBXFileReference; path = "grok-dark.svg"; sourceTree = "<group>"; };
+		A1A1A1A1A1A1A1A1A1A1A103 /* cursor-light.svg */ = {isa = PBXFileReference; path = "cursor-light.svg"; sourceTree = "<group>"; };
+		A1A1A1A1A1A1A1A1A1A1A104 /* cursor-dark.svg */ = {isa = PBXFileReference; path = "cursor-dark.svg"; sourceTree = "<group>"; };
 		8DD7A937E15E5BF9470E4A6B /* WidgetUsageBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetUsageBar.swift; sourceTree = "<group>"; };
 		8EADBB0798A07C04BBF7F6BC /* HeadroomIOSWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = HeadroomIOSWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8F395690B55C802624547B6D /* HeadroomMediumWidgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomMediumWidgetView.swift; sourceTree = "<group>"; };
@@ -680,6 +688,10 @@
 			children = (
 				3D242FD4C2496701C8997F9A /* claude-color.svg */,
 				88E5257FBAB9CE287E59153B /* codex-color.svg */,
+				A1A1A1A1A1A1A1A1A1A1A101 /* grok-light.svg */,
+				A1A1A1A1A1A1A1A1A1A1A102 /* grok-dark.svg */,
+				A1A1A1A1A1A1A1A1A1A1A103 /* cursor-light.svg */,
+				A1A1A1A1A1A1A1A1A1A1A104 /* cursor-dark.svg */,
 				7422AF9B5364DACBD9ED1198 /* SOURCES.md */,
 			);
 			path = BrandIcons;
@@ -1021,6 +1033,10 @@
 				3B642DC39FBAB7604199175E /* SOURCES.md in Resources */,
 				E888F6381D1EF5EEE508FC15 /* claude-color.svg in Resources */,
 				3CF30E86D1DEBD401B0D6CA3 /* codex-color.svg in Resources */,
+				B1B1B1B1B1B1B1B1B1B1B101 /* grok-light.svg in Resources */,
+				B1B1B1B1B1B1B1B1B1B1B102 /* grok-dark.svg in Resources */,
+				B1B1B1B1B1B1B1B1B1B1B103 /* cursor-light.svg in Resources */,
+				B1B1B1B1B1B1B1B1B1B1B104 /* cursor-dark.svg in Resources */,
 				EF3B349C2E4C1D1A7DE56A6E /* vessel-app-icon.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

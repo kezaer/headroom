@@ -4,9 +4,10 @@ import WidgetKit
 import HeadroomCore
 
 /// Entry point. Supports hidden diagnostics: `--probe-claude` / `--probe-codex` /
-/// `--probe-grok` / `--probe-cursor` run the real
-/// provider capture once and print parsed windows; `--dump-phone-sync` decodes the iCloud KVS
-/// payload the Mac published for the iPhone. All run without launching the menu bar UI.
+/// `--probe-grok` / `--probe-cursor` run the real provider capture once and print parsed
+/// windows; `--probe-spend <openai|anthropic|xai> [--key-file <path>]` verifies a key-based
+/// API-spend path; `--dump-phone-sync` decodes the iCloud KVS payload the Mac published for
+/// the iPhone. All run without launching the menu bar UI.
 @main
 enum Entry {
     static func main() {
@@ -24,6 +25,10 @@ enum Entry {
         }
         if CommandLine.arguments.contains("--probe-cursor") {
             runCursorProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-spend") {
+            runSpendProbe()
             return
         }
         if CommandLine.arguments.contains("--dump-phone-sync") {
@@ -195,6 +200,76 @@ enum Entry {
                 print("RESULT: unrecognized Cursor Agent surface (no input sent)")
             case .transientCapture:
                 print("RESULT: Cursor usage capture failed")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    /// `--probe-spend <openai|anthropic|xai>` verifies a real key-based API-spend path (U8
+    /// acceptance): the three admin/management-key providers share one shape (key → vendor
+    /// billing/cost API → typed spend or balance row), so one probe covers all of them. It
+    /// prints only the typed, redacted outcome. The key read is off any leak-prone channel:
+    /// pass `--key-file <path>` and the key is read from that file (never an argument or env
+    /// var, so it can't surface in `ps`/shell history), never echoed, and never persisted.
+    /// With no file flag it reads the app-saved Keychain key instead. The API calls are
+    /// read-only status fetches. For xAI, compare the printed balance against console.x.ai to
+    /// confirm the documented negative-liability sign convention holds against a real response.
+    private static func runSpendProbe() {
+        let valid = ["openai", "anthropic", "xai"]
+        guard let index = CommandLine.arguments.firstIndex(of: "--probe-spend"),
+              CommandLine.arguments.indices.contains(index + 1),
+              case let token = CommandLine.arguments[index + 1].lowercased(),
+              valid.contains(token) else {
+            print("Usage: --probe-spend <\(valid.joined(separator: "|"))> [--key-file <path>]")
+            return
+        }
+        let keyProvider: APIKeyProvider
+        let label: String
+        switch token {
+        case "openai": (keyProvider, label) = (.openAI, "OpenAI")
+        case "anthropic": (keyProvider, label) = (.anthropic, "Anthropic")
+        default: (keyProvider, label) = (.xAI, "xAI")
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let credentials: CredentialStore
+            if let fileIndex = CommandLine.arguments.firstIndex(of: "--key-file"),
+               CommandLine.arguments.indices.contains(fileIndex + 1) {
+                let path = CommandLine.arguments[fileIndex + 1]
+                guard let raw = try? String(contentsOfFile: path, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+                    print("RESULT: could not read a non-empty key from \(path)")
+                    semaphore.signal()
+                    return
+                }
+                print("key source: file (\(raw.count) chars — value not shown)")
+                credentials = CredentialStore(apiKeyStore: SingleAPIKeyStore(key: raw, provider: keyProvider))
+            } else {
+                print("key source: Keychain (app-saved; pass --key-file <path> to test a raw key)")
+                credentials = CredentialStore()
+            }
+
+            let provider: any APISpendProvider
+            switch keyProvider {
+            case .openAI: provider = OpenAIAPISpendProvider(credentials: credentials)
+            case .anthropic: provider = AnthropicAPISpendProvider(credentials: credentials)
+            case .xAI: provider = XAIAPISpendProvider(credentials: credentials)
+            }
+
+            let snapshot = await provider.fetchSpend(period: .currentMonth)
+            print("provider: \(label)")
+            switch snapshot.freshness {
+            case .pending:
+                print("RESULT: pending")
+            case .live:
+                let amount = snapshot.amount.map { String(format: "%.2f", $0) } ?? "(none)"
+                print("RESULT: live \(label) \(snapshot.kind == .balance ? "balance" : "period spend")")
+                print("  label:  \(snapshot.periodLabel)")
+                print("  amount: \(amount) \(snapshot.currency ?? "")")
+            case .stale(let reason):
+                print("RESULT: stale — \(reason.message)")
             }
             semaphore.signal()
         }
@@ -557,6 +632,14 @@ enum AppComposition {
         // below) so the preview never publishes to the widget App Group or iCloud KVS.
 
         let fixture = DemoFixture.multiFixture(for: scenario)
+        // Enable the subscription surface for every provider present in the scenario. Grok and
+        // Cursor default OFF (upgrade-safety), so the four-provider scenario would otherwise
+        // render only the Claude/Codex cards even though all four fixtures are wired.
+        for providerID in Set(fixture.accounts.map(\.providerID)) {
+            if let surface = UsageSurface.subscription(for: providerID) {
+                prefs.setSurfaceEnabled(true, for: surface)
+            }
+        }
         // A live registry + factory so account management renders enabled (the real app always
         // has both), seeded with the fixture accounts — but in its OWN suite, never `.standard`,
         // so seeding can't clobber the user's real account catalog.
@@ -570,7 +653,7 @@ enum AppComposition {
             factory = { account in
                 DemoUsageProvider(
                     id: account.providerID,
-                    displayName: account.providerID == .claude ? "Claude" : "Codex",
+                    displayName: account.providerID.displayName,
                     snapshot: .pending(for: account.providerID),
                     accountID: account.id
                 )
@@ -732,5 +815,26 @@ private struct CapturedGrokUsageSource: GrokUsageSource {
 
     func fetchUsage() async -> GrokUsageSourceResult {
         .payload(data, transport: transport)
+    }
+}
+
+/// Diagnostic-only key store: serves one in-memory key for one provider so `--probe-xai`
+/// can validate a raw management key without persisting it to the Keychain. Save/delete are
+/// intentionally unsupported — the probe never writes.
+private struct SingleAPIKeyStore: APIKeyStoring {
+    let key: String
+    let provider: APIKeyProvider
+
+    func readAPIKey(for provider: APIKeyProvider) throws -> String {
+        guard provider == self.provider else { throw CredentialError.notLoggedIn }
+        return key
+    }
+
+    func saveAPIKey(_ key: String, for provider: APIKeyProvider) throws {
+        throw CredentialError.notLoggedIn
+    }
+
+    func deleteAPIKey(for provider: APIKeyProvider) throws {
+        throw CredentialError.notLoggedIn
     }
 }

@@ -5,6 +5,26 @@ struct BrandColorValuesTests {
     @Test func providerAccentsMatchCanonicalSpec() {
         #expect(HeadroomBrandColorValues.claude == HeadroomRGBColor(red: 0.85, green: 0.47, blue: 0.26))
         #expect(HeadroomBrandColorValues.codex == HeadroomRGBColor(red: 0.28, green: 0.34, blue: 1.00))
+        #expect(HeadroomBrandColorValues.grok == HeadroomRGBColor(red: 0.36, green: 0.40, blue: 0.46))
+        #expect(HeadroomBrandColorValues.cursor == HeadroomRGBColor(red: 0.33, green: 0.34, blue: 0.38))
+    }
+
+    @Test func newProviderTextAccentsMatchCanonicalSpec() {
+        #expect(HeadroomWidgetColorValues.textAccent(for: ProviderID.grok.raw, dark: false) == HeadroomRGBColor(red: 0.20, green: 0.22, blue: 0.25))
+        #expect(HeadroomWidgetColorValues.textAccent(for: ProviderID.grok.raw, dark: true) == HeadroomRGBColor(red: 0.78, green: 0.80, blue: 0.84))
+        #expect(HeadroomWidgetColorValues.textAccent(for: ProviderID.cursor.raw, dark: false) == HeadroomRGBColor(red: 0.17, green: 0.17, blue: 0.18))
+        #expect(HeadroomWidgetColorValues.textAccent(for: ProviderID.cursor.raw, dark: true) == HeadroomRGBColor(red: 0.81, green: 0.81, blue: 0.83))
+    }
+
+    /// Guards the P1 "grey-identity default arm" class of bug: every registered provider
+    /// must resolve a real title accent (both schemes), not fall through to `.secondary`.
+    /// Cursor's mark is inset like Claude's, so its optical scale must be corrected too.
+    @Test func everyRegisteredProviderHasABrandTextAccent() {
+        for id in [ProviderID.claude, .codex, .grok, .cursor] {
+            #expect(HeadroomWidgetColorValues.textAccent(for: id.raw, dark: false) != nil, "\(id.raw) light")
+            #expect(HeadroomWidgetColorValues.textAccent(for: id.raw, dark: true) != nil, "\(id.raw) dark")
+        }
+        #expect(HeadroomBrandMark.opticalScale(for: ProviderID.cursor.raw) == 0.9)
     }
 
     @Test func usageSeverityColorsMatchCanonicalSpec() {
