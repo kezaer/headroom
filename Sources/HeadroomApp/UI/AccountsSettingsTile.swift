@@ -146,26 +146,45 @@ struct AccountsSettingsTile: View {
             removalState: removalState
         )
         let isEditingLabel = focusedLabel == account.key || hoveredLabel == account.key
+        let email = accountEmail(from: snapshot)
         return HStack(spacing: 8) {
-            // Quiet at rest, but the affordance reveals on approach: a hover/focus fill
-            // marks the label as editable (impeccable audit P1 — a plain field that
-            // renders identically to static text hides the rename feature entirely).
-            TextField("Account name", text: labelBinding(for: account))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .focused($focusedLabel, equals: account.key)
-                .onSubmit { commitLabel(for: account) }
-                .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(
-                    Color.primary.opacity(isEditingLabel ? 0.06 : 0),
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                )
-                .onHover { hovering in
-                    hoveredLabel = hovering ? account.key : (hoveredLabel == account.key ? nil : hoveredLabel)
+            VStack(alignment: .leading, spacing: 1) {
+                // Quiet at rest, but the affordance reveals on approach: a hover/focus fill
+                // marks the label as editable (impeccable audit P1 — a plain field that
+                // renders identically to static text hides the rename feature entirely).
+                TextField("Account name", text: labelBinding(for: account))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .focused($focusedLabel, equals: account.key)
+                    .onSubmit { commitLabel(for: account) }
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(
+                        Color.primary.opacity(isEditingLabel ? 0.06 : 0),
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
+                    .onHover { hovering in
+                        hoveredLabel = hovering ? account.key : (hoveredLabel == account.key ? nil : hoveredLabel)
+                    }
+                    .frame(maxWidth: 158, alignment: .leading)
+                    .help("Click to rename this account")
+                    .accessibilityLabel("\(account.label) account name")
+                if let email {
+                    // Under the (renameable) name, not beside it: the label is the user's
+                    // word for the account and the address is what it actually resolves to,
+                    // so managing accounts here means verifying one against the other. The
+                    // 6pt inset + 158pt cap match the field above, so both sit on one text
+                    // axis and a long address never shoves the status column around.
+                    Text(email)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: 158, alignment: .leading)
+                        .help(email)
+                        .accessibilityLabel("Signed in as \(email)")
                 }
-                .frame(maxWidth: 158, alignment: .leading)
-                .help("Click to rename this account")
-                .accessibilityLabel("\(account.label) account name")
+            }
             if account.isBuiltIn {
                 Text("CLI login")
                     .font(.system(size: 10, weight: .medium))
@@ -247,6 +266,15 @@ struct AccountsSettingsTile: View {
         .onChange(of: setupState) {
             SetupSessions.announceFailureIfNeeded(for: account)
         }
+    }
+
+    /// Nil for an account with no known address yet — a row can render before its first
+    /// poll (or from a source without the claim), so the line collapses rather than
+    /// holding a placeholder. Non-nil, not `.live`, is the gate: a stale row keeps the
+    /// last-known address, which is exactly when "which login is this?" gets asked.
+    private func accountEmail(from snapshot: UsageSnapshot) -> String? {
+        guard let email = snapshot.accountEmail, !email.isEmpty else { return nil }
+        return email
     }
 
     @ViewBuilder private func statusLabel(

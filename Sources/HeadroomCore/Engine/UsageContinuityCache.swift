@@ -1,8 +1,9 @@
 import Foundation
 
 /// Redaction-safe persistence for last-known subscription windows. This cache stores
-/// only display-ready usage values keyed by provider/account; credentials, raw provider
-/// responses, CLI output, paths, and failure details never cross this boundary.
+/// only display-ready values keyed by provider/account — usage numbers plus the plan
+/// label and account email the UI already shows; credentials, raw provider responses,
+/// CLI output, paths, and failure details never cross this boundary.
 public protocol UsageContinuityCaching: Sendable {
     func load() -> [AccountKey: UsageSnapshot]
     func save(_ snapshot: UsageSnapshot, for key: AccountKey)
@@ -61,12 +62,16 @@ private struct StoredSnapshot: Codable {
     let key: AccountKey
     let windows: [StoredWindow]
     let planLabel: String?
+    /// Persisted alongside the plan label so a relaunch still names the account before
+    /// the first poll lands. Optional, so records written by earlier builds still decode.
+    let accountEmail: String?
     let capturedAt: Date?
 
     init(key: AccountKey, snapshot: UsageSnapshot) {
         self.key = key
         self.windows = snapshot.windows.map(StoredWindow.init)
         self.planLabel = snapshot.planLabel
+        self.accountEmail = snapshot.accountEmail
         self.capturedAt = snapshot.capturedAt
     }
 
@@ -77,6 +82,7 @@ private struct StoredSnapshot: Codable {
             providerID: key.providerID,
             windows: restoredWindows,
             planLabel: planLabel,
+            accountEmail: accountEmail,
             capturedAt: capturedAt,
             freshness: .stale(.transient("Last known usage — refreshing"))
         )
@@ -175,6 +181,7 @@ enum UsageContinuityPolicy {
             providerID: providerID,
             windows: windows,
             planLabel: cached.planLabel,
+            accountEmail: cached.accountEmail,
             capturedAt: cached.capturedAt,
             freshness: .stale(.transient("Last known usage — refreshing"))
         )
@@ -223,6 +230,7 @@ enum UsageContinuityPolicy {
             providerID: prior.providerID,
             windows: windows,
             planLabel: prior.planLabel,
+            accountEmail: prior.accountEmail,
             capturedAt: prior.capturedAt,
             freshness: .stale(reason)
         )
@@ -318,6 +326,7 @@ enum UsageContinuityPolicy {
             providerID: fresh.providerID,
             windows: fresh.windows + retained,
             planLabel: fresh.planLabel,
+            accountEmail: fresh.accountEmail,
             capturedAt: fresh.capturedAt,
             freshness: .live
         )

@@ -706,6 +706,7 @@ public final class UsageStore {
             providerID: snapshot.providerID,
             windows: ordered,
             planLabel: snapshot.planLabel,
+            accountEmail: snapshot.accountEmail,
             capturedAt: snapshot.capturedAt,
             freshness: snapshot.freshness
         )
@@ -752,6 +753,7 @@ public final class UsageStore {
             providerID: snapshot.providerID,
             windows: snapshot.windows.filter { !$0.kind.isCodexSparkCounter },
             planLabel: snapshot.planLabel,
+            accountEmail: snapshot.accountEmail,
             capturedAt: snapshot.capturedAt,
             freshness: snapshot.freshness
         )

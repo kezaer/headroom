@@ -110,3 +110,9 @@ official `claude` CLI's `/usage` panel instead.
   but it needs separate watch targets, signing/provisioning, widget complications or a
   Watch app surface, and real-device QA. Treat it as a follow-up rather than folding it
   into the iPhone companion branch.
+
+- **Orphaned Claude account config homes.** `~/Library/Application Support/Headroom/Accounts/claude/`
+  holds ~15 UUID dirs (each with `config/` + `workspace/`) but the registry lists only one
+  extra Claude account. Likely leftovers from repeated add/remove or demo/test runs that
+  didn't clean up. Investigate why removal/cleanup missed them and whether the app should
+  garbage-collect config homes not present in `providerAccounts.v1`.

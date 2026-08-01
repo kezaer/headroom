@@ -516,6 +516,21 @@ private struct AccountSectionView: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Shown in the menu bar")
             }
+            if let email = accountEmail {
+                // Identity check (Aug 2026): the label is user-chosen and can drift from
+                // the login it names, so the signed-in address rides beside it in the plan
+                // pill's tertiary register — metadata, not a second label. Inline rather
+                // than a subordinate line so a five-account stack costs no extra height.
+                // Negative layout priority yields width to the account name first, and
+                // middle truncation keeps the domain visible on long addresses.
+                Text(email)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(-1)
+                    .help(email)
+            }
             Spacer(minLength: 6)
             if case .stale(let reason) = snapshot.freshness, !reason.isPermanent {
                 staleTag
@@ -525,10 +540,20 @@ private struct AccountSectionView: View {
         .accessibilityLabel(accessibilityIdentity)
     }
 
+    /// Nil whenever the account has no known address yet (pre-first-poll, or a source
+    /// without the claim) — a normal state, so the row simply collapses. Gated on
+    /// non-nil, never on `.live`: the last-known address persists across stale
+    /// refreshes exactly like the plan pill.
+    private var accountEmail: String? {
+        guard let email = snapshot.accountEmail, !email.isEmpty else { return nil }
+        return email
+    }
+
     private var accessibilityIdentity: String {
         // Explicit label replaces the band's combined child labels, so re-state the
         // menu-bar mark here (H3a) — otherwise its "Shown in the menu bar" is dropped.
         var parts = ["\(account.label) account"]
+        if let email = accountEmail { parts.append("signed in as \(email)") }
         if let plan = snapshot.planLabel, !plan.isEmpty { parts.append("\(plan) plan") }
         if isMenuBarAccount { parts.append("Shown in the menu bar") }
         return parts.joined(separator: ", ")

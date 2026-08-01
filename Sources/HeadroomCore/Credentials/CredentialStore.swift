@@ -18,8 +18,18 @@ public actor CredentialStore {
     }
 
     public func codexAccessToken() async -> Result<String, FailureReason> {
+        await codexSession().map(\.accessToken)
+    }
+
+    /// Token plus the signed-in account's email. Same typed failure mapping as
+    /// `codexAccessToken()` — the email rides along so the provider doesn't have to read
+    /// `auth.json` a second time just for identity.
+    public func codexSession() async -> Result<CodexSession, FailureReason> {
         do {
-            return .success(try codexReader.readCodexCredential().accessToken)
+            let credential = try codexReader.readCodexCredential()
+            return .success(
+                CodexSession(accessToken: credential.accessToken, accountEmail: credential.email)
+            )
         } catch CredentialError.notLoggedIn {
             return .failure(.providerSetup(.codexAuthAbsent))
         } catch CredentialError.permissionDenied {

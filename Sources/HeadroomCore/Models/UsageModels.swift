@@ -228,6 +228,12 @@ public struct UsageSnapshot: Sendable, Equatable {
     public let windows: [UsageWindow]
     /// Lenient plan label — any string passes through (KTD6); nil when absent.
     public let planLabel: String?
+    /// Which email this account is signed in as, read from the account file the official
+    /// CLI itself wrote (`.claude.json` / `auth.json`). Lenient like `planLabel`: nil
+    /// whenever the source is absent or unreadable — identity is display context, so a
+    /// missing email must never turn a good usage capture into a failure. Defaulted in
+    /// the initializer so snapshot *transforms* opt in explicitly to carrying it forward.
+    public let accountEmail: String?
     public let capturedAt: Date?
     public let freshness: Freshness
 
@@ -235,12 +241,14 @@ public struct UsageSnapshot: Sendable, Equatable {
         providerID: ProviderID,
         windows: [UsageWindow],
         planLabel: String?,
+        accountEmail: String? = nil,
         capturedAt: Date?,
         freshness: Freshness
     ) {
         self.providerID = providerID
         self.windows = windows
         self.planLabel = planLabel
+        self.accountEmail = accountEmail
         self.capturedAt = capturedAt
         self.freshness = freshness
     }
@@ -251,18 +259,21 @@ public struct UsageSnapshot: Sendable, Equatable {
             providerID: providerID,
             windows: [],
             planLabel: nil,
+            accountEmail: nil,
             capturedAt: nil,
             freshness: .pending
         )
     }
 
     /// A failed fetch with no fresh data. The store merges prior windows back in for
-    /// continuity (KTD7), so this carries none of its own.
+    /// continuity (KTD7) — including the last-known plan label and account email — so
+    /// this carries none of its own.
     public static func stale(for providerID: ProviderID, reason: FailureReason) -> UsageSnapshot {
         UsageSnapshot(
             providerID: providerID,
             windows: [],
             planLabel: nil,
+            accountEmail: nil,
             capturedAt: nil,
             freshness: .stale(reason)
         )
@@ -276,6 +287,7 @@ public struct UsageSnapshot: Sendable, Equatable {
             providerID: providerID,
             windows: windows,
             planLabel: planLabel,
+            accountEmail: accountEmail,
             capturedAt: capturedAt,
             freshness: .stale(reason)
         )
