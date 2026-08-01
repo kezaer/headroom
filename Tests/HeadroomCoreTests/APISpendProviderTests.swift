@@ -159,6 +159,27 @@ struct APISpendProviderTests {
         #expect(fetcher.lastURL?.path == "/v1/billing/teams/team-legacy/postpaid/invoice/preview")
     }
 
+    @Test func xAIPostpaidFailureKeepsKnownZeroPrepaidBalance() async {
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 200, body: Data(#"{"scope":"SCOPE_TEAM","scopeId":"team-123"}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"total":{"val":"0"}}"#.utf8))),
+            .success(HTTPResult(status: 503, body: Data())),
+        ])
+        let provider = XAIAPISpendProvider(credentials: store(.xAI), http: fetcher, now: { now })
+
+        let snapshot = await provider.fetchSpend(period: .currentMonth)
+
+        #expect(snapshot.amount == 0)
+        #expect(snapshot.currency == "usd")
+        #expect(snapshot.kind == .balance)
+        #expect(snapshot.periodLabel == "Prepaid balance")
+        #expect(snapshot.capturedAt == now)
+        guard case .stale = snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+    }
+
     @Test func xAITeamCacheIsInvalidatedWhenManagementKeyChanges() async {
         let keyStore = MockAPIKeyStore(keys: [.xAI: "first-key"])
         let credentials = CredentialStore(

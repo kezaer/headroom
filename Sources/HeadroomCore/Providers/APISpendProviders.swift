@@ -210,7 +210,7 @@ public struct XAIAPISpendProvider: APISpendProvider {
             .appendingPathComponent("preview")
         switch await http.get(url: previewURL, headers: headers) {
         case .failure(let reason):
-            return stale("Current billing period", reason)
+            return zeroPrepaidBalance(reason: reason)
         case .success(let result):
             switch result.status {
             case 200:
@@ -219,11 +219,11 @@ public struct XAIAPISpendProvider: APISpendProvider {
                 else { return stale("Current billing period", .decode("Couldn't read xAI invoice preview")) }
                 return live(amount: max(0, cents) / 100, label: "Current billing period", kind: .periodSpend)
             case 401:
-                return stale("Current billing period", .needsReauth("xAI management key rejected"))
+                return zeroPrepaidBalance(reason: .needsReauth("xAI management key rejected"))
             case 403:
-                return stale("Current billing period", .scopeDenied("xAI key lacks billing read access"))
+                return zeroPrepaidBalance(reason: .scopeDenied("xAI key lacks billing read access"))
             default:
-                return stale("Current billing period", UsageWindowBuilder.genericFailure(for: result.status))
+                return zeroPrepaidBalance(reason: UsageWindowBuilder.genericFailure(for: result.status))
             }
         }
     }
@@ -243,6 +243,22 @@ public struct XAIAPISpendProvider: APISpendProvider {
 
     private func stale(_ label: String, _ reason: FailureReason) -> APISpendSnapshot {
         .stale(providerID: id, displayName: displayName, periodLabel: label, reason: reason)
+    }
+
+    /// The prepaid request already proved the balance is zero. Preserve that known
+    /// value when the optional postpaid preview fails so continuity cannot resurrect
+    /// an older positive balance.
+    private func zeroPrepaidBalance(reason: FailureReason) -> APISpendSnapshot {
+        APISpendSnapshot(
+            providerID: id,
+            displayName: displayName,
+            amount: 0,
+            currency: "usd",
+            periodLabel: "Prepaid balance",
+            kind: .balance,
+            capturedAt: now(),
+            freshness: .stale(reason)
+        )
     }
 }
 
