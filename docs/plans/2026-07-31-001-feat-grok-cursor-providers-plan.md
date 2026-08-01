@@ -137,6 +137,12 @@ Stage A (U1–U4) makes the app provider-count-agnostic and is provider-independ
 
 ## Implementation Units
 
+> **Execution checkpoint — 2026-08-01:** U1–U4 are complete. U8 is implemented and
+> covered by automated tests; its real-management-key acceptance remains open. The
+> official Grok CLI (`0.2.118`) and Cursor Agent (`2026.07.23-e383d2b`) are installed,
+> but neither live account capture was completed before this checkpoint. Resume with
+> U5, then U6–U7; run U9 before deciding whether U10 is feasible. U11–U12 remain open.
+
 | U-ID | Title | Key files | Depends on |
 |---|---|---|---|
 | U1 | Core surface mapping + registry plumbing | `Sources/HeadroomCore/Models/UsageModels.swift`, `Engine/UsageStore.swift`, `Settings/Preferences.swift` | — |
