@@ -109,8 +109,13 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(!CursorUsageCLIProbe.isReadyPrompt("Ask (shift+tab to cycle)"))
 
         #expect(CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usage\n/context"))
+        // The live TUI pads the arrow-to-command gap with several spaces and trails the
+        // row with a description; both must still classify as the selected /usage row.
+        #expect(CursorUsageCLIProbe.isUsageAutocompleteSelected("→  /usage    Show plan and on-demand usage"))
         #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("/usage\n/context"))
         #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /context\n/usage"))
+        // Token boundary: a differently-named command must never satisfy the gate.
+        #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usages\n/context"))
     }
 
     @Test func cursorIsExplicitlySingleAccount() {

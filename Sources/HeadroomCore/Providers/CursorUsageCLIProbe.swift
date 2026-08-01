@@ -262,10 +262,13 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     }
 
     /// Cursor paints an arrow beside the active slash-command completion. Requiring the
-    /// exact `/usage` selection ensures the only Enter we send cannot submit arbitrary
-    /// text when the command is absent or renamed.
+    /// arrow-selected `/usage` row ensures the only Enter we send cannot submit arbitrary
+    /// text when the command is absent or renamed. The live TUI pads the arrow-to-command
+    /// gap with a variable number of spaces (e.g. `→  /usage`), so match one-or-more
+    /// spaces rather than a single literal one; the trailing boundary keeps `/usage` a
+    /// whole token so `/usages`-style commands can never satisfy the gate.
     static func isUsageAutocompleteSelected(_ strippedText: String) -> Bool {
-        strippedText.contains("→ /usage")
+        strippedText.contains(/→\s+\/usage(?:\s|$)/)
     }
 
     private static func terminateProcessGroup(_ pid: pid_t) {

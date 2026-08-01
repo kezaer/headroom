@@ -175,15 +175,19 @@ Stage A (U1–U4) makes the app provider-count-agnostic and is provider-independ
 > omits reset-time precision, so Headroom preserves its label verbatim and conservatively
 > expires continuity at the end of the displayed UTC day.
 >
-> **Merge blocker after review hardening:** the prompt allowlist now requires the normal
-> `Ask (shift+tab to cycle)` input surface and an actively selected `→ /usage`
-> autocomplete row before sending a single Enter. Unit coverage passes, and an isolated
-> bounded PTY capture sees both markers, but the final production `--probe-cursor` run
-> returns `unrecognized Cursor Agent surface (no input sent)` at the readiness gate.
-> Authentication is valid; this is a PTY render/classification mismatch. Resume by
-> capturing safe marker diagnostics from the production probe, fix the readiness
-> classifier without weakening the input allowlist, and require a live parsed snapshot
-> before merging PR #90.
+> **Merge blocker after review hardening — RESOLVED 2026-08-01:** the prompt allowlist
+> requires the normal `Ask (shift+tab to cycle)` input surface and an actively selected
+> `→ /usage` autocomplete row before sending a single Enter. Env-gated marker diagnostics
+> on the production `--probe-cursor` run isolated the miss: **boot classification passed**;
+> the failure was the autocomplete gate. The live TUI renders the selected row as
+> `→  /usage` (arrow + several spaces), while `isUsageAutocompleteSelected` required the
+> exact single-space literal `"→ /usage"`, so it fell through to `.unknownUI`. Fixed by
+> matching `/→\s+\/usage(?:\s|$)/` — still requires the arrow-selected `/usage` row as a
+> whole token (so a renamed/absent command or `/usages` can never authorize the Enter),
+> only tolerant of whitespace count; the allowlist is not weakened. The temporary
+> diagnostics were removed. Shipping-path `swift run Headroom --probe-cursor` now returns
+> a live parsed snapshot (Pro+, Monthly 0% used, resets Sep 1, on-demand disabled);
+> `swift test` (395) and `HeadroomAppTests` (8) green. PR #90 is unblocked.
 
 | U-ID | Title | Key files | Depends on |
 |---|---|---|---|
