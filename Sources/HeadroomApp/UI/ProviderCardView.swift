@@ -234,6 +234,7 @@ struct ProviderCardView: View {
                 ForEach(entries) { entry in
                     AccountSectionView(
                         entry: entry,
+                        providerDisplayName: displayName,
                         percentageMode: percentageMode,
                         now: now,
                         isMenuBarAccount: entry.id == entries.first?.id,
@@ -447,6 +448,7 @@ private struct ProviderSetupRecoveryCard: View {
 /// stronger group boundary while still sitting one hierarchy step below the brand row.
 private struct AccountSectionView: View {
     let entry: ProviderAccountEntry
+    let providerDisplayName: String
     let percentageMode: UsagePercentageMode
     let now: Date
     /// H3a: the built-in `.primary` account (`entries.first`) is the one the menu bar and
@@ -571,18 +573,18 @@ private struct AccountSectionView: View {
     @ViewBuilder private func signInContent(_ reason: FailureReason) -> some View {
         let recoveryPresentation = reason.providerSetupOutcome?.recoveryPresentation
         VStack(alignment: .leading, spacing: 7) {
-            if case .blockedByCodexLogin = SetupSessions.state(for: account) {
+            if case .blockedByProviderLogin = SetupSessions.state(for: account) {
                 HStack(spacing: 7) {
                     Image(systemName: "terminal")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    Text("Another Codex sign-in is open")
+                    Text("Another \(providerDisplayName) sign-in is open")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 6)
                     Button("Continue setup") { SetupSessions.continueSetup(for: account) }
                         .buttonStyle(SetupChipButtonStyle())
-                        .accessibilityLabel("Continue Codex setup for \(account.label)")
+                        .accessibilityLabel("Continue \(providerDisplayName) setup for \(account.label)")
                 }
             } else if isWaitingForSetup {
                 HStack(spacing: 7) {

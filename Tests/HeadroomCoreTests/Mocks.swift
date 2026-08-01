@@ -79,6 +79,25 @@ struct MockClaudeSource: ClaudeUsageSource {
     func capturePanel() async -> ClaudePanelResult { result }
 }
 
+struct MockGrokSource: GrokUsageSource {
+    let result: GrokUsageSourceResult
+    func fetchUsage() async -> GrokUsageSourceResult { result }
+}
+
+final class CountingGrokSource: GrokUsageSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private let result: GrokUsageSourceResult
+    private var _fetchCount = 0
+    var fetchCount: Int { lock.withLock { _fetchCount } }
+
+    init(_ result: GrokUsageSourceResult) { self.result = result }
+
+    func fetchUsage() async -> GrokUsageSourceResult {
+        lock.withLock { _fetchCount += 1 }
+        return result
+    }
+}
+
 /// Provider double for engine tests.
 struct StubProvider: UsageProvider {
     let id: ProviderID
@@ -136,7 +155,9 @@ final class CountingProvider: UsageProvider, @unchecked Sendable {
 /// Provider double that blocks a fetch until the test releases it.
 final class SlowCountingProvider: UsageProvider, @unchecked Sendable {
     let id: ProviderID
+    let accountID: AccountID
     let displayName: String
+    let pollingLane: ProviderPollingLane
     private let lock = NSLock()
     private var _count = 0
     private var didStart = false
@@ -145,9 +166,16 @@ final class SlowCountingProvider: UsageProvider, @unchecked Sendable {
     private var shouldRelease = false
     var fetchCount: Int { lock.withLock { _count } }
 
-    init(id: ProviderID, displayName: String = "P") {
+    init(
+        id: ProviderID,
+        accountID: AccountID = .primary,
+        displayName: String = "P",
+        pollingLane: ProviderPollingLane = .concurrent
+    ) {
         self.id = id
+        self.accountID = accountID
         self.displayName = displayName
+        self.pollingLane = pollingLane
     }
 
     func waitUntilFetchStarts() async {

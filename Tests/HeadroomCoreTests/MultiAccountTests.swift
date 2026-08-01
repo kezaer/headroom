@@ -8,6 +8,22 @@ private struct AccountStubProvider: UsageProvider {
     let accountID: AccountID
     let displayName: String
     let snapshot: UsageSnapshot
+    let accountCapacity: Int
+
+    init(
+        id: ProviderID,
+        accountID: AccountID,
+        displayName: String,
+        snapshot: UsageSnapshot,
+        accountCapacity: Int = AccountRegistry.maxPerProvider
+    ) {
+        self.id = id
+        self.accountID = accountID
+        self.displayName = displayName
+        self.snapshot = snapshot
+        self.accountCapacity = accountCapacity
+    }
+
     func fetchSnapshot() async -> UsageSnapshot { snapshot }
 }
 
@@ -55,6 +71,7 @@ private struct ProbedAccountProvider: UsageProvider {
     let id: ProviderID
     let accountID: AccountID
     let displayName = "P"
+    let pollingLane: ProviderPollingLane = .serial("claude-cli")
     let probe: FetchConcurrencyProbe
 
     func fetchSnapshot() async -> UsageSnapshot {
@@ -478,6 +495,37 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
         )
         #expect(!store.canAddAccount(for: .claude))
         #expect(store.addAccount(for: .claude) == nil)
+    }
+
+    @Test func singleAccountProviderRejectsAdditionalAccounts() {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .cursor,
+                    accountID: .primary,
+                    displayName: "Cursor",
+                    snapshot: .pending(for: .cursor),
+                    accountCapacity: 1
+                ),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Cursor",
+                    snapshot: .pending(for: .cursor),
+                    accountCapacity: 1
+                )
+            }
+        )
+
+        #expect(store.accountCapacity(for: .cursor) == 1)
+        #expect(!store.canAddAccount(for: .cursor))
+        #expect(store.addAccount(for: .cursor) == nil)
     }
 
     @Test func refreshAccountFetchesOnlyThatAccount() async {

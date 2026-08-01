@@ -245,7 +245,14 @@ public final class UsageStore {
     public var apiSpendProviderOrder: [ProviderID] {
         registeredAPISpendProviderOrder.filter { id in
             guard let surface = UsageSurface.api(for: id) else { return false }
-            return enabledSurfaces.contains(surface)
+            guard enabledSurfaces.contains(surface) else { return false }
+            // A live nil amount is an explicit "not applicable" result (currently
+            // Cursor with on-demand disabled), so no empty spend row is rendered.
+            if let snapshot = apiSpendSnapshots[id],
+               snapshot.freshness == .live, snapshot.amount == nil {
+                return false
+            }
+            return true
         }
     }
 
@@ -272,8 +279,14 @@ public final class UsageStore {
     public func canAddAccount(for providerID: ProviderID) -> Bool {
         // Delegate the cap rule to the registry — one source of truth for the same
         // gate `addAccount` enforces (code-review finding).
-        guard let accountRegistry, providerFactory != nil else { return false }
+        guard let accountRegistry, providerFactory != nil,
+              accounts(for: providerID).count < accountCapacity(for: providerID)
+        else { return false }
         return accountRegistry.canAddAccount(for: providerID)
+    }
+
+    public func accountCapacity(for providerID: ProviderID) -> Int {
+        providers.first(where: { $0.id == providerID })?.accountCapacity ?? 1
     }
 
     /// Create a new account: registry entry, on-disk config home, provider instance,
@@ -281,7 +294,8 @@ public final class UsageStore {
     /// for a poll. Returns nil at the per-provider cap.
     @discardableResult
     public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
-        guard let accountRegistry, let providerFactory,
+        guard canAddAccount(for: providerID),
+              let accountRegistry, let providerFactory,
               let account = accountRegistry.addAccount(for: providerID, label: label)
         else { return nil }
         guard case .success = accountStorage.ensureDirectories(for: account) else {
@@ -567,18 +581,27 @@ public final class UsageStore {
             bufferingPolicy: .unbounded
         )
         await withTaskGroup(of: Void.self) { group in
-            // Each Claude fetch owns a full interactive CLI/PTY process for up to 30s.
-            // Sequence those probes so five configured accounts cannot create a process
-            // storm. Other providers remain concurrent with that serial Claude lane.
-            let claudeProviders = candidates.filter { $0.id == .claude }
-            if !claudeProviders.isEmpty {
+            // Partition once from the immutable provider declaration. Each process-heavy
+            // CLI gets its own keyed serial lane, while network work and other CLI lanes
+            // remain concurrent with it.
+            var serialLanes: [String: [any UsageProvider]] = [:]
+            var concurrentProviders: [any UsageProvider] = []
+            for provider in candidates {
+                switch provider.pollingLane {
+                case .concurrent:
+                    concurrentProviders.append(provider)
+                case .serial(let laneID):
+                    serialLanes[laneID, default: []].append(provider)
+                }
+            }
+            for lane in serialLanes.values {
                 group.addTask {
-                    for provider in claudeProviders {
+                    for provider in lane {
                         continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
                     }
                 }
             }
-            for provider in candidates where provider.id != .claude {
+            for provider in concurrentProviders {
                 group.addTask {
                     continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
                 }

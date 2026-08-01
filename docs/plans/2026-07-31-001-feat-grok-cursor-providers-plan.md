@@ -137,11 +137,53 @@ Stage A (U1–U4) makes the app provider-count-agnostic and is provider-independ
 
 ## Implementation Units
 
-> **Execution checkpoint — 2026-08-01:** U1–U4 are complete. U8 is implemented and
-> covered by automated tests; its real-management-key acceptance remains open. The
-> official Grok CLI (`0.2.118`) and Cursor Agent (`2026.07.23-e383d2b`) are installed,
-> but neither live account capture was completed before this checkpoint. Resume with
-> U5, then U6–U7; run U9 before deciding whether U10 is feasible. U11–U12 remain open.
+> **Phase-one merge checkpoint — 2026-08-01:** U1–U7 are implemented. U8 is implemented
+> and covered by automated tests; its real-management-key acceptance remains open. U9
+> selected the feasible branch after a live authenticated Cursor Agent capture. U10's
+> provider, official `/usage` PTY probe, monthly meter, typed setup flow, single-account
+> cap, and on-demand parser are implemented and exercised against the live CLI. The
+> intentionally deferred tail is: U10's hard-limit presentation and remaining app-integration coverage, U11 brand
+> identity/copy, U12 fixtures/parity/switch sweep, xAI real-key acceptance, and final
+> four-provider visual QA. New provider surfaces remain disabled by default, so this
+> checkpoint preserves existing-install behavior while the tail continues separately.
+
+> **Grok verification — 2026-08-01:** U5 is complete against authenticated Grok Build
+> `0.2.118`. Its `grok agent stdio` server returns JSON-RPC `-32601` for `x.ai/billing`,
+> so KTD1 resolves to ACP-first with the CLI billing HTTP fallback for this release.
+> The fallback returned a typed weekly period from `2026-07-28T10:27:26.251601+00:00`
+> through `2026-08-04T10:27:26.251601+00:00`; proto3 omitted the zero-valued
+> `creditUsagePercent`, while typed period metadata and zero-valued cent objects made
+> the result a known 0% used rather than malformed data. Production browser login uses
+> an ephemeral loopback port and device auth uses no callback listener, so Grok login
+> sessions do not need Codex's fixed-port exclusion slot. A fresh `GROK_HOME` reported
+> unauthenticated without falling back to the built-in account. The permanent
+> `--probe-grok` command reported the same weekly window via `http`; the redacted
+> capture is `Tests/HeadroomCoreTests/Fixtures/grok-billing.json`. U6–U7 are implemented
+> and covered by focused provider, routing, handoff, setup, storage, and polling-lane
+> tests. The source model requires a genuine period end; if it is absent, Headroom
+> fails safe to a transient stale snapshot because `UsageWindow.resetsAt` is
+> intentionally non-optional and inventing a reset would violate R4.
+
+> **Cursor verification — 2026-08-01:** U9 is complete against authenticated Cursor
+> Agent `2026.07.23-e383d2b` on a Pro+ account. `status --format json` supplies only
+> authentication state and `about --format json` supplies the plan tier; neither exposes
+> usage. The official interactive `/usage` panel exposes the monthly included percentage,
+> a month/day reset label, and on-demand state/spend without sending a model request, so
+> KTD6 resolves to branch A. `--probe-cursor` captured and parsed the live panel. The
+> redacted fixture is `Tests/HeadroomCoreTests/Fixtures/cursor-usage.txt`; the durable
+> feasibility record is `docs/solutions/cursor-agent-usage-feasibility.md`. The panel
+> omits reset-time precision, so Headroom preserves its label verbatim and conservatively
+> expires continuity at the end of the displayed UTC day.
+>
+> **Merge blocker after review hardening:** the prompt allowlist now requires the normal
+> `Ask (shift+tab to cycle)` input surface and an actively selected `→ /usage`
+> autocomplete row before sending a single Enter. Unit coverage passes, and an isolated
+> bounded PTY capture sees both markers, but the final production `--probe-cursor` run
+> returns `unrecognized Cursor Agent surface (no input sent)` at the readiness gate.
+> Authentication is valid; this is a PTY render/classification mismatch. Resume by
+> capturing safe marker diagnostics from the production probe, fix the readiness
+> classifier without weakening the input allowlist, and require a live parsed snapshot
+> before merging PR #90.
 
 | U-ID | Title | Key files | Depends on |
 |---|---|---|---|

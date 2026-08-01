@@ -3,7 +3,8 @@ import AppKit
 import WidgetKit
 import HeadroomCore
 
-/// Entry point. Supports hidden diagnostics: `--probe-claude` / `--probe-codex` run the real
+/// Entry point. Supports hidden diagnostics: `--probe-claude` / `--probe-codex` /
+/// `--probe-grok` / `--probe-cursor` run the real
 /// provider capture once and print parsed windows; `--dump-phone-sync` decodes the iCloud KVS
 /// payload the Mac published for the iPhone. All run without launching the menu bar UI.
 @main
@@ -15,6 +16,14 @@ enum Entry {
         }
         if CommandLine.arguments.contains("--probe-codex") {
             runCodexProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-grok") {
+            runGrokProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-cursor") {
+            runCursorProbe()
             return
         }
         if CommandLine.arguments.contains("--dump-phone-sync") {
@@ -104,6 +113,88 @@ enum Entry {
                 }
             case .stale(let reason):
                 print("RESULT: stale Codex snapshot: \(reason.message)")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    private static func runGrokProbe() {
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            var overrides: [String: String] = [:]
+            var authPath: URL?
+            if let index = CommandLine.arguments.firstIndex(of: "--grok-home"),
+               CommandLine.arguments.indices.contains(index + 1) {
+                let home = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                overrides["GROK_HOME"] = home.path
+                authPath = home.appendingPathComponent("auth.json")
+                print("account home: isolated")
+            } else {
+                print("account home: built-in")
+            }
+
+            let source = GrokFallbackUsageSource(
+                primary: GrokACPUsageSource(environmentOverrides: overrides),
+                fallback: GrokHTTPUsageSource(authReader: GrokAuthFileReader(path: authPath))
+            )
+            let result = await source.fetchUsage()
+            switch result {
+            case .payload(let data, let transport):
+                let snapshot = await GrokProvider(
+                    source: CapturedGrokUsageSource(data: data, transport: transport)
+                ).fetchSnapshot()
+                guard snapshot.freshness == .live else {
+                    print("RESULT: Grok payload could not be parsed")
+                    semaphore.signal()
+                    return
+                }
+                print("RESULT: live Grok snapshot via \(transport.rawValue), parsed \(snapshot.windows.count) window(s):")
+                if let plan = snapshot.planLabel { print("  plan: \(plan)") }
+                for window in snapshot.windows {
+                    print("  • \(window.kind.shortLabel)  \(Int(window.percentUsed.rounded()))% used  →  \(window.resetsAt)")
+                }
+            case .methodUnavailable:
+                print("RESULT: Grok billing method unavailable and fallback was not attempted")
+            case .cliNotFound:
+                print("RESULT: Grok Build CLI not found")
+            case .authAbsent:
+                print("RESULT: login required")
+            case .authPermissionDenied, .authUnsafePermissions, .authMalformed, .authIOFailure:
+                print("RESULT: Grok sign-in file is unavailable")
+            case .rejectedAuth:
+                print("RESULT: Grok sign-in expired")
+            case .failure(let reason):
+                print("RESULT: Grok probe failed: \(reason.message)")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    private static func runCursorProbe() {
+        let semaphore = DispatchSemaphore(value: 0)
+        print("cursor-agent CLI: \(CursorUsageCLIProbe.resolveCursorPath() == nil ? "missing" : "available")")
+        Task {
+            switch await CursorUsageCLIProbe().capturePanel() {
+            case .panel(let text):
+                guard let parsed = CursorUsageParser.parse(text) else {
+                    print("RESULT: Cursor usage panel could not be parsed")
+                    semaphore.signal()
+                    return
+                }
+                print("RESULT: live Cursor snapshot via official /usage panel")
+                print("  plan: \(parsed.planName)")
+                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset=\(parsed.resetLabel)")
+                print("  on-demand: \(parsed.onDemand.isEnabled ? "enabled" : "disabled")")
+            case .loginRequired:
+                print("RESULT: login required")
+            case .cliNotFound:
+                print("RESULT: Cursor Agent CLI not found")
+            case .unknownUI:
+                print("RESULT: unrecognized Cursor Agent surface (no input sent)")
+            case .transientCapture:
+                print("RESULT: Cursor usage capture failed")
             }
             semaphore.signal()
         }
@@ -370,6 +461,8 @@ enum AppComposition {
         let factory: @MainActor (ProviderAccount, CredentialStore, URL) -> any UsageProvider
     }
 
+    private static let cursorUsageSource = CursorUsageCaptureCache(source: CursorUsageCLIProbe())
+
     /// Ordered composition registry. Adding a provider extends this table; Settings,
     /// account management, polling, and presentation discover the resulting order from
     /// the store instead of maintaining parallel provider literals.
@@ -378,6 +471,8 @@ enum AppComposition {
         [
             SubscriptionProviderRegistration(id: .claude, factory: makeClaudeProvider),
             SubscriptionProviderRegistration(id: .codex, factory: makeCodexProvider),
+            SubscriptionProviderRegistration(id: .grok, factory: makeGrokProvider),
+            SubscriptionProviderRegistration(id: .cursor, factory: makeCursorProvider),
         ]
     }
 
@@ -503,9 +598,9 @@ enum AppComposition {
     }
 
     /// The concrete provider for one account. Built-in accounts read the CLI's default
-    /// config (`~/.claude` / `~/.codex`) exactly as before; extra accounts route the
-    /// same compliant paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
-    /// `CODEX_HOME`) that the user signed into via the official CLI.
+    /// config (`~/.claude` / `~/.codex` / `~/.grok`) exactly as before; extra accounts
+    /// route the same paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
+    /// `CODEX_HOME` / `GROK_HOME`) that the user signed into via the official CLI.
     @MainActor
     static func provider(
         for account: ProviderAccount,
@@ -565,11 +660,42 @@ enum AppComposition {
         )
     }
 
+    @MainActor
+    private static func makeGrokProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        let configuration = ProviderAccountConfiguration.make(for: account)
+        guard let authFile = configuration.grokAuthFile else {
+            return UnavailableAccountProvider(account: account)
+        }
+        let overrides = configuration.grokHomeDirectory.map { ["GROK_HOME": $0.path] } ?? [:]
+        return GrokProvider(
+            source: GrokFallbackUsageSource(
+                primary: GrokACPUsageSource(environmentOverrides: overrides),
+                fallback: GrokHTTPUsageSource(authReader: GrokAuthFileReader(path: authFile))
+            ),
+            accountID: account.id
+        )
+    }
+
+    @MainActor
+    private static func makeCursorProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        guard account.isBuiltIn else { return UnavailableAccountProvider(account: account) }
+        return CursorProvider(source: cursorUsageSource)
+    }
+
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {
         [
             AnthropicAPISpendProvider(credentials: credentials),
             OpenAIAPISpendProvider(credentials: credentials),
             XAIAPISpendProvider(credentials: credentials),
+            CursorOnDemandSpendProvider(source: cursorUsageSource),
         ]
     }
 
@@ -597,5 +723,14 @@ private struct UnavailableAccountProvider: UsageProvider {
 
     func fetchSnapshot() async -> UsageSnapshot {
         .stale(for: id, reason: .transient("This provider is not available in this Headroom build"))
+    }
+}
+
+private struct CapturedGrokUsageSource: GrokUsageSource {
+    let data: Data
+    let transport: GrokUsageTransport
+
+    func fetchUsage() async -> GrokUsageSourceResult {
+        .payload(data, transport: transport)
     }
 }

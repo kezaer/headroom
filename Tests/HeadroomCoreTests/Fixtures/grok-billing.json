@@ -1,0 +1,21 @@
+{
+  "_capture": {
+    "capturedAt": "2026-08-01",
+    "cliVersion": "0.2.118",
+    "identityRedacted": true,
+    "transport": "http-after-stdio-method-unavailable"
+  },
+  "config": {
+    "billingPeriodEnd": "2026-08-04T10:27:26.251601+00:00",
+    "billingPeriodStart": "2026-07-28T10:27:26.251601+00:00",
+    "currentPeriod": {
+      "end": "2026-08-04T10:27:26.251601+00:00",
+      "start": "2026-07-28T10:27:26.251601+00:00",
+      "type": "USAGE_PERIOD_TYPE_WEEKLY"
+    },
+    "isUnifiedBillingUser": true,
+    "onDemandCap": {},
+    "onDemandUsed": {},
+    "prepaidBalance": {}
+  }
+}

@@ -18,6 +18,18 @@ import Testing
             (.codexRejectedAuth, .reconnectCodex, .checkNow, .boundedChecksAfterHandoff),
             (.codexStorageMismatch, .resolveCodexStorage, .checkNow, .none),
             (.codexCallbackIncomplete, .reconnectCodex, .connectCodexDeviceCode, .none),
+            (.grokCLIMissing, .installGrokCLI, nil, .none),
+            (.grokAuthAbsent, .connectGrok, .checkNow, .boundedChecksAfterHandoff),
+            (.grokPermissionDenied, .showPrivacyGuidance, .checkNow, .none),
+            (.grokUnsafePermissions, .reconnectGrok, .checkNow, .boundedChecksAfterHandoff),
+            (.grokMalformedAuth, .reconnectGrok, .checkNow, .boundedChecksAfterHandoff),
+            (.grokCredentialIO, .checkNow, nil, .none),
+            (.grokRejectedAuth, .reconnectGrok, .checkNow, .boundedChecksAfterHandoff),
+            (.grokTransientCapture, .checkNow, nil, .none),
+            (.cursorCLIMissing, .installCursorAgent, nil, .none),
+            (.cursorAuthAbsent, .connectCursor, .checkNow, .boundedChecksAfterHandoff),
+            (.cursorUnknownUI, .checkNow, .connectCursor, .none),
+            (.cursorTransientCapture, .checkNow, .connectCursor, .none),
         ]
 
         for (outcome, primaryAction, secondaryAction, automaticPolicy) in expectations {
@@ -42,11 +54,17 @@ import Testing
         #expect(!FailureReason.providerSetup(.claudeUnknownUI).isPermanent)
         #expect(FailureReason.providerSetup(.claudeLoginRequired).isPermanent)
         #expect(FailureReason.providerSetup(.codexPermissionDenied).isPermanent)
+        #expect(!FailureReason.providerSetup(.grokTransientCapture).isPermanent)
+        #expect(FailureReason.providerSetup(.grokPermissionDenied).isPermanent)
+        #expect(!FailureReason.providerSetup(.cursorTransientCapture).isPermanent)
+        #expect(FailureReason.providerSetup(.cursorAuthAbsent).isPermanent)
     }
 
     @Test func neverSignedInClassificationIsTyped() {
         #expect(ProviderSetupOutcome.claudeLoginRequired.isNeverSignedIn)
         #expect(ProviderSetupOutcome.codexAuthAbsent.isNeverSignedIn)
+        #expect(ProviderSetupOutcome.grokAuthAbsent.isNeverSignedIn)
+        #expect(ProviderSetupOutcome.cursorAuthAbsent.isNeverSignedIn)
         #expect(!ProviderSetupOutcome.claudeCLIMissing.isNeverSignedIn)
         #expect(!ProviderSetupOutcome.codexRejectedAuth.isNeverSignedIn)
     }

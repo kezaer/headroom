@@ -17,6 +17,18 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
     case codexRejectedAuth
     case codexStorageMismatch
     case codexCallbackIncomplete
+    case grokCLIMissing
+    case grokAuthAbsent
+    case grokPermissionDenied
+    case grokUnsafePermissions
+    case grokMalformedAuth
+    case grokCredentialIO
+    case grokRejectedAuth
+    case grokTransientCapture
+    case cursorCLIMissing
+    case cursorAuthAbsent
+    case cursorUnknownUI
+    case cursorTransientCapture
 
     public var message: String {
         switch self {
@@ -34,12 +46,26 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         case .codexRejectedAuth: "Codex sign-in expired — reconnect"
         case .codexStorageMismatch: "Codex stored this login somewhere Headroom cannot read"
         case .codexCallbackIncomplete: "Codex sign-in did not finish"
+        case .grokCLIMissing: "Install Grok Build to show usage"
+        case .grokAuthAbsent: "Connect with the official Grok Build CLI"
+        case .grokPermissionDenied: "Allow Headroom to read the Grok sign-in file"
+        case .grokUnsafePermissions: "Grok sign-in data is not stored privately — reconnect"
+        case .grokMalformedAuth: "Grok sign-in data is unreadable — reconnect"
+        case .grokCredentialIO: "Couldn't read Grok sign-in data"
+        case .grokRejectedAuth: "Grok sign-in expired — reconnect"
+        case .grokTransientCapture: "Couldn't read Grok usage — will retry"
+        case .cursorCLIMissing: "Install Cursor Agent to show usage"
+        case .cursorAuthAbsent: "Connect with the official Cursor Agent CLI"
+        case .cursorUnknownUI: "Cursor Agent opened an unrecognized screen"
+        case .cursorTransientCapture: "Couldn't read Cursor usage — will retry"
         }
     }
 
     public var isPermanent: Bool {
         switch self {
-        case .claudeUnknownUI, .claudeTransientCapture, .codexCredentialIO:
+        case .claudeUnknownUI, .claudeTransientCapture, .codexCredentialIO,
+             .grokCredentialIO, .grokTransientCapture, .cursorUnknownUI,
+             .cursorTransientCapture:
             false
         default:
             true
@@ -50,7 +76,7 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
     /// Timer backoff keys off this typed state rather than enumerating providers.
     public var isNeverSignedIn: Bool {
         switch self {
-        case .claudeLoginRequired, .codexAuthAbsent:
+        case .claudeLoginRequired, .codexAuthAbsent, .grokAuthAbsent, .cursorAuthAbsent:
             true
         default:
             false
@@ -94,6 +120,30 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         case .codexCallbackIncomplete:
             .init(status: message, primaryLabel: "Reopen Codex Login", primaryAction: .reconnectCodex,
                   secondaryLabel: "Use Device Code", secondaryAction: .connectCodexDeviceCode)
+        case .grokCLIMissing:
+            .init(status: message, primaryLabel: "Install Grok Build", primaryAction: .installGrokCLI)
+        case .grokAuthAbsent:
+            .init(status: message, primaryLabel: "Connect Grok", primaryAction: .connectGrok,
+                  secondaryLabel: "Check Now", secondaryAction: .checkNow,
+                  automaticPolicy: .boundedChecksAfterHandoff)
+        case .grokPermissionDenied:
+            .init(status: message, primaryLabel: "Privacy & Security Help", primaryAction: .showPrivacyGuidance,
+                  secondaryLabel: "Check Now", secondaryAction: .checkNow)
+        case .grokUnsafePermissions, .grokMalformedAuth, .grokRejectedAuth:
+            .init(status: message, primaryLabel: "Reconnect Grok", primaryAction: .reconnectGrok,
+                  secondaryLabel: "Check Now", secondaryAction: .checkNow,
+                  automaticPolicy: .boundedChecksAfterHandoff)
+        case .grokCredentialIO, .grokTransientCapture:
+            .init(status: message, primaryLabel: "Check Again", primaryAction: .checkNow)
+        case .cursorCLIMissing:
+            .init(status: message, primaryLabel: "Install Cursor Agent", primaryAction: .installCursorAgent)
+        case .cursorAuthAbsent:
+            .init(status: message, primaryLabel: "Connect Cursor", primaryAction: .connectCursor,
+                  secondaryLabel: "Check Now", secondaryAction: .checkNow,
+                  automaticPolicy: .boundedChecksAfterHandoff)
+        case .cursorUnknownUI, .cursorTransientCapture:
+            .init(status: message, primaryLabel: "Check Again", primaryAction: .checkNow,
+                  secondaryLabel: "Reconnect Cursor", secondaryAction: .connectCursor)
         }
     }
 }
@@ -106,6 +156,11 @@ public enum SetupRecoveryAction: Sendable, Equatable, Hashable {
     case connectCodex
     case connectCodexDeviceCode
     case reconnectCodex
+    case installGrokCLI
+    case connectGrok
+    case reconnectGrok
+    case installCursorAgent
+    case connectCursor
     case showPrivacyGuidance
     case resolveCodexStorage
     case checkNow

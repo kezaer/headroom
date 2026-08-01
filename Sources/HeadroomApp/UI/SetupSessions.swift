@@ -86,6 +86,8 @@ enum SetupSessions {
         switch account.providerID {
         case .claude: ClaudeSetupSession.openSetup(for: account, onRetry: onRetry)
         case .codex: CodexSetupSession.openSetup(for: account, onRetry: onRetry)
+        case .grok: assertionFailure("Grok setup requires the configured coordinator")
+        case .cursor: assertionFailure("Cursor setup requires the configured coordinator")
         default: assertionFailure("No setup session registered for \(account.providerID)")
         }
     }
@@ -124,12 +126,17 @@ enum SetupSessions {
             .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!)
         case .copyManualCommand:
             .copyManualCommand(.standard)
-        case .openClaudeSetup, .connectCodex, .reconnectCodex, .resolveCodexStorage:
+        case .openClaudeSetup, .connectCodex, .reconnectCodex, .resolveCodexStorage,
+             .connectGrok, .reconnectGrok, .connectCursor:
             .setup(.standard)
         case .installCodexCLI:
             .documentation(URL(string: "https://developers.openai.com/codex/cli/")!)
         case .connectCodexDeviceCode:
             .setup(.deviceCode)
+        case .installGrokCLI:
+            .documentation(URL(string: "https://x.ai/news/grok-build")!)
+        case .installCursorAgent:
+            .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)
         case .showPrivacyGuidance:
             .privacyGuidance(URL(string: "https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac")!)
         case .checkNow:
@@ -167,9 +174,14 @@ enum SetupSessions {
         guard case .failed(let failure) = state(for: account) else { return nil }
         switch failure {
         case .executableMissing:
-            return account.providerID == .claude
-                ? "Claude Code CLI wasn't found. Install or update it, then try again."
-                : "Codex CLI wasn't found. Install or update it, then try again."
+            let name = switch account.providerID {
+            case .claude: "Claude Code"
+            case .codex: "Codex"
+            case .grok: "Grok Build"
+            case .cursor: "Cursor Agent"
+            default: account.providerID.raw.capitalized
+            }
+            return "\(name) CLI wasn't found. Install or update it, then try again."
         case .stagingFailed:
             return "Headroom couldn't prepare the Terminal handoff. Try again."
         case .terminalRejected:
@@ -296,6 +308,23 @@ enum SetupSessions {
                         mode: mode,
                         completionMarker: completionMarker
                     )
+                case .grok:
+                    let executable = GrokCLI.resolveExecutable()
+                    guard executable != nil else { return .failure(.executableMissing) }
+                    let configuration = ProviderAccountConfiguration.make(for: account)
+                    script = GrokCLI.loginScript(
+                        executablePath: executable,
+                        grokHome: configuration.grokHomeDirectory?.path,
+                        mode: mode,
+                        completionMarker: completionMarker
+                    )
+                case .cursor:
+                    let executable = CursorCLI.resolveExecutable()
+                    guard executable != nil else { return .failure(.executableMissing) }
+                    script = CursorCLI.loginScript(
+                        executablePath: executable,
+                        completionMarker: completionMarker
+                    )
                 default:
                     return .failure(.stagingFailed)
                 }
@@ -405,6 +434,13 @@ enum SetupSessions {
                 codexHome: ProviderAccountConfiguration.make(for: account).codexHomeDirectory?.path,
                 mode: mode
             )
+        case .grok:
+            command = GrokCLI.accountLoginCommand(
+                grokHome: ProviderAccountConfiguration.make(for: account).grokHomeDirectory?.path,
+                mode: mode
+            )
+        case .cursor:
+            command = CursorCLI.loginCommand
         default:
             return false
         }

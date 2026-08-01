@@ -8,6 +8,8 @@ import Darwin
 ///   account approves the folder once — same flow as the built-in account).
 /// - Codex: `CODEX_HOME` pointed at `…/codex/<id>`; `codex login` writes `auth.json`
 ///   there and Headroom only ever reads it (KTD3 unchanged).
+/// - Grok: `GROK_HOME` pointed at `…/grok/<id>`; `grok login` writes `auth.json`
+///   there and the official CLI does not fall back to the built-in account.
 ///
 /// The built-in `.primary` account never routes through here — it uses the CLI's own
 /// default config so existing installs keep working untouched.
@@ -60,6 +62,15 @@ public enum AccountStorage {
 
     public static func codexAuthFileURL(for account: ProviderAccount) -> URL {
         codexHomeDirectoryURL(for: account).appendingPathComponent("auth.json")
+    }
+
+    /// `GROK_HOME` for an extra Grok account; `auth.json` lives directly inside.
+    public static func grokHomeDirectoryURL(for account: ProviderAccount) -> URL {
+        accountDirectoryURL(for: account)
+    }
+
+    public static func grokAuthFileURL(for account: ProviderAccount) -> URL {
+        grokHomeDirectoryURL(for: account).appendingPathComponent("auth.json")
     }
 
     public static func setupCompletionMarker(for account: ProviderAccount) -> SetupCompletionMarker {

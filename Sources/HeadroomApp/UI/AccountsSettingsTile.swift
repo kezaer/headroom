@@ -87,23 +87,28 @@ struct AccountsSettingsTile: View {
 
     @ViewBuilder private func providerGroup(_ providerID: ProviderID) -> some View {
         let accounts = store.accounts(for: providerID)
+        let capacity = store.accountCapacity(for: providerID)
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 HStack(spacing: 7) {
                     ProviderLogoView(providerID: providerID, size: 15)
                     Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
                 }
-                Text("\(accounts.count) of \(AccountRegistry.maxPerProvider)")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 12)
-                Button("Add Account…") { addAccount(for: providerID) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(!store.canAddAccount(for: providerID))
-                    .help(store.canAddAccount(for: providerID)
-                          ? "Sign in another account via the official CLI"
-                          : "Up to \(AccountRegistry.maxPerProvider) accounts per provider")
+                if capacity > 1 {
+                    Text("\(accounts.count) of \(capacity)")
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
+                    Button("Add Account…") { addAccount(for: providerID) }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!store.canAddAccount(for: providerID))
+                        .help(store.canAddAccount(for: providerID)
+                              ? "Sign in another account via the official CLI"
+                              : "Up to \(capacity) accounts per provider")
+                } else {
+                    Spacer(minLength: 12)
+                }
             }
             ForEach(accounts) { account in
                 accountRow(account)
@@ -134,7 +139,7 @@ struct AccountsSettingsTile: View {
             snapshot: snapshot,
             waiting: isWaitingForSetup(account),
             blocked: {
-                if case .blockedByCodexLogin = setupState { return true }
+                if case .blockedByProviderLogin = setupState { return true }
                 return false
             }(),
             setupFailed: setupFailure != nil,
@@ -173,7 +178,9 @@ struct AccountsSettingsTile: View {
             statusLabel(
                 status,
                 setupFailure: setupFailure,
-                setupMode: SetupSessions.mode(for: account)
+                setupMode: SetupSessions.mode(for: account),
+                providerDisplayName: store.displayNames[account.providerID]
+                    ?? account.providerID.raw.capitalized
             )
             if (status.needsRecovery || recoveryPresentation != nil), removalState == nil {
                 Button(status == .blocked
@@ -247,7 +254,8 @@ struct AccountsSettingsTile: View {
     @ViewBuilder private func statusLabel(
         _ status: AccountStatus,
         setupFailure: String?,
-        setupMode: SetupHandoffMode
+        setupMode: SetupHandoffMode,
+        providerDisplayName: String
     ) -> some View {
         switch status {
         case .connected:
@@ -281,7 +289,7 @@ struct AccountsSettingsTile: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: colorScheme))
         case .blocked:
-            Text("Another Codex login is open")
+            Text("Another \(providerDisplayName) login is open")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
         case .setupFailed:

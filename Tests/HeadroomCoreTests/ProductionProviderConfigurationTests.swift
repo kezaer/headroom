@@ -14,6 +14,9 @@ import Testing
         let codex = ProviderAccountConfiguration.make(
             for: .builtIn(for: .codex), userHome: home, accountsBase: accounts, builtInClaudeWorkspace: workspace
         )
+        let grok = ProviderAccountConfiguration.make(
+            for: .builtIn(for: .grok), userHome: home, accountsBase: accounts, builtInClaudeWorkspace: workspace
+        )
 
         #expect(claude.accountKey == AccountKey(providerID: .claude, accountID: .primary))
         #expect(claude.claudeConfigDirectory == nil)
@@ -21,16 +24,23 @@ import Testing
         #expect(codex.accountKey == AccountKey(providerID: .codex, accountID: .primary))
         #expect(codex.codexHomeDirectory == nil)
         #expect(codex.codexAuthFile?.path == "/Users/test/.codex/auth.json")
+        #expect(grok.accountKey == AccountKey(providerID: .grok, accountID: .primary))
+        #expect(grok.grokHomeDirectory == nil)
+        #expect(grok.grokAuthFile?.path == "/Users/test/.grok/auth.json")
     }
 
     @Test func additionalAccountsUseTheirExactIsolatedPathsAndIDs() {
         let claudeAccount = ProviderAccount(id: AccountID("claude-work"), providerID: .claude, label: "Work")
         let codexAccount = ProviderAccount(id: AccountID("codex-work"), providerID: .codex, label: "Work")
+        let grokAccount = ProviderAccount(id: AccountID("grok-work"), providerID: .grok, label: "Work")
         let claude = ProviderAccountConfiguration.make(
             for: claudeAccount, userHome: home, accountsBase: accounts, builtInClaudeWorkspace: workspace
         )
         let codex = ProviderAccountConfiguration.make(
             for: codexAccount, userHome: home, accountsBase: accounts, builtInClaudeWorkspace: workspace
+        )
+        let grok = ProviderAccountConfiguration.make(
+            for: grokAccount, userHome: home, accountsBase: accounts, builtInClaudeWorkspace: workspace
         )
 
         #expect(claude.accountKey == claudeAccount.key)
@@ -39,5 +49,8 @@ import Testing
         #expect(codex.accountKey == codexAccount.key)
         #expect(codex.codexHomeDirectory?.path.hasSuffix("/codex/codex-work") == true)
         #expect(codex.codexAuthFile?.path.hasSuffix("/codex/codex-work/auth.json") == true)
+        #expect(grok.accountKey == grokAccount.key)
+        #expect(grok.grokHomeDirectory?.path.hasSuffix("/grok/grok-work") == true)
+        #expect(grok.grokAuthFile?.path.hasSuffix("/grok/grok-work/auth.json") == true)
     }
 }

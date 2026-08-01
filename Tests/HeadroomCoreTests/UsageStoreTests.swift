@@ -20,6 +20,24 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .codex).freshness == .live)
     }
 
+    @Test func freshDefaultsDoNotFetchNewSubscriptionProviders() async {
+        let claude = CountingProvider(id: .claude)
+        let codex = CountingProvider(id: .codex)
+        let grok = CountingProvider(id: .grok)
+        let cursor = CountingProvider(id: .cursor)
+        let store = UsageStore(
+            providers: [claude, codex, grok, cursor],
+            preferences: freshPreferences()
+        )
+
+        await store.refreshAll()
+
+        #expect(claude.fetchCount == 1)
+        #expect(codex.fetchCount == 1)
+        #expect(grok.fetchCount == 0)
+        #expect(cursor.fetchCount == 0)
+    }
+
     @Test func codexPublishesBeforeSlowClaudeLaneCompletes() async {
         let firstClaude = SlowCountingProvider(id: .claude)
         let codex = StubProvider(
@@ -36,6 +54,41 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .claude).freshness == .pending)
 
         firstClaude.releaseFetch()
+        await refresh.value
+    }
+
+    @Test func keyedCLILanesSerializePerProviderAndOverlapEachOther() async {
+        let grokFirst = SlowCountingProvider(
+            id: .grok,
+            accountID: AccountID("grok-a"),
+            pollingLane: .serial("grok-cli")
+        )
+        let grokSecond = SlowCountingProvider(
+            id: .grok,
+            accountID: AccountID("grok-b"),
+            pollingLane: .serial("grok-cli")
+        )
+        let claude = SlowCountingProvider(
+            id: .claude,
+            pollingLane: .serial("claude-cli")
+        )
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        let store = UsageStore(
+            providers: [grokFirst, grokSecond, claude],
+            preferences: preferences
+        )
+
+        let refresh = Task { await store.refreshAll() }
+        await grokFirst.waitUntilFetchStarts()
+        await claude.waitUntilFetchStarts()
+        #expect(grokSecond.fetchCount == 0)
+
+        grokFirst.releaseFetch()
+        claude.releaseFetch()
+        await grokSecond.waitUntilFetchStarts()
+        #expect(grokSecond.fetchCount == 1)
+        grokSecond.releaseFetch()
         await refresh.value
     }
 
@@ -1289,6 +1342,34 @@ struct UsageStoreTests {
         #expect(spend.fetchCount == 1)
         #expect(store.apiSpendProviderOrder == [.codex])
         #expect(store.apiSpendSnapshot(for: .codex).freshness == .live)
+    }
+
+    @Test func liveNonApplicableSpendIsHidden() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .cursorAPI)
+        let spend = CountingSpendProvider(
+            id: .cursor,
+            displayName: "Cursor on-demand",
+            snapshot: APISpendSnapshot(
+                providerID: .cursor,
+                displayName: "Cursor on-demand",
+                amount: nil,
+                currency: nil,
+                periodLabel: "Resets Sep 1",
+                capturedAt: Date(timeIntervalSince1970: 1_000),
+                freshness: .live
+            )
+        )
+        let store = UsageStore(
+            providers: [],
+            apiSpendProviders: [spend],
+            preferences: preferences
+        )
+
+        #expect(store.apiSpendProviderOrder == [.cursor])
+        await store.refreshAll()
+        #expect(spend.fetchCount == 1)
+        #expect(store.apiSpendProviderOrder.isEmpty)
     }
 
     @Test func surfaceToggleUpdatesObservableStateImmediately() {

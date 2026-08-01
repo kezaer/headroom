@@ -8,6 +8,7 @@ public struct ClaudeProvider: UsageProvider {
     public let id = ProviderID.claude
     public let accountID: AccountID
     public let displayName = "Claude"
+    public let pollingLane: ProviderPollingLane = .serial("claude-cli")
 
     private let source: ClaudeUsageSource
     private let now: @Sendable () -> Date
