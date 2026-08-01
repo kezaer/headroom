@@ -37,6 +37,23 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: root.path))
     }
 
+    @Test func grokRemovalDeletesOnlyTheRequestedIsolatedHome() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-grok-storage-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selected = ProviderAccount(id: AccountID("selected"), providerID: .grok, label: "Selected")
+        let sibling = ProviderAccount(id: AccountID("sibling"), providerID: .grok, label: "Sibling")
+        let selectedURL = try AccountStorage.ensureDirectories(for: selected, baseDirectoryURL: root)
+        let siblingURL = try AccountStorage.ensureDirectories(for: sibling, baseDirectoryURL: root)
+
+        #expect(selectedURL.path.hasSuffix("/grok/selected"))
+        #expect(siblingURL.path.hasSuffix("/grok/sibling"))
+        try AccountStorage.removeDirectories(for: selected, baseDirectoryURL: root)
+
+        #expect(!FileManager.default.fileExists(atPath: selectedURL.path))
+        #expect(FileManager.default.fileExists(atPath: siblingURL.path))
+    }
+
     @Test func credentialPermissionCheckRejectsGroupOrWorldReadableFiles() throws {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("headroom-auth-\(UUID().uuidString)")

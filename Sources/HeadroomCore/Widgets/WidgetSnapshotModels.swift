@@ -56,7 +56,7 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
     public var weeklyProviders: [WidgetProviderSummary] {
         providers.map { provider in
             var copy = provider
-            copy.windows = provider.subscriptionWindows.filter { $0.kind == .weekly }
+            copy.windows = provider.primarySubscriptionWindow.map { [$0] } ?? []
             return copy
         }
     }
@@ -95,12 +95,31 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
         subscriptionWindows.first { $0.kind == .weekly }
     }
 
+    /// The one period-level meter used by constrained widget families. Existing
+    /// providers keep preferring weekly; period-only providers fall back honestly.
+    public var primarySubscriptionWindow: WidgetWindowSummary? {
+        weeklyWindow
+            ?? subscriptionWindows.first(where: \.isBillingPeriod)
+            ?? subscriptionWindows.first
+    }
+
     public var subscriptionWindows: [WidgetWindowSummary] {
-        windows.filter(\.kind.isSubscriptionWindow)
+        windows.filter(\.isSubscriptionWindow)
+    }
+
+    public var displaySubscriptionWindows: [WidgetWindowSummary] {
+        subscriptionWindows.enumerated().sorted { lhs, rhs in
+            func rank(_ window: WidgetWindowSummary) -> Int {
+                if window.kind == .weekly || window.isBillingPeriod { return 0 }
+                if window.kind == .fiveHour { return 1 }
+                return 2
+            }
+            return (rank(lhs.element), lhs.offset) < (rank(rhs.element), rhs.offset)
+        }.map(\.element)
     }
 
     public var extraCounterWindows: [WidgetWindowSummary] {
-        windows.filter { !$0.kind.isSubscriptionWindow }
+        windows.filter { !$0.isSubscriptionWindow }
     }
 
     public var weeklyDisplayWindows: [WidgetWindowSummary] {
@@ -111,7 +130,8 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
             case .fiveHour:
                 return false
             case .other:
-                return window.label.localizedCaseInsensitiveContains("weekly")
+                return window.isBillingPeriod
+                    || window.label.localizedCaseInsensitiveContains("weekly")
             }
         }
     }
@@ -122,7 +142,7 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
     /// which `.other` windows survive to the widget.
     public var extraWeeklyWindows: [WidgetWindowSummary] {
         windows.filter { window in
-            guard case .other = window.kind else { return false }
+            guard case .other = window.kind, !window.isBillingPeriod else { return false }
             return window.label.localizedCaseInsensitiveContains("weekly")
         }
     }
@@ -151,6 +171,8 @@ public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable 
     public let amount: Double?
     public let currency: String?
     public let periodLabel: String
+    /// Additive v2 field. Missing values from older writers mean period spend.
+    public let kind: APISpendKind?
     public let capturedAt: Date?
     public let freshness: WidgetProviderFreshness
 
@@ -160,6 +182,7 @@ public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable 
         amount: Double?,
         currency: String?,
         periodLabel: String,
+        kind: APISpendKind? = nil,
         capturedAt: Date?,
         freshness: WidgetProviderFreshness
     ) {
@@ -168,9 +191,12 @@ public struct WidgetAPISpendSummary: Codable, Equatable, Sendable, Identifiable 
         self.amount = amount
         self.currency = currency
         self.periodLabel = periodLabel
+        self.kind = kind
         self.capturedAt = capturedAt
         self.freshness = freshness
     }
+
+    public var semanticKind: APISpendKind { kind ?? .periodSpend }
 }
 
 public enum WidgetProviderFreshness: Codable, Equatable, Sendable {
@@ -195,6 +221,9 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
     public let resetLabel: String?
     public let severity: WidgetUsageSeverity
     public let freshness: WidgetWindowFreshness
+    /// Additive v2 wire discriminator. Older readers ignore it and see an honest
+    /// labeled `.other` window; current readers recover subscription semantics.
+    public let billingPeriodDuration: TimeInterval?
 
     public init(
         kind: WidgetWindowKind,
@@ -203,7 +232,8 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         resetsAt: Date,
         resetLabel: String?,
         severity: WidgetUsageSeverity,
-        freshness: WidgetWindowFreshness = .live
+        freshness: WidgetWindowFreshness = .live,
+        billingPeriodDuration: TimeInterval? = nil
     ) {
         self.id = kind.id
         self.kind = kind
@@ -213,6 +243,7 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         self.resetLabel = resetLabel
         self.severity = severity
         self.freshness = freshness
+        self.billingPeriodDuration = billingPeriodDuration
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -224,6 +255,7 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         case resetLabel
         case severity
         case freshness
+        case billingPeriodDuration
     }
 
     public init(from decoder: Decoder) throws {
@@ -236,6 +268,7 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         resetLabel = try container.decodeIfPresent(String.self, forKey: .resetLabel)
         severity = try container.decode(WidgetUsageSeverity.self, forKey: .severity)
         freshness = try container.decodeIfPresent(WidgetWindowFreshness.self, forKey: .freshness) ?? .live
+        billingPeriodDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .billingPeriodDuration)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -248,6 +281,7 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         try container.encodeIfPresent(resetLabel, forKey: .resetLabel)
         try container.encode(severity, forKey: .severity)
         try container.encode(freshness, forKey: .freshness)
+        try container.encodeIfPresent(billingPeriodDuration, forKey: .billingPeriodDuration)
     }
 
     public var roundedPercentRemaining: Int {
@@ -256,6 +290,15 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
 
     public var displayPercentRemaining: Double? {
         freshness.isUnavailable ? nil : percentRemaining
+    }
+
+    public var isBillingPeriod: Bool {
+        guard let billingPeriodDuration else { return false }
+        return billingPeriodDuration.isFinite && billingPeriodDuration > 0
+    }
+
+    public var isSubscriptionWindow: Bool {
+        kind.isSubscriptionWindow || isBillingPeriod
     }
 
     /// Shortens model-specific labels for constrained widget headers. For example,

@@ -91,6 +91,46 @@ struct IOSWidgetTimelineMappingTests {
         #expect(IOSWidgetSnapshotState.from(cacheRead: .snapshot(stale), syncRead: .snapshot(synced(disabled))) == .disabled)
     }
 
+    @Test func syncedPeriodWindowPreservesSemanticAndFreshness() throws {
+        let observedAt = now.addingTimeInterval(-60)
+        let source = WidgetSnapshotProjector.project(
+            snapshots: [.grok: .live(.grok, windows: [
+                UsageWindow(
+                    kind: .billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60),
+                    utilization: 40,
+                    resetsAt: now.addingTimeInterval(20 * 24 * 60 * 60),
+                    freshness: .stale(observedAt: observedAt)
+                ),
+            ])],
+            providerOrder: [.grok],
+            displayNames: [.grok: "Grok"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+        let decoded = SyncedWidgetSnapshotCodec.decode(
+            try SyncedWidgetSnapshotCodec.encode(synced(source))
+        )
+        let syncRead: iCloudSnapshotSyncRead
+        switch decoded {
+        case .snapshot(let envelope): syncRead = .snapshot(envelope)
+        case .missing: syncRead = .missing
+        case .corrupt: syncRead = .corrupt
+        case .incompatibleSchema: syncRead = .incompatibleSchema
+        }
+        let state = IOSWidgetSnapshotState.from(cacheRead: .empty, syncRead: syncRead)
+        guard case .content(let envelope) = state else {
+            Issue.record("expected synced widget content")
+            return
+        }
+
+        let window = try #require(envelope.providers.first?.primarySubscriptionWindow)
+        #expect(window.label == "Monthly")
+        #expect(window.displayPercentRemaining == 60)
+        #expect(window.isBillingPeriod)
+        #expect(window.freshness == .stale(observedAt: observedAt))
+    }
+
     private func synced(_ snapshot: WidgetSnapshotEnvelope) -> SyncedWidgetSnapshotEnvelope {
         SyncedWidgetSnapshotEnvelope(
             publishedAt: now,

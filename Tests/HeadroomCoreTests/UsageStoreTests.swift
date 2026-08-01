@@ -20,6 +20,24 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .codex).freshness == .live)
     }
 
+    @Test func freshDefaultsDoNotFetchNewSubscriptionProviders() async {
+        let claude = CountingProvider(id: .claude)
+        let codex = CountingProvider(id: .codex)
+        let grok = CountingProvider(id: .grok)
+        let cursor = CountingProvider(id: .cursor)
+        let store = UsageStore(
+            providers: [claude, codex, grok, cursor],
+            preferences: freshPreferences()
+        )
+
+        await store.refreshAll()
+
+        #expect(claude.fetchCount == 1)
+        #expect(codex.fetchCount == 1)
+        #expect(grok.fetchCount == 0)
+        #expect(cursor.fetchCount == 0)
+    }
+
     @Test func codexPublishesBeforeSlowClaudeLaneCompletes() async {
         let firstClaude = SlowCountingProvider(id: .claude)
         let codex = StubProvider(
@@ -36,6 +54,41 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .claude).freshness == .pending)
 
         firstClaude.releaseFetch()
+        await refresh.value
+    }
+
+    @Test func keyedCLILanesSerializePerProviderAndOverlapEachOther() async {
+        let grokFirst = SlowCountingProvider(
+            id: .grok,
+            accountID: AccountID("grok-a"),
+            pollingLane: .serial("grok-cli")
+        )
+        let grokSecond = SlowCountingProvider(
+            id: .grok,
+            accountID: AccountID("grok-b"),
+            pollingLane: .serial("grok-cli")
+        )
+        let claude = SlowCountingProvider(
+            id: .claude,
+            pollingLane: .serial("claude-cli")
+        )
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        let store = UsageStore(
+            providers: [grokFirst, grokSecond, claude],
+            preferences: preferences
+        )
+
+        let refresh = Task { await store.refreshAll() }
+        await grokFirst.waitUntilFetchStarts()
+        await claude.waitUntilFetchStarts()
+        #expect(grokSecond.fetchCount == 0)
+
+        grokFirst.releaseFetch()
+        claude.releaseFetch()
+        await grokSecond.waitUntilFetchStarts()
+        #expect(grokSecond.fetchCount == 1)
+        grokSecond.releaseFetch()
         await refresh.value
     }
 
@@ -74,6 +127,42 @@ struct UsageStoreTests {
         let after = store.snapshot(for: .claude)
         #expect(after.windows.count == 1)                       // prior data retained
         if case .stale = after.freshness {} else { Issue.record("should be stale") }
+    }
+
+    @Test func monthlyPeriodContinuityExpiresWithoutRenewingObservation() {
+        let day: TimeInterval = 24 * 60 * 60
+        let observedAt = Date(timeIntervalSince1970: 2_000_000)
+        let resetsAt = observedAt.addingTimeInterval(30 * day)
+        let kind = WindowKind.billingPeriod(label: "Monthly", duration: 30 * day)
+        let prior = UsageSnapshot.live(.grok, windows: [
+            UsageWindow(kind: kind, utilization: 35, resetsAt: resetsAt),
+        ], at: observedAt)
+        let failure = UsageSnapshot.stale(for: .grok, reason: .transient("down"))
+
+        let retained = UsageContinuityPolicy.mergedSnapshot(
+            failure,
+            with: prior,
+            at: observedAt.addingTimeInterval(2 * day)
+        )
+        #expect(retained.windows.first?.freshness == .stale(observedAt: observedAt))
+
+        let unavailable = UsageContinuityPolicy.mergedSnapshot(
+            failure,
+            with: retained,
+            at: resetsAt.addingTimeInterval(day)
+        )
+        #expect(unavailable.windows.first?.freshness == .unavailable(since: resetsAt))
+        #expect(unavailable.windows.first?.utilization == 35)
+
+        let removed = UsageContinuityPolicy.mergedSnapshot(
+            failure,
+            with: unavailable,
+            at: resetsAt.addingTimeInterval(31 * day)
+        )
+        #expect(removed.windows.isEmpty)
+
+        let recovered = UsageContinuityPolicy.mergedSnapshot(prior, with: unavailable, at: observedAt)
+        #expect(recovered.windows.first?.freshness == .live)
     }
 
     @Test func partialClaudeLiveCaptureKeepsCurrentWeeklySubLimit() async {
@@ -841,7 +930,7 @@ struct UsageStoreTests {
         #expect(store.menuBarSummary.detail == "Codex 5h")
     }
 
-    @Test func menuBarFillSourcePersistsThroughStore() {
+    @Test func menuBarProviderSelectionDropsProvidersMissingFromRegistry() {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
@@ -853,8 +942,53 @@ struct UsageStoreTests {
 
         #expect(store.menuBarFillSource == .none)   // default
         store.setMenuBarFillSource(.both)
-        #expect(store.menuBarFillSource == .both)
-        #expect(preferences.menuBarFillSource == .both)
+        #expect(store.menuBarFillSource == .providers([.claude]))
+        #expect(preferences.menuBarFillSource == .providers([.claude]))
+    }
+
+    @Test func threeProviderMenuBarSetUsesRegistryOrderAcrossReloads() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.menuBarFillSource = .providers([.grok, .claude, .codex])
+        let providers: [any UsageProvider] = [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 10, resetsAt: reset),
+            ])),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .live(.codex, windows: [
+                UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset),
+            ])),
+            StubProvider(id: .grok, displayName: "Grok", snapshot: .live(.grok, windows: [
+                UsageWindow(kind: .billingPeriod(label: "Monthly", duration: 30 * 86_400), utilization: 30, resetsAt: reset),
+            ])),
+        ]
+        let store = UsageStore(providers: providers, preferences: preferences)
+        await store.refreshAll()
+
+        #expect(store.menuBarMeters.map(\.summary.providerID) == [.claude, .codex, .grok])
+        let reloaded = UsageStore(providers: providers, preferences: preferences)
+        await reloaded.refreshAll()
+        #expect(reloaded.menuBarMeters.map(\.summary.providerID) == [.claude, .codex, .grok])
+    }
+
+    @Test func billingPeriodOnlyProviderFallsBackToItsRealWindow() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.menuBarFillSource = .providers([.grok])
+        let store = UsageStore(providers: [
+            StubProvider(id: .grok, displayName: "Grok", snapshot: .live(.grok, windows: [
+                UsageWindow(
+                    kind: .billingPeriod(label: "Monthly", duration: 30 * 86_400),
+                    utilization: 36,
+                    resetsAt: reset
+                ),
+            ])),
+        ], preferences: preferences)
+        await store.refreshAll()
+
+        #expect(store.menuBarMeters.map(\.summary.text) == ["64%"])
+        #expect(store.menuBarMeters.map(\.summary.detail) == ["Grok monthly"])
+        #expect(store.resolvedMenuBarWindowSource(for: .grok) == nil)
+        #expect(!store.hasSelectableMenuBarWindows(for: .grok))
     }
 
     @Test func menuBarMetersDefaultToSingleSummary() async {
@@ -1029,6 +1163,25 @@ struct UsageStoreTests {
         #expect(store.snapshot(for: .claude).windows.first?.kind == .fiveHour)
     }
 
+
+    @Test func appDisplaySnapshotRanksPeriodWithWeeklyAheadOfFiveHour() async {
+        let monthly = WindowKind.billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60)
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        let store = UsageStore(
+            providers: [StubProvider(id: .grok, displayName: "Grok", snapshot: .live(.grok, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset),
+                UsageWindow(kind: monthly, utilization: 20, resetsAt: reset),
+                UsageWindow(kind: .other("Pool"), utilization: 30, resetsAt: reset),
+            ]))],
+            preferences: preferences
+        )
+
+        await store.refreshAll()
+
+        #expect(store.appDisplaySnapshot(for: .grok).windows.map(\.kind) == [monthly, .fiveHour, .other("Pool")])
+    }
+
     /// Fresh-suite preferences so tests never read the developer's real UserDefaults —
     /// a persisted menu-bar window source from actually using the app was leaking into
     /// the default-behavior expectations.
@@ -1191,6 +1344,34 @@ struct UsageStoreTests {
         #expect(store.apiSpendSnapshot(for: .codex).freshness == .live)
     }
 
+    @Test func liveNonApplicableSpendIsHidden() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .cursorAPI)
+        let spend = CountingSpendProvider(
+            id: .cursor,
+            displayName: "Cursor on-demand",
+            snapshot: APISpendSnapshot(
+                providerID: .cursor,
+                displayName: "Cursor on-demand",
+                amount: nil,
+                currency: nil,
+                periodLabel: "Resets Sep 1",
+                capturedAt: Date(timeIntervalSince1970: 1_000),
+                freshness: .live
+            )
+        )
+        let store = UsageStore(
+            providers: [],
+            apiSpendProviders: [spend],
+            preferences: preferences
+        )
+
+        #expect(store.apiSpendProviderOrder == [.cursor])
+        await store.refreshAll()
+        #expect(spend.fetchCount == 1)
+        #expect(store.apiSpendProviderOrder.isEmpty)
+    }
+
     @Test func surfaceToggleUpdatesObservableStateImmediately() {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -1204,6 +1385,32 @@ struct UsageStoreTests {
         #expect(store.isSurfaceEnabled(.openAIAPI))
         #expect(store.enabledSurfaces.contains(.openAIAPI))
         #expect(preferences.isSurfaceEnabled(.openAIAPI))
+    }
+
+    @Test func unknownSubscriptionProviderIsExcludedInsteadOfUsingCodexSurface() {
+        let unknown = ProviderID("future-provider")
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .codexSubscription)
+        let store = UsageStore(
+            providers: [StubProvider(id: unknown, displayName: "Future", snapshot: .pending(for: unknown))],
+            preferences: preferences
+        )
+
+        #expect(store.providerOrder.isEmpty)
+    }
+
+    @Test func grokSubscriptionUsesItsOwnSurfaceToggle() {
+        let preferences = freshPreferences()
+        let provider = StubProvider(
+            id: .grok,
+            displayName: "Grok",
+            snapshot: .pending(for: .grok)
+        )
+        let store = UsageStore(providers: [provider], preferences: preferences)
+
+        #expect(store.providerOrder.isEmpty)
+        store.setSurfaceEnabled(true, for: .grokSubscription)
+        #expect(store.providerOrder == [.grok])
     }
 
     @Test func apiSpendOnlyRefreshDoesNotFetchSubscriptions() async {

@@ -34,12 +34,12 @@ struct HeadroomMediumWidgetView: View {
     @ViewBuilder private var providerColumns: some View {
         if envelope.providers.count <= 1 {
             ForEach(envelope.providers) { provider in
-                MediumProviderColumn(provider: provider)
+                MediumProviderColumn(provider: provider, dense: false)
             }
-        } else {
+        } else if envelope.providers.count == 2 {
             HStack(alignment: .top, spacing: 12) {
                 ForEach(envelope.providers) { provider in
-                    MediumProviderColumn(provider: provider)
+                    MediumProviderColumn(provider: provider, dense: false)
                 }
             }
             .frame(maxHeight: .infinity)
@@ -50,12 +50,22 @@ struct HeadroomMediumWidgetView: View {
                 // Two equal-width columns with a symmetric gap put the tile's horizontal
                 // centre inside that gap, so a centred 1pt rule lands cleanly between them.
                 // Guarded to the 2-provider layout, which is the app's invariant.
-                if envelope.providers.count == 2 {
-                    Rectangle()
-                        .fill(WidgetProviderStyle.hairline(scheme: scheme))
-                        .frame(width: 1)
-                        .frame(maxHeight: .infinity)
-                        .padding(.vertical, 6)
+                Rectangle()
+                    .fill(WidgetProviderStyle.hairline(scheme: scheme))
+                    .frame(width: 1)
+                    .frame(maxHeight: .infinity)
+                    .padding(.vertical, 6)
+            }
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
+                    MediumProviderColumn(provider: provider, dense: true)
+                    if index < envelope.providers.count - 1 {
+                        Rectangle()
+                            .fill(WidgetProviderStyle.hairline(scheme: scheme))
+                            .frame(width: 1)
+                            .frame(maxHeight: .infinity)
+                    }
                 }
             }
         }
@@ -74,6 +84,7 @@ struct HeadroomMediumWidgetView: View {
 
 private struct MediumProviderColumn: View {
     let provider: WidgetProviderSummary
+    let dense: Bool
 
     @Environment(\.colorScheme) private var scheme
 
@@ -96,13 +107,14 @@ private struct MediumProviderColumn: View {
                         .foregroundStyle(WidgetProviderStyle.severityColor(for: .low, scheme: scheme))
                 }
             }
-            WidgetUsageMeter(window: window(.weekly), fallbackLabel: "Weekly", compact: true)
-            WidgetUsageMeter(window: window(.fiveHour), fallbackLabel: "5-hour", compact: true)
+            if provider.displaySubscriptionWindows.isEmpty {
+                WidgetUsageMeter(window: nil, fallbackLabel: "Weekly", compact: true, scale: dense ? .dense : nil)
+            } else {
+                ForEach(provider.displaySubscriptionWindows) { window in
+                    WidgetUsageMeter(window: window, fallbackLabel: window.label, compact: true, scale: dense ? .dense : nil)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-    }
-
-    private func window(_ kind: WidgetWindowKind) -> WidgetWindowSummary? {
-        provider.subscriptionWindows.first { $0.kind == kind }
     }
 }

@@ -29,7 +29,7 @@ public enum SetupSessionState: Sendable, Equatable {
     case preparing
     case waiting(attempt: Int)
     case verifying
-    case blockedByCodexLogin(AccountKey)
+    case blockedByProviderLogin(providerID: ProviderID, active: AccountKey)
     case connected
     case failed(SetupSessionFailure)
     case cancelled
@@ -97,7 +97,7 @@ private final class TaskSetupRetryCancellation: SetupRetryCancellation {
 }
 
 /// Account-scoped setup lifecycle. It owns async preparation, the final pre-open
-/// cancellation check, bounded verification retries, Codex login-slot serialization,
+/// cancellation check, bounded verification retries, provider-scoped login serialization,
 /// and view-independent settlement.
 @MainActor
 @Observable
@@ -112,7 +112,7 @@ public final class SetupSessionCoordinator {
     private var generations: [AccountKey: Int] = [:]
     @ObservationIgnored private var preparationTasks: [AccountKey: Task<Void, Never>] = [:]
     @ObservationIgnored private var retryTasks: [AccountKey: any SetupRetryCancellation] = [:]
-    @ObservationIgnored private var activeCodexLogin: AccountKey?
+    @ObservationIgnored private var activeLogins: [ProviderID: AccountKey] = [:]
     @ObservationIgnored private var activeHandoffs: Set<AccountKey> = []
     @ObservationIgnored private var handoffsAwaitingFinalRefresh: [AccountKey: SetupHandoffCompletion] = [:]
     @ObservationIgnored private var sessionModes: [AccountKey: SetupHandoffMode] = [:]
@@ -155,7 +155,7 @@ public final class SetupSessionCoordinator {
         start(account, mode: mode, allowBlocked: false)
     }
 
-    /// A blocked Codex request never starts on its own when the previous slot clears.
+    /// A blocked request never starts on its own when the previous provider slot clears.
     /// This method is the fresh, account-specific user action required to continue.
     public func continueSetup(for account: ProviderAccount, mode: SetupHandoffMode? = nil) {
         start(account, mode: mode ?? sessionModes[account.key] ?? .standard, allowBlocked: true)
@@ -166,7 +166,7 @@ public final class SetupSessionCoordinator {
         switch state(for: key) {
         case .preparing, .waiting, .verifying, .connected, .removing, .removed:
             return
-        case .blockedByCodexLogin where !allowBlocked:
+        case .blockedByProviderLogin where !allowBlocked:
             return
         default:
             break
@@ -176,16 +176,21 @@ public final class SetupSessionCoordinator {
         // the user can check again until the first handoff exits.
         guard !activeHandoffs.contains(key) else { return }
 
-        if account.providerID == .codex,
-           let activeCodexLogin,
-            activeCodexLogin != key {
-            states[key] = .blockedByCodexLogin(activeCodexLogin)
+        if Self.requiresExclusiveLoginSlot(account.providerID),
+           let activeLogin = activeLogins[account.providerID],
+           activeLogin != key {
+            states[key] = .blockedByProviderLogin(
+                providerID: account.providerID,
+                active: activeLogin
+            )
             sessionModes[key] = mode
             return
         }
-        if account.providerID == .codex { activeCodexLogin = key }
+        if Self.requiresExclusiveLoginSlot(account.providerID) {
+            activeLogins[account.providerID] = key
+        }
 
-        invalidateWork(for: key, finalState: nil, releaseCodexSlot: false)
+        invalidateWork(for: key, finalState: nil, releaseLoginSlot: false)
         sessionModes[key] = mode
         let generation = generations[key] ?? 0
         states[key] = .preparing
@@ -210,15 +215,15 @@ public final class SetupSessionCoordinator {
             case .success(let handoff):
                 // Reserve the external-process lifetime before crossing the opener's
                 // async boundary. Cancellation during that boundary must not free the
-                // single Codex callback slot while Terminal may still be opening.
+                // provider-scoped callback slot while Terminal may still be opening.
                 self.activeHandoffs.insert(key)
                 let openResult = await self.open(handoff)
                 if case .failure = openResult {
                     self.activeHandoffs.remove(key)
                 }
                 guard self.isCurrent(key, generation: generation), self.accountExists(key) else {
-                    if case .failure = openResult, self.activeCodexLogin == key {
-                        self.activeCodexLogin = nil
+                    if case .failure = openResult, self.activeLogins[key.providerID] == key {
+                        self.activeLogins.removeValue(forKey: key.providerID)
                     }
                     self.finishCancelledIfCurrent(key, generation: generation)
                     return
@@ -236,7 +241,7 @@ public final class SetupSessionCoordinator {
     }
 
     public func cancel(_ key: AccountKey) {
-        invalidateWork(for: key, finalState: .cancelled, releaseCodexSlot: true)
+        invalidateWork(for: key, finalState: .cancelled, releaseLoginSlot: true)
     }
 
     public func settleConnected(_ key: AccountKey) {
@@ -246,7 +251,7 @@ public final class SetupSessionCoordinator {
     }
 
     /// Restore/settle the durable external-process marker independently of any view.
-    /// A restored Codex handoff keeps the one-login callback slot occupied until its
+    /// A restored handoff keeps its provider's exclusive callback slot occupied until its
     /// wrapper exits or a live provider result proves the callback completed.
     public func restoreActiveHandoff(
         _ key: AccountKey,
@@ -254,7 +259,9 @@ public final class SetupSessionCoordinator {
     ) {
         activeHandoffs.insert(key)
         sessionModes[key] = mode
-        if key.providerID == .codex { activeCodexLogin = key }
+        if Self.requiresExclusiveLoginSlot(key.providerID) {
+            activeLogins[key.providerID] = key
+        }
         if state(for: key) == .idle { states[key] = .waiting(attempt: 0) }
     }
 
@@ -263,7 +270,7 @@ public final class SetupSessionCoordinator {
         completion: SetupHandoffCompletion = .unknown
     ) {
         activeHandoffs.remove(key)
-        if activeCodexLogin == key { activeCodexLogin = nil }
+        if activeLogins[key.providerID] == key { activeLogins.removeValue(forKey: key.providerID) }
         switch state(for: key) {
         case .idle, .waiting, .failed(.retryExhausted):
             handoffsAwaitingFinalRefresh[key] = completion
@@ -275,7 +282,7 @@ public final class SetupSessionCoordinator {
     }
 
     public func markRemoving(_ key: AccountKey) {
-        invalidateWork(for: key, finalState: .removing, releaseCodexSlot: true)
+        invalidateWork(for: key, finalState: .removing, releaseLoginSlot: true)
     }
 
     public func markRemovalFailed(_ key: AccountKey) {
@@ -288,7 +295,7 @@ public final class SetupSessionCoordinator {
     }
 
     public func markRemoved(_ key: AccountKey) {
-        invalidateWork(for: key, finalState: .removed, releaseCodexSlot: true)
+        invalidateWork(for: key, finalState: .removed, releaseLoginSlot: true)
     }
 
     public func receive(_ snapshot: UsageSnapshot, for key: AccountKey) {
@@ -305,7 +312,7 @@ public final class SetupSessionCoordinator {
                 break
             }
             activeHandoffs.remove(key)
-            invalidateWork(for: key, finalState: .connected, releaseCodexSlot: true)
+            invalidateWork(for: key, finalState: .connected, releaseLoginSlot: true)
             return
         }
         guard case .stale(let reason) = snapshot.freshness else { return }
@@ -324,14 +331,16 @@ public final class SetupSessionCoordinator {
             } else {
                 failure = .retryExhausted
             }
-            invalidateWork(for: key, finalState: .failed(failure), releaseCodexSlot: true)
+            invalidateWork(for: key, finalState: .failed(failure), releaseLoginSlot: true)
             return
         }
         guard let outcome = reason.providerSetupOutcome else { return }
         switch outcome {
         case .codexPermissionDenied, .codexMalformedAuth, .codexStorageMismatch,
-             .codexCallbackIncomplete, .codexCLIMissing, .claudeCLIMissing:
-            invalidateWork(for: key, finalState: .failed(.provider(outcome)), releaseCodexSlot: true)
+             .codexCallbackIncomplete, .codexCLIMissing, .claudeCLIMissing,
+             .grokCLIMissing, .grokPermissionDenied, .grokUnsafePermissions,
+             .grokMalformedAuth, .cursorCLIMissing:
+            invalidateWork(for: key, finalState: .failed(.provider(outcome)), releaseLoginSlot: true)
         default:
             break
         }
@@ -359,12 +368,12 @@ public final class SetupSessionCoordinator {
 
     private func fail(_ key: AccountKey, failure: SetupSessionFailure, generation: Int) {
         guard isCurrent(key, generation: generation) else { return }
-        invalidateWork(for: key, finalState: .failed(failure), releaseCodexSlot: true)
+        invalidateWork(for: key, finalState: .failed(failure), releaseLoginSlot: true)
     }
 
     private func finishCancelledIfCurrent(_ key: AccountKey, generation: Int) {
         guard isCurrent(key, generation: generation) else { return }
-        invalidateWork(for: key, finalState: .cancelled, releaseCodexSlot: true)
+        invalidateWork(for: key, finalState: .cancelled, releaseLoginSlot: true)
     }
 
     private func isCurrent(_ key: AccountKey, generation: Int) -> Bool {
@@ -374,7 +383,7 @@ public final class SetupSessionCoordinator {
     private func invalidateWork(
         for key: AccountKey,
         finalState: SetupSessionState?,
-        releaseCodexSlot: Bool
+        releaseLoginSlot: Bool
     ) {
         generations[key, default: 0] += 1
         preparationTasks.removeValue(forKey: key)?.cancel()
@@ -388,9 +397,18 @@ public final class SetupSessionCoordinator {
                 break
             }
         }
-        if releaseCodexSlot, activeCodexLogin == key, !activeHandoffs.contains(key) {
-            activeCodexLogin = nil
+        if releaseLoginSlot,
+           activeLogins[key.providerID] == key,
+           !activeHandoffs.contains(key) {
+            activeLogins.removeValue(forKey: key.providerID)
         }
         if let finalState { states[key] = finalState }
+    }
+
+    /// Grok's production loopback login binds an ephemeral port and device auth binds no
+    /// callback listener (verified 2026-08-01), so only Codex currently needs an exclusive
+    /// provider slot. The keyed representation is ready for any future fixed-port CLI.
+    private static func requiresExclusiveLoginSlot(_ providerID: ProviderID) -> Bool {
+        providerID == .codex
     }
 }

@@ -93,11 +93,13 @@ private struct StoredWindow: Codable {
     private enum Kind: String, Codable {
         case fiveHour
         case weekly
+        case billingPeriod
         case other
     }
 
     private let kind: Kind
     let otherLabel: String?
+    let billingPeriodDuration: TimeInterval?
     let utilization: Double
     let resetsAt: Date
     let resetLabel: String?
@@ -109,12 +111,19 @@ private struct StoredWindow: Codable {
         case .fiveHour:
             self.kind = .fiveHour
             self.otherLabel = nil
+            self.billingPeriodDuration = nil
         case .weekly:
             self.kind = .weekly
             self.otherLabel = nil
+            self.billingPeriodDuration = nil
+        case .billingPeriod(let label, let duration):
+            self.kind = .billingPeriod
+            self.otherLabel = label
+            self.billingPeriodDuration = duration
         case .other(let label):
             self.kind = .other
             self.otherLabel = label
+            self.billingPeriodDuration = nil
         }
         self.utilization = window.utilization
         self.resetsAt = window.resetsAt
@@ -140,6 +149,13 @@ private struct StoredWindow: Codable {
             restoredKind = .fiveHour
         case .weekly:
             restoredKind = .weekly
+        case .billingPeriod:
+            guard let otherLabel, !otherLabel.isEmpty,
+                  let billingPeriodDuration,
+                  billingPeriodDuration.isFinite,
+                  billingPeriodDuration > 0
+            else { return nil }
+            restoredKind = .billingPeriod(label: otherLabel, duration: billingPeriodDuration)
         case .other:
             guard let otherLabel, !otherLabel.isEmpty else { return nil }
             restoredKind = .other(otherLabel)
@@ -213,7 +229,7 @@ enum UsageContinuityPolicy {
         at mergeDate: Date
     ) -> UsageSnapshot {
         let windows = prior.windows.compactMap { window -> UsageWindow? in
-            if isClaudeWeeklySubLimit(window, providerID: prior.providerID) {
+            if isClaudeWeeklySubLimit(window, providerID: prior.providerID) || window.kind.isBillingPeriod {
                 return restoredWindow(
                     window,
                     providerID: prior.providerID,
@@ -274,7 +290,7 @@ enum UsageContinuityPolicy {
         if expiredAt > restorationDate {
             return window.withFreshness(.stale(observedAt: observedAt))
         }
-        guard isClaudeWeeklySubLimit(window, providerID: providerID),
+        guard (isClaudeWeeklySubLimit(window, providerID: providerID) || window.kind.isBillingPeriod),
               restorationDate.timeIntervalSince(expiredAt) < fallbackLifetime(for: window.kind)
         else {
             return nil
@@ -350,10 +366,21 @@ enum UsageContinuityPolicy {
             return 5 * 60 * 60
         case .weekly:
             return 7 * 24 * 60 * 60
+        case .billingPeriod(_, let duration):
+            return duration.isFinite && duration > 0
+                ? max(24 * 60 * 60, duration)
+                : 24 * 60 * 60
         case .other(let label):
             return label.localizedCaseInsensitiveContains("weekly")
                 ? 7 * 24 * 60 * 60
                 : 24 * 60 * 60
         }
+    }
+}
+
+private extension WindowKind {
+    var isBillingPeriod: Bool {
+        if case .billingPeriod = self { return true }
+        return false
     }
 }

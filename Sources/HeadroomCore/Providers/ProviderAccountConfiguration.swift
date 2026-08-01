@@ -9,6 +9,8 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
     public let claudeWorkspaceDirectory: URL?
     public let codexHomeDirectory: URL?
     public let codexAuthFile: URL?
+    public let grokHomeDirectory: URL?
+    public let grokAuthFile: URL?
 
     public static func make(
         for account: ProviderAccount,
@@ -24,7 +26,9 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
                     claudeConfigDirectory: nil,
                     claudeWorkspaceDirectory: builtInClaudeWorkspace,
                     codexHomeDirectory: nil,
-                    codexAuthFile: nil
+                    codexAuthFile: nil,
+                    grokHomeDirectory: nil,
+                    grokAuthFile: nil
                 )
             }
             let root = AccountStorage.accountDirectoryURL(for: account, baseDirectoryURL: accountsBase)
@@ -33,7 +37,9 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
                 claudeConfigDirectory: root.appendingPathComponent("config", isDirectory: true),
                 claudeWorkspaceDirectory: root.appendingPathComponent("workspace", isDirectory: true),
                 codexHomeDirectory: nil,
-                codexAuthFile: nil
+                codexAuthFile: nil,
+                grokHomeDirectory: nil,
+                grokAuthFile: nil
             )
         case .codex:
             if account.isBuiltIn {
@@ -42,7 +48,9 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
                     claudeConfigDirectory: nil,
                     claudeWorkspaceDirectory: nil,
                     codexHomeDirectory: nil,
-                    codexAuthFile: userHome.appendingPathComponent(".codex/auth.json")
+                    codexAuthFile: userHome.appendingPathComponent(".codex/auth.json"),
+                    grokHomeDirectory: nil,
+                    grokAuthFile: nil
                 )
             }
             let root = AccountStorage.accountDirectoryURL(for: account, baseDirectoryURL: accountsBase)
@@ -51,7 +59,31 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
                 claudeConfigDirectory: nil,
                 claudeWorkspaceDirectory: nil,
                 codexHomeDirectory: root,
-                codexAuthFile: root.appendingPathComponent("auth.json")
+                codexAuthFile: root.appendingPathComponent("auth.json"),
+                grokHomeDirectory: nil,
+                grokAuthFile: nil
+            )
+        case .grok:
+            if account.isBuiltIn {
+                return .init(
+                    accountKey: account.key,
+                    claudeConfigDirectory: nil,
+                    claudeWorkspaceDirectory: nil,
+                    codexHomeDirectory: nil,
+                    codexAuthFile: nil,
+                    grokHomeDirectory: nil,
+                    grokAuthFile: userHome.appendingPathComponent(".grok/auth.json")
+                )
+            }
+            let root = AccountStorage.accountDirectoryURL(for: account, baseDirectoryURL: accountsBase)
+            return .init(
+                accountKey: account.key,
+                claudeConfigDirectory: nil,
+                claudeWorkspaceDirectory: nil,
+                codexHomeDirectory: nil,
+                codexAuthFile: nil,
+                grokHomeDirectory: root,
+                grokAuthFile: root.appendingPathComponent("auth.json")
             )
         default:
             return .init(
@@ -59,7 +91,9 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
                 claudeConfigDirectory: nil,
                 claudeWorkspaceDirectory: nil,
                 codexHomeDirectory: nil,
-                codexAuthFile: nil
+                codexAuthFile: nil,
+                grokHomeDirectory: nil,
+                grokAuthFile: nil
             )
         }
     }

@@ -44,7 +44,16 @@ public enum APISpendPresentation {
     }
 
     public static func amountText(_ summary: WidgetAPISpendSummary) -> String? {
-        amountText(amount: summary.amount, currency: summary.currency)
+        guard let amount = amountText(amount: summary.amount, currency: summary.currency) else { return nil }
+        return summary.semanticKind == .balance ? "\(amount) left" : amount
+    }
+
+    public static func contextLabel(kind: APISpendKind, periodLabel: String) -> String {
+        kind == .balance ? "Remaining balance" : periodLabel
+    }
+
+    public static func qualifier(kind: APISpendKind) -> String? {
+        kind == .balance ? "remaining" : nil
     }
 
     /// The exact page where a user tops up prepaid API credits — the billing screen that
@@ -58,6 +67,8 @@ public enum APISpendPresentation {
             URL(string: "https://platform.claude.com/settings/billing")
         case .codex:
             URL(string: "https://platform.openai.com/settings/organization/billing/overview")
+        case .grok:
+            URL(string: "https://console.x.ai")
         default:
             nil
         }

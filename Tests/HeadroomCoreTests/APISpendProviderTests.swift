@@ -114,4 +114,128 @@ struct APISpendProviderTests {
         }
         #expect(reason == .decode("Couldn't read OpenAI cost response"))
     }
+
+    @Test func xAIPrepaidBalanceUsesValidatedTeamAndCachesIt() async {
+        let validation = #"{"scope":"SCOPE_TEAM","scopeId":"team-123"}"#
+        let balance = #"{"changes":[],"total":{"val":"-4210"}}"#
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 200, body: Data(validation.utf8))),
+            .success(HTTPResult(status: 200, body: Data(balance.utf8))),
+            .success(HTTPResult(status: 200, body: Data(balance.utf8))),
+        ])
+        let provider = XAIAPISpendProvider(credentials: store(.xAI), http: fetcher, now: { now })
+
+        let first = await provider.fetchSpend(period: .currentMonth)
+        let second = await provider.fetchSpend(period: .rolling30Days)
+
+        #expect(first.freshness == .live)
+        #expect(first.kind == .balance)
+        #expect(first.amount == 42.10)
+        #expect(first.currency == "usd")
+        #expect(first.periodLabel == "Prepaid balance")
+        #expect(second == first)
+        #expect(fetcher.requestedURLs.map(\.path) == [
+            "/auth/management-keys/validation",
+            "/v1/billing/teams/team-123/prepaid/balance",
+            "/v1/billing/teams/team-123/prepaid/balance",
+        ])
+        #expect(fetcher.lastHeaders["Authorization"] == "Bearer key")
+    }
+
+    @Test func xAIPostpaidInvoiceUsesPeriodSpendWhenPrepaidIsEmpty() async {
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 200, body: Data(#"{"teamId":"team-legacy"}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"total":{"val":"0"}}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"coreInvoice":{"amountAfterVat":"1234"}}"#.utf8))),
+        ])
+        let provider = XAIAPISpendProvider(credentials: store(.xAI), http: fetcher, now: { now })
+
+        let snapshot = await provider.fetchSpend(period: .rolling30Days)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.kind == .periodSpend)
+        #expect(snapshot.amount == 12.34)
+        #expect(snapshot.periodLabel == "Current billing period")
+        #expect(fetcher.lastURL?.path == "/v1/billing/teams/team-legacy/postpaid/invoice/preview")
+    }
+
+    @Test func xAIPostpaidFailureKeepsKnownZeroPrepaidBalance() async {
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 200, body: Data(#"{"scope":"SCOPE_TEAM","scopeId":"team-123"}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"total":{"val":"0"}}"#.utf8))),
+            .success(HTTPResult(status: 503, body: Data())),
+        ])
+        let provider = XAIAPISpendProvider(credentials: store(.xAI), http: fetcher, now: { now })
+
+        let snapshot = await provider.fetchSpend(period: .currentMonth)
+
+        #expect(snapshot.amount == 0)
+        #expect(snapshot.currency == "usd")
+        #expect(snapshot.kind == .balance)
+        #expect(snapshot.periodLabel == "Prepaid balance")
+        #expect(snapshot.capturedAt == now)
+        guard case .stale = snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+    }
+
+    @Test func xAITeamCacheIsInvalidatedWhenManagementKeyChanges() async {
+        let keyStore = MockAPIKeyStore(keys: [.xAI: "first-key"])
+        let credentials = CredentialStore(
+            codexReader: MockCodexReader(credential: nil),
+            apiKeyStore: keyStore
+        )
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 200, body: Data(#"{"scope":"SCOPE_TEAM","scopeId":"team-one"}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"total":{"val":"-100"}}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"scope":"SCOPE_TEAM","scopeId":"team-two"}"#.utf8))),
+            .success(HTTPResult(status: 200, body: Data(#"{"total":{"val":"-200"}}"#.utf8))),
+        ])
+        let provider = XAIAPISpendProvider(credentials: credentials, http: fetcher, now: { now })
+
+        let first = await provider.fetchSpend(period: .currentMonth)
+        _ = await credentials.saveAPIKey("second-key", for: .xAI)
+        let second = await provider.fetchSpend(period: .currentMonth)
+
+        #expect(first.amount == 1)
+        #expect(second.amount == 2)
+        #expect(fetcher.requestedURLs.map(\.path) == [
+            "/auth/management-keys/validation",
+            "/v1/billing/teams/team-one/prepaid/balance",
+            "/auth/management-keys/validation",
+            "/v1/billing/teams/team-two/prepaid/balance",
+        ])
+        #expect(fetcher.lastHeaders["Authorization"] == "Bearer second-key")
+    }
+
+    @Test func xAIOrganizationScopedKeyFailsClosedWithoutGuessingATeam() async {
+        let fetcher = MockFetcher(status: 200, body: #"{"scope":"SCOPE_ORGANIZATION","scopeId":"org-123"}"#)
+        let provider = XAIAPISpendProvider(credentials: store(.xAI), http: fetcher, now: { now })
+
+        let snapshot = await provider.fetchSpend(period: .currentMonth)
+
+        guard case .stale(let reason) = snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+        #expect(reason == .scopeDenied("xAI management key must target one team"))
+        #expect(fetcher.requestCount == 1)
+    }
+
+    @Test func xAIBillingPermissionErrorsAreTyped() async {
+        let fetcher = MockFetcher([
+            .success(HTTPResult(status: 200, body: Data(#"{"scope":"SCOPE_TEAM","scopeId":"team-123"}"#.utf8))),
+            .success(HTTPResult(status: 403, body: Data("ignored".utf8))),
+        ])
+        let provider = XAIAPISpendProvider(credentials: store(.xAI), http: fetcher, now: { now })
+
+        let snapshot = await provider.fetchSpend(period: .currentMonth)
+
+        guard case .stale(let reason) = snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+        #expect(reason == .scopeDenied("xAI key lacks billing read access"))
+    }
 }

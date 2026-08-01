@@ -16,7 +16,7 @@ import HeadroomCore
 enum VesselGlyph {
     /// Point size tuned to sit level with system menu-bar glyphs (~16–18pt tall).
     static let menuBarSize = NSSize(width: 11, height: 18)
-    /// Fill used when no provider drives the level (`.none`, or no weekly data yet).
+    /// Fill used when no provider drives the level (automatic mode, or no data yet).
     static let staticFill = 0.46
 
     @MainActor private static var cache: [ImageKey: NSImage] = [:]

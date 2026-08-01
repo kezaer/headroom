@@ -9,6 +9,10 @@ public enum HeadroomWidgetStyle {
         switch id {
         case ProviderID.claude.raw: "ClaudeBrandIcon"
         case ProviderID.codex.raw: "CodexBrandIcon"
+        // Grok/Cursor imagesets carry a luminosity dark appearance, so `Image(assetName)`
+        // adapts per scheme natively — no separate light/dark lookup needed here.
+        case ProviderID.grok.raw: "GrokBrandIcon"
+        case ProviderID.cursor.raw: "CursorBrandIcon"
         default: nil
         }
     }
@@ -17,6 +21,8 @@ public enum HeadroomWidgetStyle {
         switch id {
         case ProviderID.claude.raw: return Color(HeadroomBrandColorValues.claude)
         case ProviderID.codex.raw: return Color(HeadroomBrandColorValues.codex)
+        case ProviderID.grok.raw: return Color(HeadroomBrandColorValues.grok)
+        case ProviderID.cursor.raw: return Color(HeadroomBrandColorValues.cursor)
         default: return .secondary
         }
     }
@@ -31,6 +37,8 @@ public enum HeadroomWidgetStyle {
         switch id {
         case ProviderID.claude.raw: "sparkle"
         case ProviderID.codex.raw: "chevron.left.forwardslash.chevron.right"
+        case ProviderID.grok.raw: "atom"
+        case ProviderID.cursor.raw: "cursorarrow"
         default: "circle.dashed"
         }
     }
@@ -191,6 +199,7 @@ public struct HeadroomWidgetUsageMeter: View {
             case .hero: return .subheadline.weight(.medium)
             case .standard: return .footnote.weight(.medium)
             case .dense: return .caption.weight(.medium)
+            case .ultraDense: return .caption2.weight(.medium)
             }
         }
         return compact ? .caption.weight(.medium) : .caption
@@ -202,6 +211,7 @@ public struct HeadroomWidgetUsageMeter: View {
             case .hero: return .caption.monospacedDigit()
             case .standard: return .caption.monospacedDigit()
             case .dense: return .caption2.monospacedDigit()
+            case .ultraDense: return .caption2.monospacedDigit()
             }
         }
         return compact ? .caption.monospacedDigit() : .caption2.monospacedDigit()
@@ -213,6 +223,7 @@ public struct HeadroomWidgetUsageMeter: View {
             case .hero: return .title3.bold().monospacedDigit()
             case .standard: return .headline.bold().monospacedDigit()
             case .dense: return .subheadline.bold().monospacedDigit()
+            case .ultraDense: return .caption.bold().monospacedDigit()
             }
         }
         // The percentage is the glance value, so it outsizes its label. scale (the large

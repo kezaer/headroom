@@ -5,10 +5,14 @@ import HeadroomCore
 /// SF Symbol so Claude and Codex cards are distinguishable at a glance. Static only —
 /// no pulsing/animated indicators (user's standing rule).
 enum ProviderStyle {
-    static func svgResourceName(for id: ProviderID) -> String? {
+    /// Claude and Codex ship a single color mark that reads on both schemes; Grok and
+    /// Cursor are monochrome brands, so they carry a light/dark SVG pair selected here.
+    static func svgResourceName(for id: ProviderID, scheme: ColorScheme) -> String? {
         switch id {
         case .claude: return "claude-color"
         case .codex: return "codex-color"
+        case .grok: return scheme == .dark ? "grok-dark" : "grok-light"
+        case .cursor: return scheme == .dark ? "cursor-dark" : "cursor-light"
         default: return nil
         }
     }
@@ -17,6 +21,8 @@ enum ProviderStyle {
         switch id {
         case .claude: return Color(HeadroomBrandColorValues.claude)
         case .codex: return Color(HeadroomBrandColorValues.codex)
+        case .grok: return Color(HeadroomBrandColorValues.grok)
+        case .cursor: return Color(HeadroomBrandColorValues.cursor)
         default: return .secondary
         }
     }
@@ -68,6 +74,8 @@ enum ProviderStyle {
         switch id {
         case .claude: return "sparkle"
         case .codex: return "chevron.left.forwardslash.chevron.right"
+        case .grok: return "atom"
+        case .cursor: return "cursorarrow"
         default: return "circle.dashed"
         }
     }

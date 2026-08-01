@@ -44,8 +44,8 @@ public struct MenuBarSummary: Sendable, Equatable {
     }
 }
 
-/// One compact status unit for the menu bar. Single-provider modes render one meter;
-/// `Both` renders one per enabled provider so Claude and Codex can be scanned together.
+/// One compact status unit for the menu bar. Automatic mode renders one summary;
+/// an explicit provider selection renders one meter per provider.
 public struct MenuBarMeter: Sendable, Equatable {
     public let summary: MenuBarSummary
     /// 0...1 fill for the vessel, or nil for the static decorative level.
@@ -60,7 +60,9 @@ public struct MenuBarMeter: Sendable, Equatable {
 private struct ResolvedMenuBarWindow {
     let id: ProviderID
     let window: UsageWindow
-    let source: MenuBarWindowSource
+    let kind: WindowKind
+
+    var shortLabel: String { kind.shortLabel.lowercased() }
 }
 
 public enum AccountRemovalState: Sendable, Equatable {
@@ -152,7 +154,10 @@ public final class UsageStore {
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
         self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
-        self.apiSpendDisplayNames = Dictionary(uniqueKeysWithValues: apiSpendProviders.map { ($0.id, $0.displayName) })
+        self.apiSpendDisplayNames = Dictionary(
+            apiSpendProviders.map { ($0.id, $0.displayName) },
+            uniquingKeysWith: { first, _ in first }
+        )
         // Uniquing, never trapping: a duplicated persisted account entry must degrade
         // to one row, not a launch crash loop (code-review finding).
         let cachedSnapshots = continuityCache?.load() ?? [:]
@@ -174,11 +179,11 @@ public final class UsageStore {
         })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
         self.usagePercentageMode = preferences.usagePercentageMode
-        self.menuBarFillSource = preferences.menuBarFillSource
-        self.menuBarWindowSources = [
-            .claude: preferences.menuBarWindowSource(for: .claude),
-            .codex: preferences.menuBarWindowSource(for: .codex),
-        ]
+        let registeredProviderIDs = providers.map(\.id).uniqued()
+        self.menuBarFillSource = preferences.menuBarFillSource.filtered(to: registeredProviderIDs)
+        self.menuBarWindowSources = Dictionary(uniqueKeysWithValues: registeredProviderIDs.map {
+            ($0, preferences.menuBarWindowSource(for: $0))
+        })
         self.showCodexSparkCountersInApp = preferences.showCodexSparkCountersInApp
         self.showCodexSparkCountersInWidgets = preferences.showCodexSparkCountersInWidgets
         self.enabledSurfaces = Set(UsageSurface.allCases.filter { preferences.isSurfaceEnabled($0) })
@@ -224,11 +229,35 @@ public final class UsageStore {
     }
 
     public var providerOrder: [ProviderID] {
-        providers.map(\.id).uniqued().filter { enabledSurfaces.contains(subscriptionSurface(for: $0)) }
+        registeredProviderOrder.filter { id in
+            guard let surface = UsageSurface.subscription(for: id) else { return false }
+            return enabledSurfaces.contains(surface)
+        }
+    }
+
+    /// Every composed subscription provider, including surfaces currently switched off.
+    /// Settings/account management use this registry order; display surfaces use
+    /// `providerOrder`, which additionally applies the user's surface toggles.
+    public var registeredProviderOrder: [ProviderID] {
+        providers.map(\.id).uniqued()
     }
 
     public var apiSpendProviderOrder: [ProviderID] {
-        apiSpendProviders.map(\.id).filter { enabledSurfaces.contains(apiSurface(for: $0)) }
+        registeredAPISpendProviderOrder.filter { id in
+            guard let surface = UsageSurface.api(for: id) else { return false }
+            guard enabledSurfaces.contains(surface) else { return false }
+            // A live nil amount is an explicit "not applicable" result (currently
+            // Cursor with on-demand disabled), so no empty spend row is rendered.
+            if let snapshot = apiSpendSnapshots[id],
+               snapshot.freshness == .live, snapshot.amount == nil {
+                return false
+            }
+            return true
+        }
+    }
+
+    public var registeredAPISpendProviderOrder: [ProviderID] {
+        apiSpendProviders.map(\.id).uniqued()
     }
 
     // MARK: - Accounts
@@ -250,8 +279,14 @@ public final class UsageStore {
     public func canAddAccount(for providerID: ProviderID) -> Bool {
         // Delegate the cap rule to the registry — one source of truth for the same
         // gate `addAccount` enforces (code-review finding).
-        guard let accountRegistry, providerFactory != nil else { return false }
+        guard let accountRegistry, providerFactory != nil,
+              accounts(for: providerID).count < accountCapacity(for: providerID)
+        else { return false }
         return accountRegistry.canAddAccount(for: providerID)
+    }
+
+    public func accountCapacity(for providerID: ProviderID) -> Int {
+        providers.first(where: { $0.id == providerID })?.accountCapacity ?? 1
     }
 
     /// Create a new account: registry entry, on-disk config home, provider instance,
@@ -259,7 +294,8 @@ public final class UsageStore {
     /// for a poll. Returns nil at the per-provider cap.
     @discardableResult
     public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
-        guard let accountRegistry, let providerFactory,
+        guard canAddAccount(for: providerID),
+              let accountRegistry, let providerFactory,
               let account = accountRegistry.addAccount(for: providerID, label: label)
         else { return nil }
         guard case .success = accountStorage.ensureDirectories(for: account) else {
@@ -377,8 +413,9 @@ public final class UsageStore {
     }
 
     public func setMenuBarFillSource(_ source: MenuBarFillSource) {
-        preferences.menuBarFillSource = source
-        menuBarFillSource = source
+        let filtered = source.filtered(to: registeredProviderOrder)
+        preferences.menuBarFillSource = filtered
+        menuBarFillSource = filtered
     }
 
     public func menuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource {
@@ -393,7 +430,22 @@ public final class UsageStore {
     /// The source currently rendered after availability fallback. Settings compares
     /// this with the preferred source so a provider removing a window is never silent.
     public func resolvedMenuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource? {
-        menuBarWindow(for: id)?.source
+        guard let kind = menuBarWindow(for: id)?.kind else { return nil }
+        return MenuBarWindowSource.allCases.first { $0.kind == kind }
+    }
+
+    public func resolvedMenuBarWindowKind(for id: ProviderID) -> WindowKind? {
+        menuBarWindow(for: id)?.kind
+    }
+
+    public func hasSelectableMenuBarWindows(for id: ProviderID) -> Bool {
+        let windows = snapshot(for: id).windows
+        // Pending/no-data providers retain the existing selector until their real
+        // shape is known; a live billing-period-only provider then hides it.
+        guard !windows.isEmpty else { return true }
+        return windows.contains { window in
+            MenuBarWindowSource.allCases.contains { $0.kind == window.kind }
+        }
     }
 
     public func setShowCodexSparkCountersInApp(_ enabled: Bool) {
@@ -413,24 +465,25 @@ public final class UsageStore {
     /// per Settings). Reads
     /// from the last-known windows regardless of
     /// freshness, so a transient failure doesn't make the pill jump. Nil when the
-    /// source is `.none` or that provider has no supported window yet — the label then
-    /// falls back to a static decorative fill.
+    /// source is automatic or that provider has no supported window yet — the label
+    /// then falls back to a static decorative fill.
     public var menuBarFill: Double? {
-        guard let id = menuBarFillSource.providerID,
+        guard case .providers(let ids) = menuBarFillSource,
+              ids.count == 1,
+              let id = ids.first,
               let resolved = menuBarWindow(for: id)
         else { return nil }
         return usagePercentageMode.fraction(for: resolved.window)
     }
 
-    /// Render-ready menu bar meters. In `Both` mode each enabled provider gets its own
-    /// vessel/percentage pair; other modes keep the existing single compact summary.
+    /// Render-ready menu bar meters. Explicit selection gives each chosen provider its
+    /// own vessel/percentage pair; automatic mode keeps the existing compact summary.
     public var menuBarMeters: [MenuBarMeter] {
-        guard menuBarFillSource == .both else {
+        guard case .providers(let selected) = menuBarFillSource else {
             return [MenuBarMeter(summary: menuBarSummary, fill: menuBarFill)]
         }
 
-        let ids = [ProviderID.claude, .codex].filter { providerOrder.contains($0) }
-        let meters = ids.map { providerMenuBarMeter(for: $0) }
+        let meters = providerOrder.filter { selected.contains($0) }.map { providerMenuBarMeter(for: $0) }
         return meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
     }
 
@@ -520,26 +573,35 @@ public final class UsageStore {
 
     private func refreshSubscriptions(source: RefreshSource = .manual, exportAfter: Bool = true) async {
         let candidates = providers.filter { provider in
-            enabledSurfaces.contains(subscriptionSurface(for: provider.id))
-                && !shouldSkipOnTimer(provider: provider, source: source)
+            guard let surface = UsageSurface.subscription(for: provider.id) else { return false }
+            return enabledSurfaces.contains(surface) && !shouldSkipOnTimer(provider: provider, source: source)
         }
         let (stream, continuation) = AsyncStream.makeStream(
             of: (AccountKey, UsageSnapshot).self,
             bufferingPolicy: .unbounded
         )
         await withTaskGroup(of: Void.self) { group in
-            // Each Claude fetch owns a full interactive CLI/PTY process for up to 30s.
-            // Sequence those probes so five configured accounts cannot create a process
-            // storm. Other providers remain concurrent with that serial Claude lane.
-            let claudeProviders = candidates.filter { $0.id == .claude }
-            if !claudeProviders.isEmpty {
+            // Partition once from the immutable provider declaration. Each process-heavy
+            // CLI gets its own keyed serial lane, while network work and other CLI lanes
+            // remain concurrent with it.
+            var serialLanes: [String: [any UsageProvider]] = [:]
+            var concurrentProviders: [any UsageProvider] = []
+            for provider in candidates {
+                switch provider.pollingLane {
+                case .concurrent:
+                    concurrentProviders.append(provider)
+                case .serial(let laneID):
+                    serialLanes[laneID, default: []].append(provider)
+                }
+            }
+            for lane in serialLanes.values {
                 group.addTask {
-                    for provider in claudeProviders {
+                    for provider in lane {
                         continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
                     }
                 }
             }
-            for provider in candidates where provider.id != .claude {
+            for provider in concurrentProviders {
                 group.addTask {
                     continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
                 }
@@ -562,7 +624,9 @@ public final class UsageStore {
         let spendPeriod = preferences.apiSpendPeriod
         let spendResults = await withTaskGroup(of: (ProviderID, APISpendSnapshot).self) { group in
             for provider in apiSpendProviders {
-                guard enabledSurfaces.contains(apiSurface(for: provider.id)) else { continue }
+                guard let surface = UsageSurface.api(for: provider.id),
+                      enabledSurfaces.contains(surface)
+                else { continue }
                 group.addTask { (provider.id, await provider.fetchSpend(period: spendPeriod)) }
             }
             var acc: [(ProviderID, APISpendSnapshot)] = []
@@ -594,14 +658,15 @@ public final class UsageStore {
     private func isNeverSignedIn(_ reason: FailureReason) -> Bool {
         if case .notLoggedIn = reason { return true }
         guard case .providerSetup(let outcome) = reason else { return false }
-        return outcome == .claudeLoginRequired || outcome == .codexAuthAbsent
+        return outcome.isNeverSignedIn
     }
 
     private func fetchAccountIfEligible(_ key: AccountKey) async {
         guard let provider = providers.first(where: { $0.accountKey == key }),
               accounts(for: key.providerID).contains(where: { $0.key == key }),
               !removingAccounts.contains(key),
-              enabledSurfaces.contains(subscriptionSurface(for: key.providerID))
+              let surface = UsageSurface.subscription(for: key.providerID),
+              enabledSurfaces.contains(surface)
         else { return }
         let fresh = await provider.fetchSnapshot()
         merge(key: key, fresh: fresh)
@@ -693,7 +758,7 @@ public final class UsageStore {
     private func weeklyFirst(_ snapshot: UsageSnapshot) -> UsageSnapshot {
         func rank(_ kind: WindowKind) -> Int {
             switch kind {
-            case .weekly: return 0
+            case .weekly, .billingPeriod: return 0
             case .fiveHour: return 1
             case .other: return 2
             }
@@ -776,7 +841,7 @@ public final class UsageStore {
         return MenuBarSummary(
             text: "\(pct)%",
             providerID: best.id,
-            detail: "\(name) \(best.source.shortLabel)",
+            detail: "\(name) \(best.shortLabel)",
             isNeutral: false,
             percentageMode: usagePercentageMode,
             severity: best.window.severity,
@@ -785,10 +850,14 @@ public final class UsageStore {
     }
 
     private func menuBarBestWindow() -> ResolvedMenuBarWindow? {
-        if let id = menuBarFillSource.providerID {
-            return menuBarWindow(for: id)
+        let candidateIDs: [ProviderID]
+        switch menuBarFillSource {
+        case .auto:
+            candidateIDs = providerOrder
+        case .providers(let selected):
+            candidateIDs = providerOrder.filter { selected.contains($0) }
         }
-        return providerOrder.compactMap { menuBarWindow(for: $0) }
+        return candidateIDs.compactMap { menuBarWindow(for: $0) }
             .min { $0.window.percentRemaining < $1.window.percentRemaining }
     }
 
@@ -815,7 +884,7 @@ public final class UsageStore {
             summary: MenuBarSummary(
                 text: "\(pct)%",
                 providerID: id,
-                detail: "\(name) \(resolved.source.shortLabel)",
+                detail: "\(name) \(resolved.shortLabel)",
                 isNeutral: false,
                 percentageMode: usagePercentageMode,
                 severity: resolved.window.severity,
@@ -844,19 +913,15 @@ public final class UsageStore {
         let candidates = [preferred] + MenuBarWindowSource.allCases.filter { $0 != preferred }
         for source in candidates {
             if let window = snapshot.windows.first(where: { $0.kind == source.kind }) {
-                return ResolvedMenuBarWindow(id: id, window: window, source: source)
+                return ResolvedMenuBarWindow(id: id, window: window, kind: window.kind)
             }
         }
-        return nil
+        guard let window = snapshot.windows.min(by: { $0.percentRemaining < $1.percentRemaining }) else {
+            return nil
+        }
+        return ResolvedMenuBarWindow(id: id, window: window, kind: window.kind)
     }
 
-    private func subscriptionSurface(for id: ProviderID) -> UsageSurface {
-        id == .claude ? .claudeSubscription : .codexSubscription
-    }
-
-    private func apiSurface(for id: ProviderID) -> UsageSurface {
-        id == .claude ? .anthropicAPI : .openAIAPI
-    }
 }
 
 private extension Array where Element == ProviderID {

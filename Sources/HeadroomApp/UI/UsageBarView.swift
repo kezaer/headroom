@@ -192,6 +192,7 @@ struct UsageBarView: View {
         switch window.kind {
         case .fiveHour: return "5-hour"
         case .weekly: return "Weekly"
+        case .billingPeriod(let label, _): return label
         case .other(let raw): return Self.normalizeOther(raw)
         }
     }

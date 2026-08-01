@@ -3,9 +3,11 @@ import AppKit
 import WidgetKit
 import HeadroomCore
 
-/// Entry point. Supports hidden diagnostics: `--probe-claude` / `--probe-codex` run the real
-/// provider capture once and print parsed windows; `--dump-phone-sync` decodes the iCloud KVS
-/// payload the Mac published for the iPhone. All run without launching the menu bar UI.
+/// Entry point. Supports hidden diagnostics: `--probe-claude` / `--probe-codex` /
+/// `--probe-grok` / `--probe-cursor` run the real provider capture once and print parsed
+/// windows; `--probe-spend <openai|anthropic|xai> [--key-file <path>]` verifies a key-based
+/// API-spend path; `--dump-phone-sync` decodes the iCloud KVS payload the Mac published for
+/// the iPhone. All run without launching the menu bar UI.
 @main
 enum Entry {
     static func main() {
@@ -15,6 +17,18 @@ enum Entry {
         }
         if CommandLine.arguments.contains("--probe-codex") {
             runCodexProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-grok") {
+            runGrokProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-cursor") {
+            runCursorProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-spend") {
+            runSpendProbe()
             return
         }
         if CommandLine.arguments.contains("--dump-phone-sync") {
@@ -105,6 +119,158 @@ enum Entry {
                 }
             case .stale(let reason):
                 print("RESULT: stale Codex snapshot: \(reason.message)")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    private static func runGrokProbe() {
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            var overrides: [String: String] = [:]
+            var authPath: URL?
+            if let index = CommandLine.arguments.firstIndex(of: "--grok-home"),
+               CommandLine.arguments.indices.contains(index + 1) {
+                let home = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                overrides["GROK_HOME"] = home.path
+                authPath = home.appendingPathComponent("auth.json")
+                print("account home: isolated")
+            } else {
+                print("account home: built-in")
+            }
+
+            let source = GrokFallbackUsageSource(
+                primary: GrokACPUsageSource(environmentOverrides: overrides),
+                fallback: GrokHTTPUsageSource(authReader: GrokAuthFileReader(path: authPath))
+            )
+            let result = await source.fetchUsage()
+            switch result {
+            case .payload(let data, let transport):
+                let snapshot = await GrokProvider(
+                    source: CapturedGrokUsageSource(data: data, transport: transport)
+                ).fetchSnapshot()
+                guard snapshot.freshness == .live else {
+                    print("RESULT: Grok payload could not be parsed")
+                    semaphore.signal()
+                    return
+                }
+                print("RESULT: live Grok snapshot via \(transport.rawValue), parsed \(snapshot.windows.count) window(s):")
+                if let plan = snapshot.planLabel { print("  plan: \(plan)") }
+                for window in snapshot.windows {
+                    print("  • \(window.kind.shortLabel)  \(Int(window.percentUsed.rounded()))% used  →  \(window.resetsAt)")
+                }
+            case .methodUnavailable:
+                print("RESULT: Grok billing method unavailable and fallback was not attempted")
+            case .cliNotFound:
+                print("RESULT: Grok Build CLI not found")
+            case .authAbsent:
+                print("RESULT: login required")
+            case .authPermissionDenied, .authUnsafePermissions, .authMalformed, .authIOFailure:
+                print("RESULT: Grok sign-in file is unavailable")
+            case .rejectedAuth:
+                print("RESULT: Grok sign-in expired")
+            case .failure(let reason):
+                print("RESULT: Grok probe failed: \(reason.message)")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    private static func runCursorProbe() {
+        let semaphore = DispatchSemaphore(value: 0)
+        print("cursor-agent CLI: \(CursorUsageCLIProbe.resolveCursorPath() == nil ? "missing" : "available")")
+        Task {
+            switch await CursorUsageCLIProbe().capturePanel() {
+            case .panel(let text):
+                guard let parsed = CursorUsageParser.parse(text) else {
+                    print("RESULT: Cursor usage panel could not be parsed")
+                    semaphore.signal()
+                    return
+                }
+                print("RESULT: live Cursor snapshot via official /usage panel")
+                print("  plan: \(parsed.planName)")
+                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset=\(parsed.resetLabel)")
+                print("  on-demand: \(parsed.onDemand.isEnabled ? "enabled" : "disabled")")
+            case .loginRequired:
+                print("RESULT: login required")
+            case .cliNotFound:
+                print("RESULT: Cursor Agent CLI not found")
+            case .unknownUI:
+                print("RESULT: unrecognized Cursor Agent surface (no input sent)")
+            case .transientCapture:
+                print("RESULT: Cursor usage capture failed")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    /// `--probe-spend <openai|anthropic|xai>` verifies a real key-based API-spend path (U8
+    /// acceptance): the three admin/management-key providers share one shape (key → vendor
+    /// billing/cost API → typed spend or balance row), so one probe covers all of them. It
+    /// prints only the typed, redacted outcome. The key read is off any leak-prone channel:
+    /// pass `--key-file <path>` and the key is read from that file (never an argument or env
+    /// var, so it can't surface in `ps`/shell history), never echoed, and never persisted.
+    /// With no file flag it reads the app-saved Keychain key instead. The API calls are
+    /// read-only status fetches. For xAI, compare the printed balance against console.x.ai to
+    /// confirm the documented negative-liability sign convention holds against a real response.
+    private static func runSpendProbe() {
+        let valid = ["openai", "anthropic", "xai"]
+        guard let index = CommandLine.arguments.firstIndex(of: "--probe-spend"),
+              CommandLine.arguments.indices.contains(index + 1),
+              case let token = CommandLine.arguments[index + 1].lowercased(),
+              valid.contains(token) else {
+            print("Usage: --probe-spend <\(valid.joined(separator: "|"))> [--key-file <path>]")
+            return
+        }
+        let keyProvider: APIKeyProvider
+        let label: String
+        switch token {
+        case "openai": (keyProvider, label) = (.openAI, "OpenAI")
+        case "anthropic": (keyProvider, label) = (.anthropic, "Anthropic")
+        default: (keyProvider, label) = (.xAI, "xAI")
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let credentials: CredentialStore
+            if let fileIndex = CommandLine.arguments.firstIndex(of: "--key-file"),
+               CommandLine.arguments.indices.contains(fileIndex + 1) {
+                let path = CommandLine.arguments[fileIndex + 1]
+                guard let raw = try? String(contentsOfFile: path, encoding: .utf8)
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+                    print("RESULT: could not read a non-empty key from \(path)")
+                    semaphore.signal()
+                    return
+                }
+                print("key source: file (\(raw.count) chars — value not shown)")
+                credentials = CredentialStore(apiKeyStore: SingleAPIKeyStore(key: raw, provider: keyProvider))
+            } else {
+                print("key source: Keychain (app-saved; pass --key-file <path> to test a raw key)")
+                credentials = CredentialStore()
+            }
+
+            let provider: any APISpendProvider
+            switch keyProvider {
+            case .openAI: provider = OpenAIAPISpendProvider(credentials: credentials)
+            case .anthropic: provider = AnthropicAPISpendProvider(credentials: credentials)
+            case .xAI: provider = XAIAPISpendProvider(credentials: credentials)
+            }
+
+            let snapshot = await provider.fetchSpend(period: .currentMonth)
+            print("provider: \(label)")
+            switch snapshot.freshness {
+            case .pending:
+                print("RESULT: pending")
+            case .live:
+                let amount = snapshot.amount.map { String(format: "%.2f", $0) } ?? "(none)"
+                print("RESULT: live \(label) \(snapshot.kind == .balance ? "balance" : "period spend")")
+                print("  label:  \(snapshot.periodLabel)")
+                print("  amount: \(amount) \(snapshot.currency ?? "")")
+            case .stale(let reason):
+                print("RESULT: stale — \(reason.message)")
             }
             semaphore.signal()
         }
@@ -366,6 +532,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Composition root (R13): the one place concrete providers are wired to the engine.
 /// Adding a third provider is a one-line append here plus a card — no engine change.
 enum AppComposition {
+    private struct SubscriptionProviderRegistration {
+        let id: ProviderID
+        let factory: @MainActor (ProviderAccount, CredentialStore, URL) -> any UsageProvider
+    }
+
+    private static let cursorUsageSource = CursorUsageCaptureCache(source: CursorUsageCLIProbe())
+
+    /// Ordered composition registry. Adding a provider extends this table; Settings,
+    /// account management, polling, and presentation discover the resulting order from
+    /// the store instead of maintaining parallel provider literals.
+    @MainActor
+    private static var subscriptionProviderRegistry: [SubscriptionProviderRegistration] {
+        [
+            SubscriptionProviderRegistration(id: .claude, factory: makeClaudeProvider),
+            SubscriptionProviderRegistration(id: .codex, factory: makeCodexProvider),
+            SubscriptionProviderRegistration(id: .grok, factory: makeGrokProvider),
+            SubscriptionProviderRegistration(id: .cursor, factory: makeCursorProvider),
+        ]
+    }
+
     @MainActor
     static func store(preferences: Preferences = Preferences()) -> UsageStore {
         if DemoFixture.isEnabled {
@@ -447,6 +633,14 @@ enum AppComposition {
         // below) so the preview never publishes to the widget App Group or iCloud KVS.
 
         let fixture = DemoFixture.multiFixture(for: scenario)
+        // Enable the subscription surface for every provider present in the scenario. Grok and
+        // Cursor default OFF (upgrade-safety), so the four-provider scenario would otherwise
+        // render only the Claude/Codex cards even though all four fixtures are wired.
+        for providerID in Set(fixture.accounts.map(\.providerID)) {
+            if let surface = UsageSurface.subscription(for: providerID) {
+                prefs.setSurfaceEnabled(true, for: surface)
+            }
+        }
         // A live registry + factory so account management renders enabled (the real app always
         // has both), seeded with the fixture accounts — but in its OWN suite, never `.standard`,
         // so seeding can't clobber the user's real account catalog.
@@ -460,7 +654,7 @@ enum AppComposition {
             factory = { account in
                 DemoUsageProvider(
                     id: account.providerID,
-                    displayName: account.providerID == .claude ? "Claude" : "Codex",
+                    displayName: account.providerID.displayName,
                     snapshot: .pending(for: account.providerID),
                     accountID: account.id
                 )
@@ -482,65 +676,110 @@ enum AppComposition {
     /// One provider instance per configured account, in registry order (built-in first).
     @MainActor
     private static func providers(credentials: CredentialStore, registry: AccountRegistry) -> [any UsageProvider] {
-        [ProviderID.claude, .codex].flatMap { id in
-            registry.accounts(for: id).map { provider(for: $0, credentials: credentials) }
+        subscriptionProviderRegistry.flatMap { registration in
+            registry.accounts(for: registration.id).map { provider(for: $0, credentials: credentials) }
         }
     }
 
     /// The concrete provider for one account. Built-in accounts read the CLI's default
-    /// config (`~/.claude` / `~/.codex`) exactly as before; extra accounts route the
-    /// same compliant paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
-    /// `CODEX_HOME`) that the user signed into via the official CLI.
+    /// config (`~/.claude` / `~/.codex` / `~/.grok`) exactly as before; extra accounts
+    /// route the same paths at their Headroom-owned config home (`CLAUDE_CONFIG_DIR` /
+    /// `CODEX_HOME` / `GROK_HOME`) that the user signed into via the official CLI.
     @MainActor
     static func provider(
         for account: ProviderAccount,
         credentials: CredentialStore,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) -> any UsageProvider {
+        guard let registration = subscriptionProviderRegistry.first(where: { $0.id == account.providerID }) else {
+            return UnavailableAccountProvider(account: account)
+        }
+        return registration.factory(account, credentials, builtInClaudeWorkspace)
+    }
+
+    @MainActor
+    private static func makeCodexProvider(
+        account: ProviderAccount,
+        credentials: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        guard !account.isBuiltIn else {
+            return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
+        }
+        let configuration = ProviderAccountConfiguration.make(for: account)
+        let reader = CodexAuthFileReader(path: configuration.codexAuthFile)
+        return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
+    }
+
+    @MainActor
+    private static func makeClaudeProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace: URL
+    ) -> any UsageProvider {
         let configuration = ProviderAccountConfiguration.make(
             for: account,
             builtInClaudeWorkspace: builtInClaudeWorkspace
         )
-        switch account.providerID {
-        case .codex:
-            guard !account.isBuiltIn else {
-                return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
-            }
-            let reader = CodexAuthFileReader(path: configuration.codexAuthFile)
-            return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
-        case .claude:
-            guard let workspace = configuration.claudeWorkspaceDirectory else {
-                return UnavailableAccountProvider(account: account)
-            }
-            // Provider configuration describes the path but deliberately has no file-system
-            // side effects. Provision it before the PTY receives it as its working directory.
-            guard (try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)) != nil else {
-                return UnavailableAccountProvider(account: account)
-            }
-            guard !account.isBuiltIn else {
-                return ClaudeProvider(
-                    source: ClaudeUsageCLIProbe(workingDirectory: workspace.path)
-                )
-            }
-            guard let configDirectory = configuration.claudeConfigDirectory else {
-                return UnavailableAccountProvider(account: account)
-            }
-            return ClaudeProvider(
-                source: ClaudeUsageCLIProbe(
-                    workingDirectory: workspace.path,
-                    environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
-                ),
-                accountID: account.id
-            )
-        default:
+        guard let workspace = configuration.claudeWorkspaceDirectory else {
             return UnavailableAccountProvider(account: account)
         }
+        // Provider configuration describes the path but deliberately has no file-system
+        // side effects. Provision it before the PTY receives it as its working directory.
+        guard (try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)) != nil else {
+            return UnavailableAccountProvider(account: account)
+        }
+        guard !account.isBuiltIn else {
+            return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: workspace.path))
+        }
+        guard let configDirectory = configuration.claudeConfigDirectory else {
+            return UnavailableAccountProvider(account: account)
+        }
+        return ClaudeProvider(
+            source: ClaudeUsageCLIProbe(
+                workingDirectory: workspace.path,
+                environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
+            ),
+            accountID: account.id
+        )
+    }
+
+    @MainActor
+    private static func makeGrokProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        let configuration = ProviderAccountConfiguration.make(for: account)
+        guard let authFile = configuration.grokAuthFile else {
+            return UnavailableAccountProvider(account: account)
+        }
+        let overrides = configuration.grokHomeDirectory.map { ["GROK_HOME": $0.path] } ?? [:]
+        return GrokProvider(
+            source: GrokFallbackUsageSource(
+                primary: GrokACPUsageSource(environmentOverrides: overrides),
+                fallback: GrokHTTPUsageSource(authReader: GrokAuthFileReader(path: authFile))
+            ),
+            accountID: account.id
+        )
+    }
+
+    @MainActor
+    private static func makeCursorProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        guard account.isBuiltIn else { return UnavailableAccountProvider(account: account) }
+        return CursorProvider(source: cursorUsageSource)
     }
 
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {
         [
             AnthropicAPISpendProvider(credentials: credentials),
             OpenAIAPISpendProvider(credentials: credentials),
+            XAIAPISpendProvider(credentials: credentials),
+            CursorOnDemandSpendProvider(source: cursorUsageSource),
         ]
     }
 
@@ -568,5 +807,35 @@ private struct UnavailableAccountProvider: UsageProvider {
 
     func fetchSnapshot() async -> UsageSnapshot {
         .stale(for: id, reason: .transient("This provider is not available in this Headroom build"))
+    }
+}
+
+private struct CapturedGrokUsageSource: GrokUsageSource {
+    let data: Data
+    let transport: GrokUsageTransport
+
+    func fetchUsage() async -> GrokUsageSourceResult {
+        .payload(data, transport: transport)
+    }
+}
+
+/// Diagnostic-only key store: serves one in-memory key for one provider so `--probe-xai`
+/// can validate a raw management key without persisting it to the Keychain. Save/delete are
+/// intentionally unsupported — the probe never writes.
+private struct SingleAPIKeyStore: APIKeyStoring {
+    let key: String
+    let provider: APIKeyProvider
+
+    func readAPIKey(for provider: APIKeyProvider) throws -> String {
+        guard provider == self.provider else { throw CredentialError.notLoggedIn }
+        return key
+    }
+
+    func saveAPIKey(_ key: String, for provider: APIKeyProvider) throws {
+        throw CredentialError.notLoggedIn
+    }
+
+    func deleteAPIKey(for provider: APIKeyProvider) throws {
+        throw CredentialError.notLoggedIn
     }
 }

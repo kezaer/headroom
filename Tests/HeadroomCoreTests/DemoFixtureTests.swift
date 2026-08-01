@@ -75,10 +75,45 @@ struct DemoFixtureTests {
         #expect(DemoFixture.multiFixture(for: .multiThree).accounts.count == 5)
         #expect(DemoFixture.multiFixture(for: .multiFive).accounts.count == 8)  // 5 Claude + 3 Codex (past the cap for scroll)
         #expect(DemoFixture.multiFixture(for: .multiMixed).accounts.count == 4)
+        #expect(DemoFixture.multiFixture(for: .multiProviders).accounts.count == 4)  // one built-in per provider
         // Provider instances are 1:1 with accounts.
         for scenario in DemoFixture.MultiAccountScenario.allCases {
             let fixture = DemoFixture.multiFixture(for: scenario)
             #expect(fixture.providers.count == fixture.accounts.count)
         }
+    }
+
+    /// Grok bills a single weekly credit pool as a billing-period window (not Claude's
+    /// rolling 5h/weekly pair), 44% used = 56% left.
+    @Test func grokDemoSnapshotIsBillingPeriodWeekly() {
+        let grok = DemoFixture.grokSnapshot
+        #expect(grok.planLabel == "SuperGrok")
+        #expect(grok.windows.count == 1)
+        guard case .billingPeriod(let label, _)? = grok.windows.first?.kind else {
+            Issue.record("expected a billing-period window"); return
+        }
+        #expect(label == "Weekly")
+        #expect(remaining(grok, grok.windows[0].kind) == 56)
+    }
+
+    /// Cursor bills a monthly included pool with a calendar reset day, 31% used = 69% left.
+    @Test func cursorDemoSnapshotIsBillingPeriodMonthly() {
+        let cursor = DemoFixture.cursorSnapshot
+        #expect(cursor.planLabel == "Pro+")
+        #expect(cursor.windows.count == 1)
+        guard case .billingPeriod(let label, _)? = cursor.windows.first?.kind else {
+            Issue.record("expected a billing-period window"); return
+        }
+        #expect(label == "Monthly")
+        #expect(remaining(cursor, cursor.windows[0].kind) == 69)
+    }
+
+    /// U12 parity: the four-provider scenario's provider list is derived from — and equals —
+    /// the registry order, rather than a Claude/Codex literal.
+    @Test func fourProviderScenarioMatchesRegistryOrder() {
+        let fixture = DemoFixture.multiFixture(for: .multiProviders)
+        #expect(fixture.accounts.map(\.providerID) == DemoFixture.registeredProviderOrder)
+        #expect(fixture.providers.map(\.id) == DemoFixture.registeredProviderOrder)
+        #expect(DemoFixture.registeredProviderOrder == [.claude, .codex, .grok, .cursor])
     }
 }

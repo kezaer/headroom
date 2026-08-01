@@ -93,6 +93,21 @@ struct UsageMathTests {
         #expect(WindowKind.fiveHour.shortLabel == "5h")
     }
 
+    @Test func billingPeriodClassificationUsesSourceMetadata() {
+        #expect(
+            BillingPeriodWindowClassifier.kind(periodType: "weekly", durationSeconds: nil)
+                == .billingPeriod(label: "Weekly", duration: 7 * 24 * 60 * 60)
+        )
+        #expect(
+            BillingPeriodWindowClassifier.kind(periodType: "monthly", durationSeconds: 30 * 24 * 60 * 60)
+                == .billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60)
+        )
+        #expect(
+            BillingPeriodWindowClassifier.kind(periodType: nil, durationSeconds: 10 * 24 * 60 * 60)
+                == .other("10d")
+        )
+    }
+
     @Test func pendingSnapshotHasNoCaptureTime() {
         let snap = UsageSnapshot.pending(for: .claude)
         // `.pending` is distinguishable from `.stale` and carries no timestamp,

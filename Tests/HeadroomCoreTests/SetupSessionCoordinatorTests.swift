@@ -101,7 +101,7 @@ import Testing
         coordinator.begin(for: first)
         await settleTasks()
         coordinator.begin(for: second)
-        #expect(coordinator.state(for: second.key) == .blockedByCodexLogin(first.key))
+        #expect(coordinator.state(for: second.key) == .blockedByProviderLogin(providerID: .codex, active: first.key))
 
         coordinator.cancel(first.key)
         await settleTasks()
@@ -110,7 +110,7 @@ import Testing
         coordinator.continueSetup(for: second)
         await settleTasks()
         #expect(harness.openCalls == [first.key])
-        #expect(coordinator.state(for: second.key) == .blockedByCodexLogin(first.key))
+        #expect(coordinator.state(for: second.key) == .blockedByProviderLogin(providerID: .codex, active: first.key))
 
         coordinator.handoffDidEnd(first.key)
         coordinator.continueSetup(for: second)
@@ -127,7 +127,7 @@ import Testing
         coordinator.begin(for: first)
         await settleTasks()
         coordinator.begin(for: second, mode: .deviceCode)
-        #expect(coordinator.state(for: second.key) == .blockedByCodexLogin(first.key))
+        #expect(coordinator.state(for: second.key) == .blockedByProviderLogin(providerID: .codex, active: first.key))
 
         coordinator.handoffDidEnd(first.key)
         coordinator.continueSetup(for: second)
@@ -135,6 +135,21 @@ import Testing
 
         #expect(harness.prepareCalls.last == .init(key: second.key, mode: .deviceCode))
         #expect(coordinator.sessionMode(for: second.key) == .deviceCode)
+    }
+
+    @Test func grokLoginsCanOpenConcurrentlyBecauseTheCLIUsesEphemeralCallbacks() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let first = ProviderAccount(id: AccountID("grok-one"), providerID: .grok, label: "One", isBuiltIn: false)
+        let second = ProviderAccount(id: AccountID("grok-two"), providerID: .grok, label: "Two", isBuiltIn: false)
+
+        coordinator.begin(for: first)
+        coordinator.begin(for: second)
+        await settleTasks()
+
+        #expect(Set(harness.openCalls) == Set([first.key, second.key]))
+        #expect(coordinator.state(for: first.key) == .waiting(attempt: 0))
+        #expect(coordinator.state(for: second.key) == .waiting(attempt: 0))
     }
 
     @Test func openerFailureKeepsItsTypedReason() async {

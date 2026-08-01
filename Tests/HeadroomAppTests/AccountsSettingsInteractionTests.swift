@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 import HeadroomCore
 @testable import Headroom
@@ -296,5 +297,26 @@ private final class AppSetupHarness {
                 self?.refreshedKeys.append(key)
             }
         )
+    }
+}
+
+/// Pins the P1 "grey dashed circle" regression: every registered subscription provider
+/// must resolve a real brand mark + accent + non-fallback symbol through `ProviderStyle`,
+/// in both color schemes, rather than hitting the `default:` identity arm.
+@Suite struct ProviderStyleIdentityTests {
+    @Test func everyRegisteredProviderHasABrandIdentity() {
+        for id in [ProviderID.claude, .codex, .grok, .cursor] {
+            #expect(ProviderStyle.svgResourceName(for: id, scheme: .light) != nil, "\(id.raw) light mark")
+            #expect(ProviderStyle.svgResourceName(for: id, scheme: .dark) != nil, "\(id.raw) dark mark")
+            #expect(ProviderStyle.accent(for: id) != Color.secondary, "\(id.raw) accent")
+            #expect(ProviderStyle.symbol(for: id) != "circle.dashed", "\(id.raw) symbol")
+        }
+    }
+
+    @Test func monochromeProvidersSelectSchemeSpecificMarks() {
+        #expect(ProviderStyle.svgResourceName(for: .grok, scheme: .light) == "grok-light")
+        #expect(ProviderStyle.svgResourceName(for: .grok, scheme: .dark) == "grok-dark")
+        #expect(ProviderStyle.svgResourceName(for: .cursor, scheme: .light) == "cursor-light")
+        #expect(ProviderStyle.svgResourceName(for: .cursor, scheme: .dark) == "cursor-dark")
     }
 }

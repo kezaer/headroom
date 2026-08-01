@@ -107,7 +107,7 @@ struct HeadroomIOSWidgetView: View {
     // large family and the popover; at this size a third line reads as a phantom provider.
     private func small(_ envelope: WidgetSnapshotEnvelope) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Weekly left")
+            Text(envelope.providers.contains(where: { $0.primarySubscriptionWindow?.isBillingPeriod == true }) ? "Usage left" : "Weekly left")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(HeadroomWidgetStyle.secondaryText(scheme: scheme))
             ForEach(envelope.providers) { provider in
@@ -125,7 +125,8 @@ struct HeadroomIOSWidgetView: View {
     // provider's overall weekly window (mirrors macOS `WidgetProviderWeeklyLine`). Dims
     // when that window is missing rather than dropping the row.
     private func providerWeeklyLine(_ provider: WidgetProviderSummary) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let window = provider.primarySubscriptionWindow
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 HeadroomWidgetProviderIcon(providerID: provider.id, size: 16)
                 Text(provider.displayName)
@@ -137,9 +138,9 @@ struct HeadroomIOSWidgetView: View {
                     .allowsTightening(true)
                     .layoutPriority(1)
                 Spacer(minLength: 2)
-                Text(percent(provider.weeklyWindow))
+                Text(percent(window))
                     .font(.title3.bold().monospacedDigit())
-                    .foregroundStyle(provider.weeklyWindow == nil ? HeadroomWidgetStyle.secondaryText(scheme: scheme) : .primary)
+                    .foregroundStyle(window == nil ? HeadroomWidgetStyle.secondaryText(scheme: scheme) : .primary)
                     .widgetAccentable()
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -147,9 +148,9 @@ struct HeadroomIOSWidgetView: View {
                     .frame(width: 42, alignment: .trailing)
             }
             HeadroomWidgetUsageBar(
-                percentRemaining: provider.weeklyWindow?.percentRemaining ?? 0,
-                severity: provider.weeklyWindow?.severity ?? .healthy,
-                dimmed: provider.weeklyWindow == nil
+                percentRemaining: window?.percentRemaining ?? 0,
+                severity: window?.severity ?? .healthy,
+                dimmed: window == nil
             )
         }
     }
@@ -199,12 +200,12 @@ struct HeadroomIOSWidgetView: View {
     private func mediumProviderColumns(_ providers: [WidgetProviderSummary]) -> some View {
         if providers.count <= 1 {
             ForEach(providers) { provider in
-                providerColumn(provider)
+                providerColumn(provider, dense: false)
             }
         } else {
             HStack(alignment: .top, spacing: 10) {
                 ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
-                    providerColumn(provider)
+                    providerColumn(provider, dense: providers.count > 2)
                     if index < providers.count - 1 {
                         Rectangle()
                             .fill(HeadroomWidgetStyle.hairline(scheme: scheme))
@@ -216,7 +217,7 @@ struct HeadroomIOSWidgetView: View {
         }
     }
 
-    private func providerColumn(_ provider: WidgetProviderSummary) -> some View {
+    private func providerColumn(_ provider: WidgetProviderSummary, dense: Bool) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
                 HeadroomWidgetProviderIcon(providerID: provider.id, size: 18)
@@ -235,9 +236,12 @@ struct HeadroomIOSWidgetView: View {
                         .foregroundStyle(HeadroomWidgetStyle.severityColor(for: .low, scheme: scheme))
                 }
             }
-            HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", compact: true)
-            if let fiveHourWindow = window(.fiveHour, in: provider) {
-                HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", compact: true)
+            if provider.displaySubscriptionWindows.isEmpty {
+                HeadroomWidgetUsageMeter(window: nil, fallbackLabel: "Weekly", compact: true, scale: dense ? .dense : nil)
+            } else {
+                ForEach(provider.displaySubscriptionWindows) { window in
+                    HeadroomWidgetUsageMeter(window: window, fallbackLabel: window.label, compact: true, scale: dense ? .dense : nil)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -303,9 +307,12 @@ struct HeadroomIOSWidgetView: View {
         VStack(alignment: .leading, spacing: CGFloat(density.headerSpacing)) {
             largeSectionHeader(provider, density: density)
             VStack(alignment: .leading, spacing: CGFloat(density.meterSpacing)) {
-                HeadroomWidgetUsageMeter(window: window(.weekly, in: provider), fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, scale: density.scale)
-                if let fiveHourWindow = window(.fiveHour, in: provider) {
-                    HeadroomWidgetUsageMeter(window: fiveHourWindow, fallbackLabel: "5-hour", now: entry.date, showsResetInline: true, scale: density.scale)
+                if provider.displaySubscriptionWindows.isEmpty {
+                    HeadroomWidgetUsageMeter(window: nil, fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, scale: density.scale)
+                } else {
+                    ForEach(provider.displaySubscriptionWindows) { window in
+                        HeadroomWidgetUsageMeter(window: window, fallbackLabel: window.label, now: entry.date, showsResetInline: true, scale: density.scale)
+                    }
                 }
                 ForEach(provider.extraWeeklyWindows) { extraWindow in
                     HeadroomWidgetUsageMeter(window: extraWindow, fallbackLabel: "Weekly", now: entry.date, showsResetInline: true, scale: density.scale)
@@ -335,14 +342,10 @@ struct HeadroomIOSWidgetView: View {
 
     // MARK: - Helpers
 
-    private func window(_ kind: WidgetWindowKind, in provider: WidgetProviderSummary) -> WidgetWindowSummary? {
-        provider.subscriptionWindows.first { $0.kind == kind }
-    }
-
     private func providerHeaderFont(_ density: LargeWidgetDensity) -> Font {
         switch density.providerHeaderFontStep {
         case .hero: return .headline.weight(.semibold)
-        case .standard, .dense: return .subheadline.weight(.semibold)
+        case .standard, .dense, .ultraDense: return .subheadline.weight(.semibold)
         }
     }
 

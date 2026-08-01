@@ -13,6 +13,7 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let showMenuBarPercentage = "showMenuBarPercentage"
         static let usagePercentageMode = "usagePercentageMode"
         static let menuBarFillSource = "menuBarFillSource"
+        static let menuBarFillProviders = "menuBarFillProviders"
         /// Kept as a read-through migration source for installs that saved one shared
         /// menu-bar window before providers became independently configurable.
         static let legacyMenuBarWindowSource = "menuBarWindowSource"
@@ -64,12 +65,37 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
 
     public var menuBarFillSource: MenuBarFillSource {
         get {
-            guard let raw = defaults.string(forKey: Key.menuBarFillSource),
-                  let source = MenuBarFillSource(rawValue: raw)
-            else { return .none }
-            return source
+            switch defaults.string(forKey: Key.menuBarFillSource) {
+            case "providers":
+                let ids = Set((defaults.stringArray(forKey: Key.menuBarFillProviders) ?? []).map(ProviderID.init))
+                return ids.isEmpty ? .auto : .providers(ids)
+            case "claude":
+                return .claude
+            case "codex":
+                return .codex
+            case "both":
+                return .both
+            default:
+                // Legacy `none` was the shipped automatic tightest-window summary,
+                // despite its label suggesting an empty selection (KTD4).
+                return .auto
+            }
         }
-        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.menuBarFillSource) }
+        nonmutating set {
+            switch newValue {
+            case .auto:
+                defaults.set("auto", forKey: Key.menuBarFillSource)
+                defaults.removeObject(forKey: Key.menuBarFillProviders)
+            case .providers(let ids):
+                guard !ids.isEmpty else {
+                    defaults.set("auto", forKey: Key.menuBarFillSource)
+                    defaults.removeObject(forKey: Key.menuBarFillProviders)
+                    return
+                }
+                defaults.set("providers", forKey: Key.menuBarFillSource)
+                defaults.set(ids.map(\.raw).sorted(), forKey: Key.menuBarFillProviders)
+            }
+        }
     }
 
     /// The preferred menu-bar window for one provider. A provider-specific value wins;
@@ -130,7 +156,7 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
     public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
         let key = Key.surfaceEnabled(surface)
         guard defaults.object(forKey: key) != nil else {
-            return surface.isSubscription
+            return surface.isEnabledByDefault
         }
         return defaults.bool(forKey: key)
     }

@@ -32,6 +32,11 @@ public struct HeadroomTint: Sendable, Equatable {
 public enum HeadroomBrandColorValues {
     public static let claude = HeadroomRGBColor(red: 0.85, green: 0.47, blue: 0.26)
     public static let codex = HeadroomRGBColor(red: 0.28, green: 0.34, blue: 1.00)
+    // Grok and Cursor are monochrome brands (their marks ship as light/dark pairs); these
+    // mid-tone accents exist for the SF Symbol fallback + single-color tints and read on
+    // both schemes. First-pass identity values — Phase 2 owns visual density.
+    public static let grok = HeadroomRGBColor(red: 0.36, green: 0.40, blue: 0.46)
+    public static let cursor = HeadroomRGBColor(red: 0.33, green: 0.34, blue: 0.38)
 }
 
 /// R2: one source of truth for the widget "usage" look — provider text accents and the
@@ -51,6 +56,13 @@ public enum HeadroomWidgetColorValues {
         case (ProviderID.claude.raw, true): HeadroomRGBColor(red: 0.91, green: 0.56, blue: 0.41)
         case (ProviderID.codex.raw, false): HeadroomRGBColor(red: 0.20, green: 0.25, blue: 0.84)
         case (ProviderID.codex.raw, true): HeadroomRGBColor(red: 0.59, green: 0.63, blue: 1.00)
+        // Grok/Cursor are monochrome brands: their title accent is a legible near-primary
+        // neutral (grok cooler, cursor pure) that clears WCAG AA small-text on the light
+        // container (dark step) and the dark tile (light step).
+        case (ProviderID.grok.raw, false): HeadroomRGBColor(red: 0.20, green: 0.22, blue: 0.25)
+        case (ProviderID.grok.raw, true): HeadroomRGBColor(red: 0.78, green: 0.80, blue: 0.84)
+        case (ProviderID.cursor.raw, false): HeadroomRGBColor(red: 0.17, green: 0.17, blue: 0.18)
+        case (ProviderID.cursor.raw, true): HeadroomRGBColor(red: 0.81, green: 0.81, blue: 0.83)
         default: nil
         }
     }
@@ -135,6 +147,9 @@ public enum HeadroomBrandMark {
     public static func opticalScale(for providerID: String) -> Double {
         switch providerID {
         case ProviderID.claude.raw: 0.84
+        // Cursor's cube fills its 24pt viewBox edge-to-edge like Claude's starburst; inset
+        // it so it reads at the same weight as the other marks in the fixed icon slot.
+        case ProviderID.cursor.raw: 0.9
         default: 1.0
         }
     }

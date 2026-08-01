@@ -41,6 +41,10 @@ struct ProviderLogoView: View {
         switch providerID {
         case ProviderID.claude.raw: "ClaudeBrandIcon"
         case ProviderID.codex.raw: "CodexBrandIcon"
+        // Grok/Cursor imagesets carry a luminosity dark appearance, so the asset adapts
+        // per scheme natively.
+        case ProviderID.grok.raw: "GrokBrandIcon"
+        case ProviderID.cursor.raw: "CursorBrandIcon"
         default: nil
         }
     }
@@ -49,6 +53,8 @@ struct ProviderLogoView: View {
         switch providerID {
         case ProviderID.claude.raw: "sparkles"
         case ProviderID.codex.raw: "terminal"
+        case ProviderID.grok.raw: "atom"
+        case ProviderID.cursor.raw: "cursorarrow"
         default: "circle.dashed"
         }
     }

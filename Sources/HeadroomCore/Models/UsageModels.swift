@@ -1,10 +1,11 @@
 import Foundation
 
-/// Which limit window a `UsageWindow` describes. `.other` carries an unrecognized
-/// window's label verbatim so a new server-side window never fails decoding (KTD6).
+/// Which limit window a `UsageWindow` describes. Billing periods preserve their
+/// source-declared label and duration; `.other` keeps unrecognized windows honest.
 public enum WindowKind: Sendable, Equatable, Hashable {
     case fiveHour
     case weekly
+    case billingPeriod(label: String, duration: TimeInterval)
     case other(String)
 
     /// Short human label rendered verbatim on widget surfaces (via
@@ -13,6 +14,7 @@ public enum WindowKind: Sendable, Equatable, Hashable {
         switch self {
         case .fiveHour: return "5h"
         case .weekly: return "Weekly"
+        case .billingPeriod(let label, _): return label
         case .other(let label): return label
         }
     }
@@ -23,6 +25,44 @@ public enum WindowKind: Sendable, Equatable, Hashable {
     public var isCodexSparkCounter: Bool {
         guard case .other(let label) = self else { return false }
         return label.localizedCaseInsensitiveContains("spark")
+    }
+}
+
+/// Classifies provider-declared billing periods without inferring identity from row
+/// position or presentation copy. Unknown durations stay honest `.other` windows.
+public enum BillingPeriodWindowClassifier {
+    private static let day: TimeInterval = 24 * 60 * 60
+
+    public static func kind(periodType: String?, durationSeconds: TimeInterval?) -> WindowKind {
+        let declaredDuration = durationSeconds.flatMap { duration in
+            duration.isFinite && duration > 0 ? duration : nil
+        }
+        switch periodType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "weekly", "week":
+            return .billingPeriod(label: "Weekly", duration: declaredDuration ?? 7 * day)
+        case "monthly", "month":
+            return .billingPeriod(label: "Monthly", duration: declaredDuration ?? 30 * day)
+        default:
+            break
+        }
+
+        guard let declaredDuration else {
+            let label = periodType?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .other(label.flatMap { $0.isEmpty ? nil : $0 } ?? "Billing period")
+        }
+        if declaredDuration == 7 * day {
+            return .billingPeriod(label: "Weekly", duration: declaredDuration)
+        }
+        if (28 * day...31 * day).contains(declaredDuration) {
+            return .billingPeriod(label: "Monthly", duration: declaredDuration)
+        }
+        return .other(durationLabel(seconds: declaredDuration))
+    }
+
+    private static func durationLabel(seconds: TimeInterval) -> String {
+        let hours = (seconds / 3_600).rounded()
+        if hours < 48 { return "\(Int(hours))h" }
+        return "\(Int((seconds / day).rounded()))d"
     }
 }
 
@@ -299,13 +339,19 @@ public struct UsageSnapshot: Sendable, Equatable {
 public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
     case claudeSubscription
     case codexSubscription
+    case grokSubscription
+    case cursorSubscription
     case anthropicAPI
     case openAIAPI
+    case xaiAPI
+    case cursorAPI
 
     public var providerID: ProviderID {
         switch self {
         case .claudeSubscription, .anthropicAPI: return .claude
         case .codexSubscription, .openAIAPI: return .codex
+        case .grokSubscription, .xaiAPI: return .grok
+        case .cursorSubscription, .cursorAPI: return .cursor
         }
     }
 
@@ -313,44 +359,76 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
         switch self {
         case .claudeSubscription: return "Claude subscription"
         case .codexSubscription: return "Codex subscription"
+        case .grokSubscription: return "Grok subscription"
+        case .cursorSubscription: return "Cursor subscription"
         case .anthropicAPI: return "Anthropic API spend"
         case .openAIAPI: return "OpenAI API spend"
+        case .xaiAPI: return "xAI API spend"
+        case .cursorAPI: return "Cursor on-demand spend"
         }
     }
 
     public var isSubscription: Bool {
         switch self {
-        case .claudeSubscription, .codexSubscription: return true
-        case .anthropicAPI, .openAIAPI: return false
+        case .claudeSubscription, .codexSubscription, .grokSubscription, .cursorSubscription:
+            return true
+        case .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
+            return false
         }
+    }
+
+    public var isEnabledByDefault: Bool {
+        switch self {
+        case .claudeSubscription, .codexSubscription:
+            return true
+        case .grokSubscription, .cursorSubscription, .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
+            return false
+        }
+    }
+
+    public static func subscription(for providerID: ProviderID) -> UsageSurface? {
+        allCases.first { $0.providerID == providerID && $0.isSubscription }
+    }
+
+    public static func api(for providerID: ProviderID) -> UsageSurface? {
+        allCases.first { $0.providerID == providerID && !$0.isSubscription }
     }
 }
 
-/// Which provider's preferred usage window drives how full the menu-bar vessel is drawn.
-/// The glyph follows the selected percentage mode for that provider. `.none` keeps a
-/// static decorative fill (the identity mark), decoupled from any single provider.
-public enum MenuBarFillSource: String, CaseIterable, Sendable, Codable, Equatable {
-    case none
-    case claude
-    case codex
-    case both
+/// Which providers get menu-bar meters. Automatic mode preserves the shipped default:
+/// one summary for the tightest enabled window with the decorative static vessel fill.
+/// Explicit selection renders one meter per selected provider in registry order.
+public enum MenuBarFillSource: Sendable, Equatable, Hashable {
+    case auto
+    case providers(Set<ProviderID>)
 
-    /// The provider whose preferred window sets the fill, or nil for static/both modes.
-    public var providerID: ProviderID? {
+    /// Source-compatible spellings for older call sites and persisted-fixture setup.
+    /// These are migration aliases, not additional runtime states.
+    public static let none: Self = .auto
+    public static let claude: Self = .providers([.claude])
+    public static let codex: Self = .providers([.codex])
+    public static let both: Self = .providers([.claude, .codex])
+
+    public var providerIDs: Set<ProviderID>? {
+        guard case .providers(let ids) = self else { return nil }
+        return ids
+    }
+
+    /// Stable identity for animation and diagnostics; never depends on Set iteration.
+    public var sortedIdentifier: String {
         switch self {
-        case .none, .both: return nil
-        case .claude: return .claude
-        case .codex: return .codex
+        case .auto:
+            return "auto"
+        case .providers(let ids):
+            return "providers:" + ids.map(\.raw).sorted().joined(separator: ",")
         }
     }
 
-    public var label: String {
-        switch self {
-        case .none: return "None"
-        case .claude: return "Claude"
-        case .codex: return "Codex"
-        case .both: return "Both"
-        }
+    public func filtered(to availableProviders: [ProviderID]) -> Self {
+        guard case .providers(let selected) = self else { return .auto }
+        let available = Set(availableProviders)
+        let filtered = selected.intersection(available)
+        return filtered.isEmpty ? .auto : .providers(filtered)
     }
 }
 
@@ -440,13 +518,19 @@ public struct APISpendRange: Sendable, Equatable {
     }
 }
 
-/// Money-based API spend for one provider over a selected reporting period.
+public enum APISpendKind: String, Codable, Sendable, Equatable {
+    case periodSpend
+    case balance
+}
+
+/// Money-based API spend or remaining credit balance for one provider.
 public struct APISpendSnapshot: Sendable, Equatable {
     public let providerID: ProviderID
     public let displayName: String
     public let amount: Double?
     public let currency: String?
     public let periodLabel: String
+    public let kind: APISpendKind
     public let capturedAt: Date?
     public let freshness: Freshness
 
@@ -456,6 +540,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
         amount: Double?,
         currency: String?,
         periodLabel: String,
+        kind: APISpendKind = .periodSpend,
         capturedAt: Date?,
         freshness: Freshness
     ) {
@@ -464,6 +549,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
         self.amount = amount
         self.currency = currency
         self.periodLabel = periodLabel
+        self.kind = kind
         self.capturedAt = capturedAt
         self.freshness = freshness
     }
@@ -475,6 +561,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
             amount: nil,
             currency: nil,
             periodLabel: periodLabel,
+            kind: .periodSpend,
             capturedAt: nil,
             freshness: .pending
         )
@@ -487,6 +574,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
             amount: nil,
             currency: nil,
             periodLabel: periodLabel,
+            kind: .periodSpend,
             capturedAt: nil,
             freshness: .stale(reason)
         )
@@ -499,6 +587,7 @@ public struct APISpendSnapshot: Sendable, Equatable {
             amount: amount,
             currency: currency,
             periodLabel: periodLabel,
+            kind: kind,
             capturedAt: capturedAt,
             freshness: .stale(reason)
         )

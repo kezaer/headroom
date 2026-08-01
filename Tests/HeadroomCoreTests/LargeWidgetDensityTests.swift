@@ -25,6 +25,13 @@ struct LargeWidgetDensityTests {
         #expect(LargeWidgetDensity(providerCount: 2, meterCount: 6, hasSpend: true) == .compact)
     }
 
+    @Test func fourProvidersAndThreeSpendRowsUseUltraCompactTier() {
+        #expect(
+            LargeWidgetDensity(providerCount: 4, meterCount: 8, spendCount: 3)
+                == .ultraCompact
+        )
+    }
+
     @Test func initFromEnvelopeWith2p2m1sReturnsRegular() {
         let envelope = WidgetSnapshotEnvelope(
             generatedAt: now,
@@ -105,10 +112,12 @@ struct LargeWidgetDensityTests {
     @Test func derivedValueOrderingAndProperties() {
         #expect(LargeWidgetDensity.roomy.gapFloor > LargeWidgetDensity.regular.gapFloor)
         #expect(LargeWidgetDensity.regular.gapFloor > LargeWidgetDensity.compact.gapFloor)
+        #expect(LargeWidgetDensity.compact.gapFloor > LargeWidgetDensity.ultraCompact.gapFloor)
         #expect(LargeWidgetDensity.roomy.headerSpacing > LargeWidgetDensity.regular.headerSpacing)
         #expect(LargeWidgetDensity.regular.headerSpacing > LargeWidgetDensity.compact.headerSpacing)
         #expect(LargeWidgetDensity.roomy.meterSpacing > LargeWidgetDensity.regular.meterSpacing)
         #expect(LargeWidgetDensity.regular.meterSpacing > LargeWidgetDensity.compact.meterSpacing)
+        #expect(LargeWidgetDensity.compact.meterSpacing > LargeWidgetDensity.ultraCompact.meterSpacing)
     }
 
     @Test func tokenValuesMatchEachTier() {
@@ -135,6 +144,11 @@ struct LargeWidgetDensityTests {
         #expect(compact.glancePercentFontStep == .dense)
         #expect(compact.windowTitleFontStep == .dense)
         #expect(compact.providerHeaderFontStep == .dense)
+
+        let ultraCompact = LargeWidgetDensity.ultraCompact
+        #expect(ultraCompact.providerIconSize == 16)
+        #expect(ultraCompact.barHeight == 4)
+        #expect(ultraCompact.scale == .ultraDense)
     }
 
     @Test func scaleLevelTokenValues() {
@@ -149,12 +163,17 @@ struct LargeWidgetDensityTests {
         let dense = LargeWidgetDensity.Scale.dense
         #expect(dense.barHeight == 5)
         #expect(dense.meterSpacing == 4)
+
+        let ultraDense = LargeWidgetDensity.Scale.ultraDense
+        #expect(ultraDense.barHeight == 4)
+        #expect(ultraDense.meterSpacing == 3)
     }
 
     @Test func tokenValuesStrictlyDecreaseWithDensity() {
         let roomy = LargeWidgetDensity.roomy
         let regular = LargeWidgetDensity.regular
         let compact = LargeWidgetDensity.compact
+        let ultraCompact = LargeWidgetDensity.ultraCompact
 
         #expect(roomy.barHeight > regular.barHeight)
         #expect(regular.barHeight > compact.barHeight)
@@ -162,6 +181,7 @@ struct LargeWidgetDensityTests {
         #expect(regular.providerIconSize > compact.providerIconSize)
         #expect(roomy.gapFloor > regular.gapFloor)
         #expect(regular.gapFloor > compact.gapFloor)
+        #expect(compact.gapFloor > ultraCompact.gapFloor)
     }
 
     @Test func scaleMapsToEachDensityTier() {

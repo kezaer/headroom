@@ -70,6 +70,7 @@ public enum WidgetSnapshotProjector {
             amount: snapshot.amount,
             currency: snapshot.currency,
             periodLabel: snapshot.periodLabel,
+            kind: snapshot.kind,
             capturedAt: snapshot.capturedAt,
             freshness: freshness(snapshot.freshness)
         )
@@ -88,8 +89,14 @@ public enum WidgetSnapshotProjector {
             resetsAt: window.resetsAt,
             resetLabel: window.resetLabel,
             severity: widgetSeverity(window.severity),
-            freshness: widgetFreshness(window.freshness)
+            freshness: widgetFreshness(window.freshness),
+            billingPeriodDuration: billingPeriodDuration(window.kind)
         )
+    }
+
+    private static func billingPeriodDuration(_ kind: WindowKind) -> TimeInterval? {
+        guard case .billingPeriod(_, let duration) = kind else { return nil }
+        return duration
     }
 
     private static func widgetFreshness(_ freshness: UsageWindowFreshness) -> WidgetWindowFreshness {
@@ -113,6 +120,8 @@ public enum WidgetSnapshotProjector {
             return .fiveHour
         case .weekly:
             return .weekly
+        case .billingPeriod(let label, _):
+            return .other(label)
         case .other(let label):
             if providerID == .codex {
                 return (showsCodexSparkCounters && kind.isCodexSparkCounter) ? .other(label) : nil
@@ -120,7 +129,10 @@ public enum WidgetSnapshotProjector {
             // Claude reports model-specific weekly sub-limits (e.g. "Weekly (Fable)") as
             // extra `.other` windows. Retain them so a more restrictive sub-limit can
             // appear as compact context in the large-widget header.
-            return label.localizedCaseInsensitiveContains("weekly") ? .other(label) : nil
+            if providerID == .claude {
+                return label.localizedCaseInsensitiveContains("weekly") ? .other(label) : nil
+            }
+            return .other(label)
         }
     }
 

@@ -36,6 +36,18 @@ struct DemoScenarioParityTests {
         } == true)
     }
 
+    /// U12: the four-provider demo envelope's provider list is derived from — and equals —
+    /// the registry order, so a screenshot/QA scenario exercises every registered provider
+    /// rather than a Claude/Codex literal.
+    @Test func fourProviderDemoEnvelopeCoversTheRegistry() {
+        let envelope = DemoScreenshotData.envelope(for: "fourProviders")
+        #expect(envelope.status == .enabled)
+        #expect(envelope.providers.map(\.id) == DemoFixture.registeredProviderOrder.map(\.raw))
+        // Grok/Cursor bill as period pools, which project to `.other` widget windows.
+        #expect(envelope.providers.first { $0.id == ProviderID.grok.raw }?.windows.first?.label == "Weekly")
+        #expect(envelope.providers.first { $0.id == ProviderID.cursor.raw }?.windows.first?.label == "Monthly")
+    }
+
     @Test func encodedIOSDemoContainsNoSensitiveSentinels() throws {
         let encoded = try JSONEncoder().encode(DemoScreenshotData.envelope(for: "full"))
         let text = String(decoding: encoded, as: UTF8.self).lowercased()
