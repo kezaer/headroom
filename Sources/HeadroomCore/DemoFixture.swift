@@ -24,6 +24,9 @@ public enum DemoFixture {
                 UsageWindow(kind: .other("Weekly (Fable)"), utilization: 46, resetsAt: soon(days: 4, minutes: 30), resetLabel: "Resets Jul 9"),
             ],
             planLabel: "Max",
+            // Placeholder identity — demo fixtures ship in the repo, so they never carry
+            // a real address.
+            accountEmail: "personal@example.com",
             // ~2 min ago so the popover/scene reads "Updated 2 min ago" (matches the
             // widget assets in the marketing scene and the design artboard).
             capturedAt: Date().addingTimeInterval(-135),
@@ -38,6 +41,7 @@ public enum DemoFixture {
                 UsageWindow(kind: .weekly, utilization: 36, resetsAt: soon(days: 6, hours: 4, minutes: 30), resetLabel: "Resets in 6d 4h"),
             ],
             planLabel: "Prolite",
+            accountEmail: "personal@example.com",
             capturedAt: Date().addingTimeInterval(-135),  // ~2 min ago (see claudeSnapshot)
             freshness: .live
         )
@@ -137,9 +141,14 @@ extension DemoFixture {
         let accountID: AccountID = builtIn ? .primary : AccountID(id)
         let account = ProviderAccount(id: accountID, providerID: providerID, label: label, isBuiltIn: builtIn)
         let windows: [UsageWindow]
+        // Placeholder identity derived from the label ("Work" → work@example.com) — demo
+        // fixtures ship in the repo, so they never carry a real address. An account still
+        // waiting on sign-in has no email to show yet, same as it has no windows.
+        var email: String? = "\(label.lowercased())@example.com"
         switch freshness {
         case .stale(let reason) where reason.isPermanent:
             windows = []
+            email = nil
         default:
             windows = [
                 UsageWindow(kind: .fiveHour, utilization: fiveHour, resetsAt: Date().addingTimeInterval(3.2 * 3600), resetLabel: "Resets 2:15pm"),
@@ -150,6 +159,7 @@ extension DemoFixture {
             providerID: providerID,
             windows: windows,
             planLabel: plan,
+            accountEmail: email,
             capturedAt: Date().addingTimeInterval(-135),
             freshness: freshness
         )

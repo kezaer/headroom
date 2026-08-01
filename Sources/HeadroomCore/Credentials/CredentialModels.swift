@@ -6,11 +6,34 @@ public struct CodexCredential: Sendable, Equatable {
     public let refreshToken: String?
     public let accountID: String?
     public let lastRefresh: Date?
-    public init(accessToken: String, refreshToken: String?, accountID: String?, lastRefresh: Date?) {
+    /// The `email` claim from `tokens.id_token` — which ChatGPT account this login is.
+    /// Nil whenever the claim is absent or the token doesn't decode.
+    public let email: String?
+    public init(
+        accessToken: String,
+        refreshToken: String?,
+        accountID: String?,
+        lastRefresh: Date?,
+        email: String? = nil
+    ) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.accountID = accountID
         self.lastRefresh = lastRefresh
+        self.email = email
+    }
+}
+
+/// What one Codex fetch needs out of `auth.json`: the bearer token for the request plus
+/// the account's email for display. Deliberately narrow — the refresh token and the raw
+/// id_token stay inside `CredentialStore`.
+public struct CodexSession: Sendable, Equatable {
+    public let accessToken: String
+    public let accountEmail: String?
+
+    public init(accessToken: String, accountEmail: String?) {
+        self.accessToken = accessToken
+        self.accountEmail = accountEmail
     }
 }
 

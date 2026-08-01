@@ -10,15 +10,21 @@ public struct ClaudeProvider: UsageProvider {
     public let displayName = "Claude"
 
     private let source: ClaudeUsageSource
+    private let emailSource: ClaudeAccountEmailReading
     private let now: @Sendable () -> Date
 
     public init(
         source: ClaudeUsageSource = ClaudeUsageCLIProbe(),
         accountID: AccountID = .primary,
+        emailSource: ClaudeAccountEmailReading? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.source = source
         self.accountID = accountID
+        // Defaults to this account's own `.claude.json`, resolved the same way the probe
+        // resolves `CLAUDE_CONFIG_DIR`, so an extra account never reports the built-in
+        // account's email.
+        self.emailSource = emailSource ?? ClaudeAccountEmailFileReader.forAccount(accountID)
         self.now = now
     }
 
@@ -53,6 +59,7 @@ public struct ClaudeProvider: UsageProvider {
                 // Panel-text tier first ("Max 20x" fidelity); the auth-status hint
                 // covers the print-mode report, which omits the tier header.
                 planLabel: ClaudeUsageParser.plan(in: text) ?? planHint,
+                accountEmail: emailSource.readAccountEmail(),
                 capturedAt: now(),
                 freshness: .live
             )

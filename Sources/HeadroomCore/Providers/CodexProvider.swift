@@ -27,17 +27,17 @@ public struct CodexProvider: UsageProvider {
     }
 
     public func fetchSnapshot() async -> UsageSnapshot {
-        switch await credentials.codexAccessToken() {
+        switch await credentials.codexSession() {
         case .failure(let reason):
             return stale(reason)
-        case .success(let token):
-            switch await http.get(url: Self.endpoint, headers: ["Authorization": "Bearer \(token)"]) {
+        case .success(let session):
+            switch await http.get(url: Self.endpoint, headers: ["Authorization": "Bearer \(session.accessToken)"]) {
             case .failure(let reason):
                 return stale(reason)
             case .success(let result):
                 switch result.status {
                 case 200:
-                    return decode(result.body)
+                    return decode(result.body, accountEmail: session.accountEmail)
                 case 401:
                     return stale(.providerSetup(.codexRejectedAuth))
                 default:
@@ -47,7 +47,7 @@ public struct CodexProvider: UsageProvider {
         }
     }
 
-    private func decode(_ body: Data) -> UsageSnapshot {
+    private func decode(_ body: Data, accountEmail: String?) -> UsageSnapshot {
         guard let dto = try? JSONDecoder().decode(CodexUsageDTO.self, from: body) else {
             return stale(.decode("Couldn't read Codex usage response"))
         }
@@ -85,6 +85,7 @@ public struct CodexProvider: UsageProvider {
             providerID: id,
             windows: windows,
             planLabel: dto.plan_type,        // lenient: any string, incl. new tiers (#709)
+            accountEmail: accountEmail,
             capturedAt: now(),
             freshness: .live
         )

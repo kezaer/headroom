@@ -21,8 +21,42 @@ public enum CodexAuthBlob {
             accessToken: access,
             refreshToken: tokens["refresh_token"] as? String,
             accountID: tokens["account_id"] as? String,
-            lastRefresh: lastRefresh
+            lastRefresh: lastRefresh,
+            // Identity only, and best-effort: a missing/unreadable id_token must not make
+            // an otherwise valid credential malformed.
+            email: (tokens["id_token"] as? String).flatMap { JWTClaims.string("email", in: $0) }
         )
+    }
+}
+
+/// Reads one string claim out of a JWT payload. This is a local metadata read of a token
+/// the official `codex` CLI already wrote to disk — the payload is decoded, never
+/// verified (Headroom is not a relying party), never sent anywhere, and the token itself
+/// never leaves this type: only the extracted claim is returned.
+enum JWTClaims {
+    static func string(_ name: String, in token: String) -> String? {
+        let segments = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard segments.count == 3,
+              let payload = base64URLDecoded(String(segments[1])),
+              let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let value = claims[name] as? String,
+              !value.isEmpty
+        else { return nil }
+        return value
+    }
+
+    /// base64url → base64: swap the URL-safe alphabet back and restore the padding JWT
+    /// segments omit. A segment whose length leaves 1 byte over is not valid base64 and
+    /// falls out as nil.
+    private static func base64URLDecoded(_ segment: String) -> Data? {
+        var text = segment
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let remainder = text.count % 4
+        if remainder > 0 {
+            text.append(String(repeating: "=", count: 4 - remainder))
+        }
+        return Data(base64Encoded: text)
     }
 }
 

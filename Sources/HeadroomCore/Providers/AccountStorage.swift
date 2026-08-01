@@ -48,6 +48,15 @@ public enum AccountStorage {
         accountDirectoryURL(for: account).appendingPathComponent("config", isDirectory: true)
     }
 
+    /// `CLAUDE_CONFIG_DIR` for an extra Claude account, addressed by id alone. The path
+    /// depends only on provider + account id, so the email reader can resolve it without
+    /// threading a whole `ProviderAccount` down into the provider.
+    static func claudeConfigDirectoryURL(forClaudeAccountID accountID: AccountID) -> URL {
+        claudeConfigDirectoryURL(
+            for: ProviderAccount(id: accountID, providerID: .claude, label: "")
+        )
+    }
+
     /// Working directory the probe runs `claude` in for an extra Claude account.
     public static func claudeWorkspaceDirectoryURL(for account: ProviderAccount) -> URL {
         accountDirectoryURL(for: account).appendingPathComponent("workspace", isDirectory: true)
