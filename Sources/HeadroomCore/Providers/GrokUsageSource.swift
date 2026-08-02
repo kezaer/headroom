@@ -26,6 +26,16 @@ public protocol GrokUsageSource: Sendable {
 public struct GrokCredential: Sendable, Equatable {
     let accessToken: String
     let userID: String
+    /// Which x.ai account this login is, read from the same session record the token
+    /// comes from. Nil whenever the field is absent or not a string — identity is
+    /// display context, so it never makes an otherwise valid credential malformed.
+    let email: String?
+
+    init(accessToken: String, userID: String, email: String? = nil) {
+        self.accessToken = accessToken
+        self.userID = userID
+        self.email = email
+    }
 }
 
 public protocol GrokAuthReading: Sendable {
@@ -46,7 +56,17 @@ public enum GrokAuthBlob {
               let token = entry["key"] as? String, !token.isEmpty,
               let userID = entry["user_id"] as? String, !userID.isEmpty
         else { throw CredentialError.malformed }
-        return GrokCredential(accessToken: token, userID: userID)
+        // Best-effort identity out of the *same* selected record — never a second scan,
+        // so the email always belongs to the account whose token we just took.
+        return GrokCredential(accessToken: token, userID: userID, email: email(in: entry))
+    }
+
+    private static func email(in entry: [String: Any]) -> String? {
+        guard let value = (entry["email"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        else { return nil }
+        return value
     }
 }
 

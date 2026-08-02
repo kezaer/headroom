@@ -6,6 +6,8 @@ struct GrokProviderTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func provider(_ result: GrokUsageSourceResult) -> GrokProvider {
+        // No emailSource: pins that the default is inert (nil identity, no file reads) —
+        // these tests must never touch a developer's real ~/.grok/auth.json.
         GrokProvider(source: MockGrokSource(result: result), now: { now })
     }
 

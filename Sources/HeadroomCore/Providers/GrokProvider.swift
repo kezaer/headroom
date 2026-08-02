@@ -7,15 +7,23 @@ public struct GrokProvider: UsageProvider {
     public let pollingLane: ProviderPollingLane = .serial("grok-cli")
 
     private let source: any GrokUsageSource
+    private let emailSource: (any GrokAccountEmailReading)?
     private let now: @Sendable () -> Date
 
     public init(
         source: any GrokUsageSource,
         accountID: AccountID = .primary,
+        emailSource: (any GrokAccountEmailReading)? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.source = source
         self.accountID = accountID
+        // Nil by default for every account: a default initializer must never read a real
+        // credential file unasked (tests and diagnostics construct providers directly,
+        // and a `.primary` fallback here silently read the wrong home when --probe-grok
+        // targeted an isolated account). `AppComposition` — the one place providers are
+        // wired — supplies the account-scoped reader.
+        self.emailSource = emailSource
         self.now = now
     }
 
@@ -45,6 +53,7 @@ public struct GrokProvider: UsageProvider {
             providerID: id,
             windows: [window],
             planLabel: dto.subscriptionTier,
+            accountEmail: emailSource?.readAccountEmail(),
             capturedAt: now(),
             freshness: .live
         )
