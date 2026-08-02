@@ -148,7 +148,12 @@ enum Entry {
             switch result {
             case .payload(let data, let transport):
                 let snapshot = await GrokProvider(
-                    source: CapturedGrokUsageSource(data: data, transport: transport)
+                    source: CapturedGrokUsageSource(data: data, transport: transport),
+                    // Identity from the same isolated auth.json the billing call used —
+                    // never the built-in home when --grok-home targets another account.
+                    emailSource: GrokCredentialEmailReader(
+                        authReader: GrokAuthFileReader(path: authPath)
+                    )
                 ).fetchSnapshot()
                 guard snapshot.freshness == .live else {
                     print("RESULT: Grok payload could not be parsed")
@@ -755,12 +760,17 @@ enum AppComposition {
             return UnavailableAccountProvider(account: account)
         }
         let overrides = configuration.grokHomeDirectory.map { ["GROK_HOME": $0.path] } ?? [:]
+        // One reader for this account's `auth.json`: the billing fallback takes the token
+        // from it, the email source takes the identity from the same record. No second
+        // path resolution.
+        let authReader = GrokAuthFileReader(path: authFile)
         return GrokProvider(
             source: GrokFallbackUsageSource(
                 primary: GrokACPUsageSource(environmentOverrides: overrides),
-                fallback: GrokHTTPUsageSource(authReader: GrokAuthFileReader(path: authFile))
+                fallback: GrokHTTPUsageSource(authReader: authReader)
             ),
-            accountID: account.id
+            accountID: account.id,
+            emailSource: GrokCredentialEmailReader(authReader: authReader)
         )
     }
 
@@ -771,7 +781,7 @@ enum AppComposition {
         builtInClaudeWorkspace _: URL
     ) -> any UsageProvider {
         guard account.isBuiltIn else { return UnavailableAccountProvider(account: account) }
-        return CursorProvider(source: cursorUsageSource)
+        return CursorProvider(source: cursorUsageSource, emailSource: CursorStatusEmailProbe())
     }
 
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {

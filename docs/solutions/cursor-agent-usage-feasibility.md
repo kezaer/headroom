@@ -22,7 +22,9 @@ the IDE's `state.vscdb`, or call private dashboard endpoints.
 Verified on 2026-08-01 with Cursor Agent `2026.07.23-e383d2b` and an authenticated Pro+
 account:
 
-- `cursor-agent status --format json` reports authentication state but no usage.
+- `cursor-agent status --format json` reports authentication state but no usage; its
+  `userInfo.email` field carries the signed-in address (verified 2026-08-01, used by
+  `CursorStatusEmailProbe` for the account-identity display).
 - `cursor-agent about --format json` reports plan metadata but no usage.
 - The interactive `/usage` panel reports the plan, monthly included percentage, displayed
   reset day, and on-demand state/spend.

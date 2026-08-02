@@ -169,16 +169,38 @@ public struct CursorProvider: UsageProvider {
     public let accountCapacity = 1
 
     private let source: any CursorUsageSource
+    private let emailSource: (any CursorAccountEmailReading)?
     private let now: @Sendable () -> Date
 
-    public init(source: any CursorUsageSource, now: @escaping @Sendable () -> Date = { Date() }) {
+    /// `emailSource` defaults to nil rather than to the production probe: reading the
+    /// identity spawns a CLI, and a default initializer must never do that unasked
+    /// (tests and diagnostics construct providers directly). `AppComposition` — the one
+    /// place providers are wired — supplies `CursorStatusEmailProbe`.
+    public init(
+        source: any CursorUsageSource,
+        emailSource: (any CursorAccountEmailReading)? = nil,
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.source = source
+        self.emailSource = emailSource
         self.now = now
     }
 
     public func fetchSnapshot() async -> UsageSnapshot {
-        switch await source.capturePanel() {
+        // Identity is an independent free status read, so start it alongside the panel
+        // capture instead of after it. Its outcome never reaches `freshness`, and only
+        // the `.panel` success path joins it — a failed capture must return as soon as
+        // it resolves, not after a slow identity probe runs out its deadline. An
+        // unstructured Task rather than `async let`: an async-let child is implicitly
+        // awaited at scope exit even when unread, and the probe's blocking thread is
+        // not cancellation-interruptible, so `async let` would stall the failure paths
+        // it was meant to spare. The dropped task self-bounds at the probe deadline.
+        let emailTask = Task { [emailSource] in await emailSource?.readAccountEmail() ?? nil }
+        let panel = await source.capturePanel()
+
+        switch panel {
         case .panel(let text):
+            let email = await emailTask.value
             let capturedAt = now()
             guard let parsed = CursorUsageParser.parse(text, now: capturedAt) else {
                 return stale(.providerSetup(.cursorTransientCapture))
@@ -192,6 +214,7 @@ public struct CursorProvider: UsageProvider {
                     resetLabel: parsed.resetLabel
                 )],
                 planLabel: parsed.planName,
+                accountEmail: email,
                 capturedAt: capturedAt,
                 freshness: .live
             )

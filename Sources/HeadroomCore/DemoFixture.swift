@@ -61,6 +61,7 @@ public enum DemoFixture {
                 ),
             ],
             planLabel: "SuperGrok",
+            accountEmail: "personal@example.com",  // placeholder (see claudeSnapshot)
             capturedAt: Date().addingTimeInterval(-135),
             freshness: .live
         )
@@ -80,6 +81,7 @@ public enum DemoFixture {
                 ),
             ],
             planLabel: "Pro+",
+            accountEmail: "personal@example.com",  // placeholder (see claudeSnapshot)
             capturedAt: Date().addingTimeInterval(-135),
             freshness: .live
         )

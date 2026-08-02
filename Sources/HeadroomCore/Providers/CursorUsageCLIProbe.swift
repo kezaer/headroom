@@ -92,8 +92,27 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     }
 
     private static func runAuthStatus(cursorPath: String) -> CursorAuthStatus {
+        guard let data = captureStatusJSON(
+            cursorPath: cursorPath,
+            timeout: 5,
+            isSufficient: { classifyAuthStatus($0) != .unsupported }
+        ) else { return .transient }
+        return classifyAuthStatus(data)
+    }
+
+    /// Runs the official `cursor-agent status --format json` — a free, read-only status
+    /// command that makes no model request and mutates no auth state — and returns its
+    /// stdout, or nil when the process can't start, the deadline passes, or stdout can't
+    /// be read. Shared by the auth gate and `CursorStatusEmailProbe` so there is exactly
+    /// one spawn / hard-deadline / process-group-kill path for this command.
+    /// `isSufficient` lets a caller stop as soon as the bytes so far answer its question.
+    static func captureStatusJSON(
+        cursorPath: String,
+        timeout: TimeInterval,
+        isSufficient: (Data) -> Bool = { _ in false }
+    ) -> Data? {
         var output = [Int32](repeating: -1, count: 2)
-        guard pipe(&output) == 0 else { return .transient }
+        guard pipe(&output) == 0 else { return nil }
         let devNull = open("/dev/null", O_RDWR)
 
         var actions = posix_spawn_file_actions_t(bitPattern: 0)
@@ -128,28 +147,27 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
         if devNull >= 0 { close(devNull) }
         guard spawnStatus == 0 else {
             close(output[0])
-            return .transient
+            return nil
         }
         defer {
             close(output[0])
             terminateProcessGroup(pid)
         }
 
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(timeout)
         var data = Data()
         var descriptor = pollfd(fd: output[0], events: Int16(POLLIN), revents: 0)
         while Date() < deadline {
             let ready = poll(&descriptor, 1, 100)
-            guard ready >= 0 else { return .transient }
+            guard ready >= 0 else { return nil }
             guard ready > 0 else { continue }
             var chunk = [UInt8](repeating: 0, count: 4_096)
             let count = read(output[0], &chunk, chunk.count)
-            guard count > 0 else { return classifyAuthStatus(data) }
+            guard count > 0 else { return data }
             data.append(contentsOf: chunk.prefix(count))
-            let status = classifyAuthStatus(data)
-            if status != .unsupported { return status }
+            if isSufficient(data) { return data }
         }
-        return .transient
+        return nil
     }
 
     private static func runBlocking(

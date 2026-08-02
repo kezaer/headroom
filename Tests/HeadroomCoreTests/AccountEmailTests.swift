@@ -306,8 +306,276 @@ struct AccountEmailContinuityTests {
     }
 }
 
+// MARK: - Grok
+
+/// A real-shaped `auth.json`: the official `grok` CLI keys each session record by
+/// issuer + account uuid and writes `email` beside the token material. Addresses and
+/// token values here are redacted placeholders.
+private let grokAuthFileFixture = """
+{
+  "xai::api_key": { "key": "unrelated-api-key", "user_id": "unrelated" },
+  "https://auth.x.ai::00000000-0000-0000-0000-000000000000": {
+    "auth_mode": "oidc",
+    "user_id": "user-123",
+    "email": "personal@example.com",
+    "first_name": "Redacted",
+    "key": "redacted-access-token",
+    "refresh_token": "redacted-refresh-token"
+  }
+}
+"""
+
+/// A valid Grok billing payload, so the email assertions run against a live snapshot.
+private let grokBillingBody = Data("""
+{"config":{"creditUsagePercent":12,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY",
+"start":"2026-07-01T00:00:00Z","end":"2026-07-08T00:00:00Z"}},"subscriptionTier":"SuperGrok"}
+""".utf8)
+
+struct GrokAccountEmailTests {
+    @Test func decodesEmailFromTheSelectedSessionRecord() throws {
+        let credential = try GrokAuthBlob.parse(Data(grokAuthFileFixture.utf8))
+        #expect(credential.accessToken == "redacted-access-token")
+        #expect(credential.email == "personal@example.com")
+    }
+
+    @Test func missingOrMalformedEmailYieldsNilWithoutFailingTheCredential() throws {
+        for record in [
+            #""auth_mode":"oidc","key":"k","user_id":"u""#,                        // no email key
+            #""auth_mode":"oidc","key":"k","user_id":"u","email":"  ""#,           // blank
+            #""auth_mode":"oidc","key":"k","user_id":"u","email":42"#,             // not a string
+            #""auth_mode":"oidc","key":"k","user_id":"u","email":null"#,           // explicit null
+        ] {
+            let json = #"{ "https://auth.x.ai::a": { \#(record) } }"#
+            let credential = try GrokAuthBlob.parse(Data(json.utf8))
+            #expect(credential.accessToken == "k")
+            #expect(credential.email == nil)
+        }
+    }
+
+    /// The email must always belong to the account whose token the billing call uses.
+    /// Selection is the existing one — first-party issuer scopes, sorted by key, first
+    /// wins — so both values come out of the same record.
+    @Test func emailComesFromTheSameRecordTheTokenDoesWhenSeveralSessionsExist() throws {
+        let json = """
+        {
+          "https://auth.x.ai::11111111": { "auth_mode": "oidc", "key": "first-token",
+                                           "user_id": "u1", "email": "personal@example.com" },
+          "https://auth.x.ai::22222222": { "auth_mode": "oidc", "key": "second-token",
+                                           "user_id": "u2", "email": "work@example.com" }
+        }
+        """
+        let credential = try GrokAuthBlob.parse(Data(json.utf8))
+        #expect(credential.accessToken == "first-token")
+        #expect(credential.email == "personal@example.com")
+    }
+
+    @Test func readerReturnsNilWhenTheAuthFileIsUnreadable() {
+        let missing = GrokCredentialEmailReader(
+            authReader: ThrowingGrokAuthReader(error: CredentialError.notLoggedIn)
+        )
+        let malformed = GrokCredentialEmailReader(
+            authReader: ThrowingGrokAuthReader(error: CredentialError.malformed)
+        )
+        #expect(missing.readAccountEmail() == nil)
+        #expect(malformed.readAccountEmail() == nil)
+    }
+
+    @Test func readerReadsTheFileTheBillingPathAlreadyResolved() {
+        // One resolver: the same `GrokAuthFileReader` the HTTP fallback uses, so an
+        // extra account's GROK_HOME is honoured without a parallel path mechanism.
+        let reader = GrokCredentialEmailReader(
+            authReader: GrokAuthFileReader(
+                path: URL(fileURLWithPath: "/Accounts/grok/work/auth.json"),
+                readData: { url in
+                    #expect(url.path == "/Accounts/grok/work/auth.json")
+                    return Data(grokAuthFileFixture.utf8)
+                },
+                permissionsAreSafe: { _ in true }
+            )
+        )
+        #expect(reader.readAccountEmail() == "personal@example.com")
+    }
+
+    /// Pins the review outcome on the init default: NO account — primary included —
+    /// reads a real credential file when `emailSource` is omitted. A default-built
+    /// provider is identity-less; composition injects the account-scoped reader.
+    @Test func defaultInitializerNeverReadsARealAuthFile() async {
+        for accountID in [AccountID.primary, AccountID("grok-work")] {
+            let provider = GrokProvider(
+                source: MockGrokSource(result: .payload(grokBillingBody, transport: .http)),
+                accountID: accountID,
+                now: { Date(timeIntervalSince1970: 1_000_000) }
+            )
+            let snapshot = await provider.fetchSnapshot()
+            #expect(snapshot.freshness == .live)
+            #expect(snapshot.accountEmail == nil)
+        }
+    }
+
+    @Test func providerPopulatesAccountEmailOnLiveSnapshots() async {
+        let provider = GrokProvider(
+            source: MockGrokSource(result: .payload(grokBillingBody, transport: .http)),
+            emailSource: StubGrokEmailSource(email: "personal@example.com"),
+            now: { Date(timeIntervalSince1970: 1_000_000) }
+        )
+        let snapshot = await provider.fetchSnapshot()
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.accountEmail == "personal@example.com")
+    }
+
+    @Test func providerStillReportsUsageWhenTheEmailIsUnreadable() async {
+        let provider = GrokProvider(
+            source: MockGrokSource(result: .payload(grokBillingBody, transport: .http)),
+            emailSource: StubGrokEmailSource(email: nil),
+            now: { Date(timeIntervalSince1970: 1_000_000) }
+        )
+        let snapshot = await provider.fetchSnapshot()
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.accountEmail == nil)
+    }
+
+    @Test func failedFetchCarriesNoEmail() async {
+        let provider = GrokProvider(
+            source: MockGrokSource(result: .authAbsent),
+            emailSource: StubGrokEmailSource(email: "personal@example.com")
+        )
+        #expect(await provider.fetchSnapshot().accountEmail == nil)
+    }
+}
+
+// MARK: - Cursor
+
+/// A real-shaped `cursor-agent status --format json` report, redacted. Only
+/// `userInfo.email` is ever decoded.
+private let cursorStatusFixture = """
+{
+  "status": "authenticated",
+  "version": "2026.07.30-abcdef",
+  "userInfo": {
+    "email": "personal@example.com",
+    "name": "Redacted"
+  }
+}
+"""
+
+struct CursorAccountEmailTests {
+    private func usagePanel() throws -> String {
+        let url = try #require(Bundle.module.url(forResource: "cursor-usage", withExtension: "txt"))
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    @Test func decodesUserInfoEmail() {
+        #expect(CursorStatusBlob.email(in: Data(cursorStatusFixture.utf8)) == "personal@example.com")
+    }
+
+    @Test func everyFailureShapeYieldsNil() {
+        for json in [
+            #"{ "status": "unauthenticated" }"#,                   // signed out: no userInfo
+            #"{ "status": "authenticated", "userInfo": {} }"#,     // no email key
+            #"{ "status": "authenticated", "userInfo": { "email": "  " } }"#,
+            #"{ "status": "authenticated", "userInfo": { "email": 42 } }"#,
+            #"{ "status": "authenticated", "userInfo": null }"#,
+            "cursor-agent: command failed",                        // non-zero exit output
+            "",                                                    // timeout / no output
+        ] {
+            #expect(CursorStatusBlob.email(in: Data(json.utf8)) == nil)
+        }
+    }
+
+    @Test func probeReturnsNilWhenTheCLIIsMissing() async {
+        let probe = CursorStatusEmailProbe(cursorPath: nil)
+        #expect(await probe.readAccountEmail() == nil)
+
+        let absent = CursorStatusEmailProbe(cursorPath: "/redacted/does-not-exist/cursor-agent")
+        #expect(await absent.readAccountEmail() == nil)
+    }
+
+    @Test func providerPopulatesAccountEmailOnLiveSnapshots() async throws {
+        let provider = CursorProvider(
+            source: StubCursorPanelSource(result: .panel(try usagePanel())),
+            emailSource: StubCursorEmailSource(email: "personal@example.com"),
+            now: { ISO8601DateFormatter().date(from: "2026-08-01T12:00:00Z")! }
+        )
+        let snapshot = await provider.fetchSnapshot()
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.accountEmail == "personal@example.com")
+    }
+
+    @Test func providerStillReportsUsageWhenTheEmailSourceFails() async throws {
+        let provider = CursorProvider(
+            source: StubCursorPanelSource(result: .panel(try usagePanel())),
+            emailSource: StubCursorEmailSource(email: nil),
+            now: { ISO8601DateFormatter().date(from: "2026-08-01T12:00:00Z")! }
+        )
+        let snapshot = await provider.fetchSnapshot()
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.planLabel == "Pro+")
+        #expect(snapshot.accountEmail == nil)
+    }
+
+    @Test func failedCaptureCarriesNoEmail() async {
+        let provider = CursorProvider(
+            source: StubCursorPanelSource(result: .loginRequired),
+            emailSource: StubCursorEmailSource(email: "personal@example.com")
+        )
+        #expect(await provider.fetchSnapshot().accountEmail == nil)
+    }
+
+    /// The Grok/Cursor snapshots must not push identity into the widget/iCloud payload.
+    @Test func widgetProjectionCarriesNoEmailForTheNewProviders() throws {
+        let snapshot = { (id: ProviderID) in
+            UsageSnapshot(
+                providerID: id,
+                windows: [UsageWindow(kind: .weekly, utilization: 40, resetsAt: Date())],
+                planLabel: "SuperGrok",
+                accountEmail: "personal@example.com",
+                capturedAt: Date(),
+                freshness: .live
+            )
+        }
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [.grok: snapshot(.grok), .cursor: snapshot(.cursor)],
+            providerOrder: [.grok, .cursor],
+            displayNames: [.grok: "Grok", .cursor: "Cursor"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true
+        )
+        let encoded = try JSONEncoder().encode(envelope)
+
+        #expect(envelope.providers.count == 2)
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("personal@example.com"))
+    }
+}
+
 /// Claude email-source double — keeps the provider tests off the real `.claude.json`.
 private struct StubClaudeEmailSource: ClaudeAccountEmailReading {
     let email: String?
     func readAccountEmail() -> String? { email }
+}
+
+private struct StubGrokEmailSource: GrokAccountEmailReading {
+    let email: String?
+    func readAccountEmail() -> String? { email }
+}
+
+private struct ThrowingGrokAuthReader: GrokAuthReading {
+    let error: CredentialError
+    func readGrokCredential() throws -> GrokCredential { throw error }
+}
+
+/// Cursor email-source double — keeps the provider tests off the real `cursor-agent`.
+private struct StubCursorEmailSource: CursorAccountEmailReading {
+    let email: String?
+    func readAccountEmail() async -> String? { email }
+}
+
+private struct StubCursorPanelSource: CursorUsageSource {
+    let result: CursorPanelResult
+    func capturePanel() async -> CursorPanelResult { result }
 }
