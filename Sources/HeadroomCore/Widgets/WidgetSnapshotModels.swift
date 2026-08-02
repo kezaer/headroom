@@ -3,7 +3,7 @@ import Foundation
 /// A redaction-safe snapshot built for WidgetKit. It contains only display-ready usage
 /// values, never provider credentials, request metadata, raw CLI output, or paths.
 public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
     public static let oldestSupportedSchemaVersion = 1
 
     public let schemaVersion: Int
@@ -11,19 +11,22 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
     public let status: WidgetExportStatus
     public let providers: [WidgetProviderSummary]
     public let apiSpendProviders: [WidgetAPISpendSummary]
+    public let widgetProviderSelection: [String]?
 
     public init(
         schemaVersion: Int = Self.schemaVersion,
         generatedAt: Date,
         status: WidgetExportStatus,
         providers: [WidgetProviderSummary],
-        apiSpendProviders: [WidgetAPISpendSummary] = []
+        apiSpendProviders: [WidgetAPISpendSummary] = [],
+        widgetProviderSelection: [String]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.generatedAt = generatedAt
         self.status = status
         self.providers = providers
         self.apiSpendProviders = apiSpendProviders
+        self.widgetProviderSelection = widgetProviderSelection
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -32,6 +35,7 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
         case status
         case providers
         case apiSpendProviders
+        case widgetProviderSelection
     }
 
     public init(from decoder: Decoder) throws {
@@ -41,6 +45,17 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
         status = try container.decode(WidgetExportStatus.self, forKey: .status)
         providers = try container.decode([WidgetProviderSummary].self, forKey: .providers)
         apiSpendProviders = try container.decodeIfPresent([WidgetAPISpendSummary].self, forKey: .apiSpendProviders) ?? []
+        widgetProviderSelection = try container.decodeIfPresent([String].self, forKey: .widgetProviderSelection)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(generatedAt, forKey: .generatedAt)
+        try container.encode(status, forKey: .status)
+        try container.encode(providers, forKey: .providers)
+        try container.encode(apiSpendProviders, forKey: .apiSpendProviders)
+        try container.encodeIfPresent(widgetProviderSelection, forKey: .widgetProviderSelection)
     }
 
     public static func disabled(generatedAt: Date) -> WidgetSnapshotEnvelope {
@@ -59,6 +74,23 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
             copy.windows = provider.primarySubscriptionWindow.map { [$0] } ?? []
             return copy
         }
+    }
+
+    /// The ordered, bounded provider list shared by every widget family. The full
+    /// `providers` list stays intact for the iOS companion app.
+    public var widgetProviders: [WidgetProviderSummary] {
+        guard let widgetProviderSelection, !widgetProviderSelection.isEmpty else {
+            return Array(providers.prefix(2))
+        }
+        var included = Set<String>()
+        var result: [WidgetProviderSummary] = []
+        for id in widgetProviderSelection where result.count < 2 {
+            guard included.insert(id).inserted,
+                  let provider = providers.first(where: { $0.id == id })
+            else { continue }
+            result.append(provider)
+        }
+        return result
     }
 }
 

@@ -30,6 +30,46 @@ struct WidgetSnapshotProjectorTests {
         #expect(envelope.weeklyProviders[1].weeklyWindow?.percentRemaining == 75)
     }
 
+    @Test func widgetProvidersHonorSelectionOrderAndCap() {
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [:],
+            providerOrder: [.claude, .codex, .grok, .cursor],
+            displayNames: [:],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            widgetProviderSelection: [.grok, .cursor, .claude],
+            generatedAt: now
+        )
+
+        #expect(envelope.widgetProviderSelection == ["grok", "cursor", "claude"])
+        #expect(envelope.widgetProviders.map(\.id) == ["grok", "cursor"])
+    }
+
+    @Test func widgetProvidersFallBackToFirstTwoProviders() {
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [:],
+            providerOrder: [.claude, .codex, .grok],
+            displayNames: [:],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        #expect(envelope.widgetProviderSelection == nil)
+        #expect(envelope.widgetProviders.map(\.id) == ["claude", "codex"])
+
+        let emptySelection = WidgetSnapshotProjector.project(
+            snapshots: [:],
+            providerOrder: [.claude, .codex, .grok],
+            displayNames: [:],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            widgetProviderSelection: [],
+            generatedAt: now
+        )
+        #expect(emptySelection.widgetProviders.map(\.id) == ["claude", "codex"])
+    }
+
     @Test func missingWeeklyWindowOnlyAffectsThatProvider() {
         let envelope = WidgetSnapshotProjector.project(
             snapshots: [

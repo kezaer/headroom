@@ -805,11 +805,21 @@ public final class UsageStore {
             displayNames: displayNames,
             renewalDate: { [preferences] in preferences.renewalDate(for: $0) },
             widgetsEnabled: widgetsEnabled,
+            widgetProviderSelection: resolvedWidgetProviderSelection(),
             showsCodexSparkCounters: preferences.showCodexSparkCountersInWidgets,
             apiSpendSnapshots: apiSpendSnapshots,
             apiSpendProviderOrder: apiSpendProviderOrder,
             generatedAt: generatedAt
         )
+    }
+
+    private func resolvedWidgetProviderSelection() -> [ProviderID] {
+        switch menuBarFillSource.filtered(to: providerOrder) {
+        case .auto:
+            return Array(providerOrder.prefix(2))
+        case .providers(let selected):
+            return Array(providerOrder.lazy.filter(selected.contains).prefix(2))
+        }
     }
 
     private func filterCodexSparkCounters(from snapshot: UsageSnapshot, shouldShow: Bool) -> UsageSnapshot {

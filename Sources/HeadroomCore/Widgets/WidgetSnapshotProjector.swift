@@ -9,6 +9,7 @@ public enum WidgetSnapshotProjector {
         displayNames: [ProviderID: String],
         renewalDate: (ProviderID) -> Date?,
         widgetsEnabled: Bool,
+        widgetProviderSelection: [ProviderID]? = nil,
         showsCodexSparkCounters: Bool = false,
         apiSpendSnapshots: [ProviderID: APISpendSnapshot] = [:],
         apiSpendProviderOrder: [ProviderID] = [],
@@ -31,7 +32,8 @@ public enum WidgetSnapshotProjector {
             generatedAt: generatedAt,
             status: .enabled,
             providers: providers,
-            apiSpendProviders: apiSpendProviders
+            apiSpendProviders: apiSpendProviders,
+            widgetProviderSelection: widgetProviderSelection?.map(\.raw)
         )
     }
 

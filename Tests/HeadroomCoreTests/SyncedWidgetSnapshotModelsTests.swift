@@ -16,7 +16,7 @@ struct SyncedWidgetSnapshotModelsTests {
     }
 
     @Test func currentSnapshotSchemaRejectsFreshnessBlindClientsButAcceptsLegacyPayloads() throws {
-        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 3)
         #expect(SyncedWidgetSnapshotEnvelope.schemaVersion == 1)
 
         let legacySnapshot = WidgetSnapshotEnvelope(
@@ -65,7 +65,7 @@ struct SyncedWidgetSnapshotModelsTests {
     }
 
     @Test func billingPeriodUsesAdditiveV2Discriminator() throws {
-        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 3)
         let window = WidgetWindowSummary(
             kind: .other("Monthly"),
             label: "Monthly",
@@ -120,6 +120,34 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(decoded == .snapshot(envelope))
         #expect(decoded.envelope?.snapshot.apiSpendProviders.first?.displayName == "OpenAI API")
         #expect(decoded.envelope?.snapshot.apiSpendProviders.first?.amount == 19.25)
+    }
+
+    @Test func widgetProviderSelectionSurvivesSyncAndLegacyPayloadFallsBack() throws {
+        let selected = WidgetSnapshotEnvelope(
+            generatedAt: generatedAt,
+            status: .enabled,
+            providers: liveSnapshot.providers,
+            widgetProviderSelection: ["claude"]
+        )
+        let decoded = SyncedWidgetSnapshotCodec.decode(
+            try SyncedWidgetSnapshotCodec.encode(makeSyncedEnvelope(snapshot: selected))
+        )
+
+        #expect(decoded.envelope?.snapshot.widgetProviderSelection == ["claude"])
+        #expect(decoded.envelope?.snapshot.widgetProviders.map(\.id) == ["claude"])
+
+        let encoded = try SyncedWidgetSnapshotCodec.encode(makeSyncedEnvelope(snapshot: selected))
+        var legacyObject = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var legacySnapshot = try #require(legacyObject["snapshot"] as? [String: Any])
+        legacySnapshot.removeValue(forKey: "widgetProviderSelection")
+        legacySnapshot["schemaVersion"] = 2
+        legacyObject["snapshot"] = legacySnapshot
+        let legacy = SyncedWidgetSnapshotCodec.decode(
+            try JSONSerialization.data(withJSONObject: legacyObject)
+        )
+
+        #expect(legacy.envelope?.snapshot.widgetProviderSelection == nil)
+        #expect(legacy.envelope?.snapshot.widgetProviders.map(\.id) == ["claude"])
     }
 
     @Test func disabledSnapshotRoundTripsWithoutProviders() throws {
