@@ -32,13 +32,14 @@ struct HeadroomMediumWidgetView: View {
     }
 
     @ViewBuilder private var providerColumns: some View {
-        if envelope.providers.count <= 1 {
-            ForEach(envelope.providers) { provider in
+        let providers = envelope.widgetProviders
+        if providers.count <= 1 {
+            ForEach(providers) { provider in
                 MediumProviderColumn(provider: provider, dense: false)
             }
-        } else if envelope.providers.count == 2 {
+        } else if providers.count == 2 {
             HStack(alignment: .top, spacing: 12) {
-                ForEach(envelope.providers) { provider in
+                ForEach(providers) { provider in
                     MediumProviderColumn(provider: provider, dense: false)
                 }
             }
@@ -58,9 +59,9 @@ struct HeadroomMediumWidgetView: View {
             }
         } else {
             HStack(alignment: .top, spacing: 8) {
-                ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
+                ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
                     MediumProviderColumn(provider: provider, dense: true)
-                    if index < envelope.providers.count - 1 {
+                    if index < providers.count - 1 {
                         Rectangle()
                             .fill(WidgetProviderStyle.hairline(scheme: scheme))
                             .frame(width: 1)
@@ -115,6 +116,6 @@ private struct MediumProviderColumn: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

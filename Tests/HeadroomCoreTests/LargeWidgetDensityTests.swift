@@ -43,6 +43,27 @@ struct LargeWidgetDensityTests {
         #expect(LargeWidgetDensity(envelope: envelope) == .regular)
     }
 
+    @Test func initFromEnvelopeCountsOnlySelectedWidgetProviders() {
+        let envelope = WidgetSnapshotEnvelope(
+            generatedAt: now,
+            status: .enabled,
+            providers: [
+                provider(id: "claude"),
+                provider(id: "codex"),
+                provider(id: "grok"),
+                provider(id: "cursor"),
+            ],
+            apiSpendProviders: [
+                spendProvider(id: "anthropic-api"),
+                spendProvider(id: "openai-api"),
+                spendProvider(id: "xai-api"),
+            ],
+            widgetProviderSelection: ["grok", "cursor"]
+        )
+
+        #expect(LargeWidgetDensity(envelope: envelope) == .regular)
+    }
+
     @Test func weeklyLabeledExtraWindowsCountAsRows() {
         let provider = WidgetProviderSummary(
             id: "claude",
