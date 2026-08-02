@@ -112,7 +112,7 @@ struct DemoScreenshotDataVariantsTests {
     }
 
     @Test func allFixturesAreValidEnvelopes() throws {
-        let variants = ["full", "noSpend", "claudeOnly", "claudeOnlyNoSpend", "codexFiveHourReturns", "attention"]
+        let variants = ["full", "noSpend", "claudeOnly", "claudeOnlyNoSpend", "codexFiveHourReturns", "attention", "fourProviders"]
         for variant in variants {
             let envelope = DemoScreenshotData.envelope(for: variant)
             // Schema version should be current
