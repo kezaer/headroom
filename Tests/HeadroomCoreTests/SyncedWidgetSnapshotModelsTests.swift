@@ -16,7 +16,7 @@ struct SyncedWidgetSnapshotModelsTests {
     }
 
     @Test func currentSnapshotSchemaRejectsFreshnessBlindClientsButAcceptsLegacyPayloads() throws {
-        #expect(WidgetSnapshotEnvelope.schemaVersion == 3)
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
         #expect(SyncedWidgetSnapshotEnvelope.schemaVersion == 1)
 
         let legacySnapshot = WidgetSnapshotEnvelope(
@@ -65,7 +65,7 @@ struct SyncedWidgetSnapshotModelsTests {
     }
 
     @Test func billingPeriodUsesAdditiveV2Discriminator() throws {
-        #expect(WidgetSnapshotEnvelope.schemaVersion == 3)
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
         let window = WidgetWindowSummary(
             kind: .other("Monthly"),
             label: "Monthly",

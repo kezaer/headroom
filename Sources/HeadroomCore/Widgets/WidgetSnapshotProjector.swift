@@ -28,12 +28,22 @@ public enum WidgetSnapshotProjector {
         let apiSpendProviders = apiSpendProviderOrder.compactMap { id in
             apiSpendSnapshots[id].map(apiSpendSummary)
         }
+        let availableProviders = Set(providerOrder)
+        let normalizedSelection: [String]? = widgetProviderSelection.map { selection in
+            var included = Set<ProviderID>()
+            var result: [String] = []
+            for id in selection where result.count < 2 {
+                guard availableProviders.contains(id), included.insert(id).inserted else { continue }
+                result.append(id.raw)
+            }
+            return result
+        }
         return WidgetSnapshotEnvelope(
             generatedAt: generatedAt,
             status: .enabled,
             providers: providers,
             apiSpendProviders: apiSpendProviders,
-            widgetProviderSelection: widgetProviderSelection?.map(\.raw)
+            widgetProviderSelection: normalizedSelection
         )
     }
 

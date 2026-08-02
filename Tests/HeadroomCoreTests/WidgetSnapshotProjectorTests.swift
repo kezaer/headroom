@@ -41,8 +41,26 @@ struct WidgetSnapshotProjectorTests {
             generatedAt: now
         )
 
-        #expect(envelope.widgetProviderSelection == ["grok", "cursor", "claude"])
+        #expect(envelope.widgetProviderSelection == ["grok", "cursor"])
         #expect(envelope.widgetProviders.map(\.id) == ["grok", "cursor"])
+    }
+
+    @Test func widgetProvidersFallBackWhenSelectionHasNoAvailableProvider() {
+        let envelope = WidgetSnapshotEnvelope(
+            generatedAt: now,
+            status: .enabled,
+            providers: WidgetSnapshotProjector.project(
+                snapshots: [:],
+                providerOrder: [.claude, .codex],
+                displayNames: [:],
+                renewalDate: { _ in nil },
+                widgetsEnabled: true,
+                generatedAt: now
+            ).providers,
+            widgetProviderSelection: ["future-provider"]
+        )
+
+        #expect(envelope.widgetProviders.map(\.id) == ["claude", "codex"])
     }
 
     @Test func widgetProvidersFallBackToFirstTwoProviders() {

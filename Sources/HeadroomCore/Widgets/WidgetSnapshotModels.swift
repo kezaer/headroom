@@ -3,7 +3,7 @@ import Foundation
 /// A redaction-safe snapshot built for WidgetKit. It contains only display-ready usage
 /// values, never provider credentials, request metadata, raw CLI output, or paths.
 public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
-    public static let schemaVersion = 3
+    public static let schemaVersion = 2
     public static let oldestSupportedSchemaVersion = 1
 
     public let schemaVersion: Int
@@ -90,7 +90,7 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
             else { continue }
             result.append(provider)
         }
-        return result
+        return result.isEmpty ? Array(providers.prefix(2)) : result
     }
 }
 
