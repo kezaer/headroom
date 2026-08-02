@@ -266,13 +266,13 @@ struct SettingsView: View {
             SettingsSwitchRow(title: "Show percentage", isOn: $showMenuBarPercentage)
                 .onChange(of: showMenuBarPercentage) { _, newValue in
                     store.setShowMenuBarPercentage(newValue)
-                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
-                responsiveControlRow(label: "Show meters") {
+                responsiveControlRow(label: "Priority providers") {
                     menuBarProviderSelectionMenu
                 }
-                SettingsHelpText(text: "Auto shows the tightest enabled limit. Select providers to show their meters side by side.")
+                SettingsHelpText(text: "Controls the menu-bar number and widget tiles. Auto uses the tightest menu-bar limit; widgets use the first 2 enabled providers.")
             }
 
             VStack(alignment: .leading, spacing: 8) {
