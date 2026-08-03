@@ -16,6 +16,7 @@ struct WidgetSettingsSection: View {
                 // instruction ("Add or remove widgets from macOS") this window
                 // can't perform.
                 SettingsHelpText(text: "Controls whether Headroom supplies usage data to macOS widgets.")
+                SettingsHelpText(text: "Widgets show up to 2 of your priority providers from Menu Bar settings.")
             }
 
             Toggle("Show Codex Spark counters in widgets", isOn: $showCodexSparkCountersInWidgets)

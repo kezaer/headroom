@@ -106,14 +106,19 @@ struct HeadroomIOSWidgetView: View {
     // glanceable. Model-specific sub-limits (Claude's "Weekly (Fable)") are detail for the
     // large family and the popover; at this size a third line reads as a phantom provider.
     private func small(_ envelope: WidgetSnapshotEnvelope) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(envelope.providers.contains(where: { $0.primarySubscriptionWindow?.isBillingPeriod == true }) ? "Usage left" : "Weekly left")
+        let providers = envelope.widgetProviders
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(providers.contains(where: { $0.primarySubscriptionWindow?.isBillingPeriod == true }) ? "Usage left" : "Weekly left")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(HeadroomWidgetStyle.secondaryText(scheme: scheme))
-            ForEach(envelope.providers) { provider in
-                providerWeeklyLine(provider)
-                    .frame(maxHeight: .infinity, alignment: .center)
+            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(providers) { provider in
+                    providerWeeklyLine(provider)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
         }
         // KTD1: system content margins carry the effective outer margin; keep only
         // a minimal residual so the meters have room to breathe.
@@ -164,11 +169,11 @@ struct HeadroomIOSWidgetView: View {
         VStack(alignment: .leading, spacing: 8) {
             if envelope.apiSpendProviders.isEmpty {
                 Spacer(minLength: 0)
-                mediumProviderColumns(envelope.providers)
+                mediumProviderColumns(envelope.widgetProviders)
                 Spacer(minLength: 0)
                 mediumFooter(generatedAt: envelope.generatedAt, prefix: freshnessPrefix)
             } else {
-                mediumProviderColumns(envelope.providers)
+                mediumProviderColumns(envelope.widgetProviders)
                 Spacer(minLength: 6)
                 // Same shared strip as the large widget; the footer drops its freshness
                 // prefix here because the medium tile's width carries icons + amounts too.
@@ -254,6 +259,7 @@ struct HeadroomIOSWidgetView: View {
     // title or app-icon mark (R3).
     private func large(_ envelope: WidgetSnapshotEnvelope) -> some View {
         let density = LargeWidgetDensity(envelope: envelope)
+        let providers = envelope.widgetProviders
         // Equal flexible spacers (same minLength) own every vertical gap — top edge, between
         // sections, and bottom edge — so SwiftUI distributes leftover height uniformly and
         // the rhythm stays symmetric no matter how many rows this user's content produces.
@@ -261,10 +267,10 @@ struct HeadroomIOSWidgetView: View {
         // steps the meters down from prominent when content is heavy.
         return VStack(alignment: .leading, spacing: 0) {
             gap(density)
-            ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
+            ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
                 largeProviderSection(provider, density: density)
                 gap(density)
-                if index < envelope.providers.count - 1 {
+                if index < providers.count - 1 {
                     Rectangle()
                         .fill(HeadroomWidgetStyle.hairline(scheme: scheme))
                         .frame(height: 1)

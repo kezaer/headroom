@@ -1230,6 +1230,48 @@ struct UsageStoreTests {
         #expect(exports[0].providers[0].weeklyWindow?.percentRemaining == 70)
     }
 
+    @Test func widgetSelectionDefaultsToFirstTwoEnabledProviders() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude)),
+                StubProvider(id: .codex, displayName: "Codex", snapshot: .pending(for: .codex)),
+                StubProvider(id: .grok, displayName: "Grok", snapshot: .pending(for: .grok)),
+            ],
+            preferences: preferences,
+            widgetExporter: exporter
+        )
+
+        await store.refreshAll()
+
+        #expect(exporter.exports.last?.widgetProviderSelection == ["claude", "codex"])
+    }
+
+    @Test func widgetSelectionUsesPrioritySetInProviderOrderAndCapsAtTwo() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.setSurfaceEnabled(true, for: .cursorSubscription)
+        preferences.menuBarFillSource = .providers([.claude, .grok, .cursor])
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude)),
+                StubProvider(id: .codex, displayName: "Codex", snapshot: .pending(for: .codex)),
+                StubProvider(id: .grok, displayName: "Grok", snapshot: .pending(for: .grok)),
+                StubProvider(id: .cursor, displayName: "Cursor", snapshot: .pending(for: .cursor)),
+            ],
+            preferences: preferences,
+            widgetExporter: exporter
+        )
+
+        await store.refreshAll()
+
+        #expect(exporter.exports.last?.widgetProviderSelection == ["claude", "grok"])
+        #expect(exporter.exports.last?.widgetProviders.map(\.id) == ["claude", "grok"])
+    }
+
     @Test func disablingWidgetsExportsDisabledState() {
         let suite = "headroom.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

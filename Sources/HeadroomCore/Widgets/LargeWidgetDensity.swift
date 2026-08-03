@@ -57,14 +57,15 @@ public enum LargeWidgetDensity: Equatable, Sendable {
     }
 
     public init(envelope: WidgetSnapshotEnvelope) {
+        let providers = envelope.widgetProviders
         // The established 1–2 provider layout renders API entries in one horizontal
         // strip. Higher provider counts may wrap them, so account for each entry there.
-        let spendRows = envelope.providers.count <= 2
+        let spendRows = providers.count <= 2
             ? min(1, envelope.apiSpendProviders.count)
             : envelope.apiSpendProviders.count
         self.init(
-            providerCount: envelope.providers.count,
-            meterCount: envelope.providers.reduce(0) { $0 + $1.subscriptionWindows.count + $1.extraWeeklyWindows.count },
+            providerCount: providers.count,
+            meterCount: providers.reduce(0) { $0 + $1.subscriptionWindows.count + $1.extraWeeklyWindows.count },
             spendCount: spendRows
         )
     }

@@ -295,7 +295,14 @@ public enum DemoScreenshotData {
                     planLabel: "SuperGrok",
                     freshness: .live,
                     windows: [
-                        window(.other("Weekly"), label: "Weekly", percent: 56, reset: "Resets in 3d", severity: .healthy),
+                        window(
+                            .other("Weekly"),
+                            label: "Weekly",
+                            percent: 56,
+                            reset: "Resets in 3d",
+                            severity: .healthy,
+                            billingPeriodDuration: 7 * 24 * 60 * 60
+                        ),
                     ],
                     renewalDate: day(month: 8, day: 4)
                 ),
@@ -305,7 +312,14 @@ public enum DemoScreenshotData {
                     planLabel: "Pro+",
                     freshness: .live,
                     windows: [
-                        window(.other("Monthly"), label: "Monthly", percent: 69, reset: "Resets Sep 1", severity: .healthy),
+                        window(
+                            .other("Monthly"),
+                            label: "Monthly",
+                            percent: 69,
+                            reset: "Resets Sep 1",
+                            severity: .healthy,
+                            billingPeriodDuration: 30 * 24 * 60 * 60
+                        ),
                     ],
                     renewalDate: day(month: 9, day: 1)
                 ),
@@ -332,7 +346,8 @@ public enum DemoScreenshotData {
         label: String,
         percent: Double,
         reset: String,
-        severity: WidgetUsageSeverity
+        severity: WidgetUsageSeverity,
+        billingPeriodDuration: TimeInterval? = nil
     ) -> WidgetWindowSummary {
         WidgetWindowSummary(
             kind: kind,
@@ -340,7 +355,8 @@ public enum DemoScreenshotData {
             percentRemaining: percent,
             resetsAt: Date().addingTimeInterval(3 * 3_600),
             resetLabel: reset,
-            severity: severity
+            severity: severity,
+            billingPeriodDuration: billingPeriodDuration
         )
     }
 

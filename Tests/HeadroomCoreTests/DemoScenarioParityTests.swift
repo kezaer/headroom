@@ -44,8 +44,16 @@ struct DemoScenarioParityTests {
         #expect(envelope.status == .enabled)
         #expect(envelope.providers.map(\.id) == DemoFixture.registeredProviderOrder.map(\.raw))
         // Grok/Cursor bill as period pools, which project to `.other` widget windows.
-        #expect(envelope.providers.first { $0.id == ProviderID.grok.raw }?.windows.first?.label == "Weekly")
-        #expect(envelope.providers.first { $0.id == ProviderID.cursor.raw }?.windows.first?.label == "Monthly")
+        let grok = envelope.providers.first { $0.id == ProviderID.grok.raw }
+        let cursor = envelope.providers.first { $0.id == ProviderID.cursor.raw }
+        #expect(grok?.windows.first?.label == "Weekly")
+        #expect(grok?.windows.first?.isBillingPeriod == true)
+        #expect(grok?.windows.first?.displayPercentRemaining == 56)
+        #expect(grok?.primarySubscriptionWindow != nil)
+        #expect(cursor?.windows.first?.label == "Monthly")
+        #expect(cursor?.windows.first?.isBillingPeriod == true)
+        #expect(cursor?.windows.first?.displayPercentRemaining == 69)
+        #expect(cursor?.primarySubscriptionWindow != nil)
     }
 
     @Test func encodedIOSDemoContainsNoSensitiveSentinels() throws {

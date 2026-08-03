@@ -8,6 +8,7 @@ struct HeadroomLargeWidgetView: View {
 
     var body: some View {
         let density = LargeWidgetDensity(envelope: envelope)
+        let providers = envelope.widgetProviders
         // Equal flexible spacers (same minLength) own every vertical gap — top edge, between
         // sections, and bottom edge — so SwiftUI distributes leftover height uniformly and
         // the rhythm stays symmetric no matter how many rows this user's content produces.
@@ -15,10 +16,10 @@ struct HeadroomLargeWidgetView: View {
         // steps the meters down from prominent when content is heavy.
         return VStack(alignment: .leading, spacing: 0) {
             gap(density)
-            ForEach(Array(envelope.providers.enumerated()), id: \.element.id) { index, provider in
+            ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
                 LargeProviderSection(provider: provider, now: now, density: density)
                 gap(density)
-                if index < envelope.providers.count - 1 {
+                if index < providers.count - 1 {
                     Rectangle()
                         .fill(WidgetProviderStyle.hairline(scheme: scheme))
                         .frame(height: 1)
