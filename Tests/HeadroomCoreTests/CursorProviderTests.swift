@@ -34,7 +34,9 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(snapshot.windows.first?.utilization == 1)
         #expect(snapshot.windows.first?.percentRemaining == 99)
         #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60))
-        #expect(snapshot.windows.first?.resetsAt == ISO8601DateFormatter().date(from: "2026-09-01T23:59:59Z"))
+        #expect(snapshot.windows.first?.resetSchedule == .scheduled(
+            ISO8601DateFormatter().date(from: "2026-09-01T23:59:59Z")!
+        ))
         #expect(snapshot.windows.first?.resetLabel == "Resets Sep 1")
     }
 

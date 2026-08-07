@@ -55,24 +55,45 @@ enum Entry {
     private static func runClaudeProbe() {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            print("claude CLI: \(ClaudeUsageCLIProbe.resolveClaudePath() == nil ? "missing" : "available")")
             // `--claude-config <dir>`: probe an alternate account home (multi-account
             // diagnostic) — exercises the same CLAUDE_CONFIG_DIR override the extra
             // accounts use in production.
             var overrides: [String: String] = [:]
+            let accountCategory: ClaudeCapabilityDiagnosticAccount
             if let flagIndex = CommandLine.arguments.firstIndex(of: "--claude-config"),
                CommandLine.arguments.indices.contains(flagIndex + 1) {
                 overrides["CLAUDE_CONFIG_DIR"] = CommandLine.arguments[flagIndex + 1]
-                print("account home: isolated")
+                accountCategory = .extra
             } else {
-                print("account home: built-in")
+                accountCategory = .builtIn
             }
-            switch await ClaudeUsageCLIProbe(
+            let location = await AppComposition.claudeExecutableLocator.locate()
+            let versionBand = if let path = location.path {
+                await ClaudeUsageCLIProbe.versionBand(
+                    executablePath: path,
+                    environmentOverrides: overrides
+                )
+            } else {
+                ClaudeCLIVersionBand.unknown
+            }
+            let result = await ClaudeUsageCLIProbe(
+                locator: AppComposition.claudeExecutableLocator,
                 workingDirectory: claudeWorkingDirectory(),
                 environmentOverrides: overrides
-            ).capturePanel() {
+            ).capturePanel()
+            let events = await AppComposition.claudeExecutableLocator.recentDiagnosticEvents()
+            ClaudeCapabilityDiagnostic.lines(
+                account: accountCategory,
+                versionBand: versionBand,
+                outcome: diagnosticOutcome(for: result),
+                events: events
+            ).forEach { print($0) }
+
+            switch result {
             case .cliNotFound:
                 print("RESULT: CLI not found")
+            case .cliInconclusive:
+                print("RESULT: CLI discovery inconclusive")
             case .transientCapture:
                 print("RESULT: capture failed (no panel text)")
             case .loginRequired:
@@ -82,16 +103,46 @@ enum Entry {
             case .unknownUI:
                 print("RESULT: unrecognized Claude surface (no input sent)")
             case .panel(let text, let planHint):
+                let capturedAt = Date()
                 let windows = ClaudeUsageParser.parse(text)
                 let plan = ClaudeUsageParser.plan(in: text) ?? planHint
-                print("RESULT: parsed \(windows.count) window(s)\(plan.map { " · plan \($0)" } ?? "")")
+                print("RESULT: parsed \(windows.count) window(s) plan=\(plan == nil ? "absent" : "present")")
                 for w in windows {
-                    print("  • \(w.kind)  \(Int(w.percentUsed))% used  reset=\(w.resetLabel == nil ? "absent" : "present")")
+                    let schedule = ClaudeResetNormalizer.schedule(
+                        label: w.resetLabel,
+                        timeZoneIdentifier: w.resetTimeZoneIdentifier,
+                        kind: w.kind,
+                        now: capturedAt
+                    )
+                    print("  • category=\(diagnosticWindowCategory(w.kind))  \(Int(w.percentUsed))% used  \(ResetDiagnostic.line(for: schedule, observedAt: capturedAt, now: capturedAt))")
                 }
             }
             semaphore.signal()
         }
         semaphore.wait()
+    }
+
+    private static func diagnosticOutcome(
+        for result: ClaudePanelResult
+    ) -> ClaudeCapabilityDiagnosticOutcome {
+        switch result {
+        case .panel: .available
+        case .loginRequired: .loginRequired
+        case .workspaceTrustRequired: .trustRequired
+        case .cliNotFound: .confirmedAbsent
+        case .cliInconclusive: .discoveryInconclusive
+        case .transientCapture: .captureFailed
+        case .unknownUI: .unknownSurface
+        }
+    }
+
+    private static func diagnosticWindowCategory(_ kind: WindowKind) -> String {
+        switch kind {
+        case .fiveHour: "five-hour"
+        case .weekly: "weekly"
+        case .billingPeriod: "billing-period"
+        case .other: "other"
+        }
     }
 
     fileprivate static func claudeWorkingDirectory() -> String {
@@ -115,7 +166,7 @@ enum Entry {
                     print("  plan: \(plan)")
                 }
                 for window in snapshot.windows {
-                    print("  • \(window.kind)  \(Int(window.utilization.rounded()))% used  →  \(window.resetsAt)  (remaining \(Int(window.percentRemaining.rounded()))%)")
+                    print("  • \(window.kind)  \(Int(window.utilization.rounded()))% used  \(ResetDiagnostic.line(for: window.resetSchedule, observedAt: window.observedAt ?? snapshot.capturedAt, now: Date()))  (remaining \(Int(window.percentRemaining.rounded()))%)")
                 }
             case .stale(let reason):
                 print("RESULT: stale Codex snapshot: \(reason.message)")
@@ -163,7 +214,7 @@ enum Entry {
                 print("RESULT: live Grok snapshot via \(transport.rawValue), parsed \(snapshot.windows.count) window(s):")
                 if let plan = snapshot.planLabel { print("  plan: \(plan)") }
                 for window in snapshot.windows {
-                    print("  • \(window.kind.shortLabel)  \(Int(window.percentUsed.rounded()))% used  →  \(window.resetsAt)")
+                    print("  • \(window.kind.shortLabel)  \(Int(window.percentUsed.rounded()))% used  \(ResetDiagnostic.line(for: window.resetSchedule, observedAt: window.observedAt ?? snapshot.capturedAt, now: Date()))")
                 }
             case .methodUnavailable:
                 print("RESULT: Grok billing method unavailable and fallback was not attempted")
@@ -196,7 +247,7 @@ enum Entry {
                 }
                 print("RESULT: live Cursor snapshot via official /usage panel")
                 print("  plan: \(parsed.planName)")
-                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset=\(parsed.resetLabel)")
+                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset-evidence=scheduled")
                 print("  on-demand: \(parsed.onDemand.isEnabled ? "enabled" : "disabled")")
             case .loginRequired:
                 print("RESULT: login required")
@@ -345,7 +396,12 @@ struct HeadroomApp: App {
     init() {
         let preferences = Preferences()
         let store = AppComposition.store(preferences: preferences)
-        if !DemoFixture.isEnabled { SetupSessions.configure(store: store) }
+        if !DemoFixture.isEnabled {
+            SetupSessions.configure(
+                store: store,
+                claudeExecutableLocator: AppComposition.claudeExecutableLocator
+            )
+        }
         self.preferences = preferences
         _store = State(initialValue: store)
         _appearancePreference = State(initialValue: preferences.appearancePreference)
@@ -543,6 +599,7 @@ enum AppComposition {
     }
 
     private static let cursorUsageSource = CursorUsageCaptureCache(source: CursorUsageCLIProbe())
+    static let claudeExecutableLocator = CLIExecutableLocator.claude()
 
     /// Ordered composition registry. Adding a provider extends this table; Settings,
     /// account management, polling, and presentation discover the resulting order from
@@ -735,13 +792,17 @@ enum AppComposition {
             return UnavailableAccountProvider(account: account)
         }
         guard !account.isBuiltIn else {
-            return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: workspace.path))
+            return ClaudeProvider(source: ClaudeUsageCLIProbe(
+                locator: claudeExecutableLocator,
+                workingDirectory: workspace.path
+            ))
         }
         guard let configDirectory = configuration.claudeConfigDirectory else {
             return UnavailableAccountProvider(account: account)
         }
         return ClaudeProvider(
             source: ClaudeUsageCLIProbe(
+                locator: claudeExecutableLocator,
                 workingDirectory: workspace.path,
                 environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
             ),

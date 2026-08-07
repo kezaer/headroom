@@ -126,33 +126,57 @@ public enum UsageWindowFreshness: Sendable, Equatable {
 
 }
 
-/// One usage window: how much has been consumed and when it resets.
-///
-/// `resetsAt` is always the server-provided reset time — never a client-side guess
-/// about window length (R3, KTD6). `utilization` is 0–100 percent consumed.
+/// One usage window: how much has been consumed and the source evidence for its reset.
 public struct UsageWindow: Sendable, Equatable {
     public let kind: WindowKind
     public let utilization: Double
-    public let resetsAt: Date
+    public let resetSchedule: ResetSchedule
     /// The provider's own reset text when present (e.g. Claude's "Resets Jul 2 at
     /// 10am"). Preserved for diagnostics and snapshot consumers; the macOS app derives
-    /// its compact relative presentation from `resetsAt`. Nil for providers that give
+    /// its compact relative presentation from `resetSchedule`. Nil for providers that give
     /// only a machine reset timestamp (Codex).
     public let resetLabel: String?
+    public let resetTimeZoneIdentifier: String?
     public let freshness: UsageWindowFreshness
+    /// Original source observation anchor. It survives stale/unavailable transitions;
+    /// publication and migration timestamps never replace it.
+    public let observedAt: Date?
 
+    public init(
+        kind: WindowKind,
+        utilization: Double,
+        resetSchedule: ResetSchedule,
+        resetLabel: String? = nil,
+        resetTimeZoneIdentifier: String? = nil,
+        freshness: UsageWindowFreshness = .live,
+        observedAt: Date? = nil
+    ) {
+        self.kind = kind
+        self.utilization = utilization
+        self.resetSchedule = resetSchedule
+        self.resetLabel = resetLabel
+        self.resetTimeZoneIdentifier = resetTimeZoneIdentifier
+        self.freshness = freshness
+        self.observedAt = observedAt ?? freshness.observedAt
+    }
+
+    /// Convenience for providers that receive an exact machine deadline.
     public init(
         kind: WindowKind,
         utilization: Double,
         resetsAt: Date,
         resetLabel: String? = nil,
-        freshness: UsageWindowFreshness = .live
+        freshness: UsageWindowFreshness = .live,
+        observedAt: Date? = nil
     ) {
-        self.kind = kind
-        self.utilization = utilization
-        self.resetsAt = resetsAt
-        self.resetLabel = resetLabel
-        self.freshness = freshness
+        self.init(
+            kind: kind,
+            utilization: utilization,
+            resetSchedule: .scheduled(resetsAt),
+            resetLabel: resetLabel,
+            freshness: freshness,
+            observedAt: observedAt
+        )
     }
 
     /// Percentage of the window still available (R1/R2). Clamped to 0…100 so an
@@ -176,9 +200,11 @@ public struct UsageWindow: Sendable, Equatable {
         UsageWindow(
             kind: kind,
             utilization: utilization,
-            resetsAt: resetsAt,
+            resetSchedule: resetSchedule,
             resetLabel: resetLabel,
-            freshness: freshness
+            resetTimeZoneIdentifier: resetTimeZoneIdentifier,
+            freshness: freshness,
+            observedAt: observedAt
         )
     }
 }

@@ -9,6 +9,7 @@ struct HeadroomWidgetEntry: TimelineEntry {
 
 enum HeadroomWidgetState: Equatable {
     case setupNeeded
+    case incompatibleSchema
     case disabled
     case pending
     case content(WidgetSnapshotEnvelope)
@@ -17,6 +18,8 @@ enum HeadroomWidgetState: Equatable {
         switch read {
         case .unavailable, .corrupt:
             .setupNeeded
+        case .incompatibleSchema:
+            .incompatibleSchema
         case .empty:
             .pending
         case .snapshot(let envelope):

@@ -17,6 +17,7 @@ Record each state independently. Never summarize a partial chain as “released.
 | State | Meaning |
 | --- | --- |
 | Source ready | Required tests pass and the release commit is merged to `main`. |
+| Candidate tested | The exact signed candidate passed its track-specific automated and installed-app gates. It is not yet public. |
 | macOS published | The notarized DMG, manifest, appcast, and deltas are live and verified. |
 | Sparkle accepted | An older public installation upgraded to the new build and relaunched. |
 | TestFlight uploaded | App Store Connect accepted the archive upload. Processing may still be pending. |
@@ -72,6 +73,35 @@ operator handoff if it reaches a user-only boundary.
 ## Phase 3 — acceptance without UI improvisation
 
 Manual handoffs are valid release steps. They are not failures to automate.
+
+For a Claude capability change, record Track A separately from unrelated provider and reset work.
+Its signed installed-app evidence must use two previously configured Claude accounts and cover:
+
+- Finder launch with a sparse inherited `PATH`, then update and relaunch of the same installation;
+- a supported executable-location change, a transient inconclusive discovery, recovery through
+  **Check Again**, and continuity retention without rerunning setup;
+- one account reporting login-required or trust-required while its sibling remains live;
+- exactly one provider-level install/retry notice, with account recovery actions staying scoped
+  to the affected account; and
+- `--probe-claude` output containing only capability categories, event ages, safe CLI version
+  band, built-in/extra account category, and allowlisted parsed-window facts.
+
+The tester approves every official Claude login or trust prompt manually. Evidence must not
+contain executable/config paths, account labels or emails, provider panel text, credentials,
+auth payloads, or raw errors. A passing local development build is source evidence only; a signed
+candidate is **Candidate tested**; a successful public update is **Sparkle accepted**; neither
+state implies **macOS published** unless the public artifacts were separately verified.
+
+For a reset-accuracy or widget snapshot schema change, record Track B separately. Its signed
+installed-app evidence must cover the macOS popover, macOS widgets, iPhone companion, and iOS
+widgets with scheduled, absent, elapsed, malformed, implausible, and invalid-zone reset fixtures.
+Confirm `Available` appears only for a fresh exact-zero absent/elapsed row; all other unresolved
+rows say `Reset info unavailable`. Cross genuine deadlines and sleep/wake boundaries, checking
+the `6d 4h`, `6d`, `13h 37m`, and `37m` precision cases and the ±60-second `Resets now` boundary.
+Migrate v1/v2 local and synced fixtures, surface future schemas as incompatible without rewriting
+them, and confirm equal-generation local data wins. Record only reset categories and ages. A
+downgrade to a pre-v3 publisher is unsupported for reset fidelity because iCloud KVS cannot fence
+an older writer; do not treat downgrade behavior as a safe rollback path.
 
 - Use Computer Use only when the target app exposes a stable accessibility surface. If a menu-bar
   popover or transient system surface is not available after one fresh state query, stop. Ask the

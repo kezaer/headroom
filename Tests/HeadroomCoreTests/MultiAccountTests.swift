@@ -86,6 +86,9 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
     let id: ProviderID
     let accountID: AccountID
     let displayName = "P"
+    let pollingLane: ProviderPollingLane
+    let reportsProviderCapability: Bool
+    let capability: ProviderCapabilityState
     private let lock = NSLock()
     private var count = 0
     private var started: CheckedContinuation<Void, Never>?
@@ -93,9 +96,18 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
     private var didStart = false
     private var shouldRelease = false
 
-    init(id: ProviderID, accountID: AccountID) {
+    init(
+        id: ProviderID,
+        accountID: AccountID,
+        pollingLane: ProviderPollingLane = .concurrent,
+        reportsProviderCapability: Bool = false,
+        capability: ProviderCapabilityState = .available
+    ) {
         self.id = id
         self.accountID = accountID
+        self.pollingLane = pollingLane
+        self.reportsProviderCapability = reportsProviderCapability
+        self.capability = capability
     }
 
     var fetchCount: Int { lock.withLock { count } }
@@ -121,6 +133,13 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
         continuation?.resume()
     }
 
+    func suspendNextFetch() {
+        lock.withLock {
+            shouldRelease = false
+            didStart = false
+        }
+    }
+
     func fetchSnapshot() async -> UsageSnapshot {
         let start = lock.withLock {
             count += 1
@@ -140,6 +159,13 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
             }
         }
         return .live(id, windows: [window(.weekly, used: 20)])
+    }
+
+    func fetchResult() async -> UsageProviderFetchResult {
+        UsageProviderFetchResult(
+            snapshot: await fetchSnapshot(),
+            capability: reportsProviderCapability ? capability : nil
+        )
     }
 }
 
@@ -236,6 +262,77 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
 
 @MainActor
 @Suite struct MultiAccountStoreTests {
+    @Test func sharedClaudeCapabilityKeepsAccountRecoveryIndependent() async {
+        let work = AccountID("work")
+        let store = UsageStore(
+            providers: [
+                CapabilityStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    result: UsageProviderFetchResult(
+                        snapshot: .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)),
+                        capability: .available
+                    )
+                ),
+                CapabilityStubProvider(
+                    id: .claude,
+                    accountID: work,
+                    displayName: "Claude",
+                    result: UsageProviderFetchResult(
+                        snapshot: .stale(for: .claude, reason: .providerSetup(.claudeTrustRequired)),
+                        capability: .available
+                    )
+                ),
+            ],
+            preferences: Preferences(defaults: freshDefaults())
+        )
+
+        await store.refreshAll()
+
+        #expect(store.providerCapabilities.count == 1)
+        #expect(store.providerCapabilities[.claude]?.state == .available)
+        #expect(
+            store.snapshot(for: AccountKey(providerID: .claude, accountID: .primary))
+                .freshness == .stale(.providerSetup(.claudeLoginRequired))
+        )
+        #expect(
+            store.snapshot(for: AccountKey(providerID: .claude, accountID: work))
+                .freshness == .stale(.providerSetup(.claudeTrustRequired))
+        )
+    }
+
+    @Test func sharedClaudeCapabilityUsesLatestSerialObservation() async {
+        let work = AccountID("work")
+        let store = UsageStore(
+            providers: [
+                CapabilityStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    result: UsageProviderFetchResult(
+                        snapshot: .stale(for: .claude, reason: .transient("capability unavailable")),
+                        capability: .confirmedAbsent
+                    )
+                ),
+                CapabilityStubProvider(
+                    id: .claude,
+                    accountID: work,
+                    displayName: "Claude",
+                    result: UsageProviderFetchResult(
+                        snapshot: .live(.claude, windows: [window(.weekly, used: 20)]),
+                        capability: .available
+                    )
+                ),
+            ],
+            preferences: Preferences(defaults: freshDefaults())
+        )
+
+        await store.refreshAll()
+
+        #expect(store.providerCapabilities[.claude]?.state == .available)
+    }
+
     private let work = AccountID("work")
 
     private func twoAccountStore(
@@ -589,6 +686,74 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
 
         // One fleet fetch plus one deduplicated queued setup check.
         #expect(extra.fetchCount == 2)
+    }
+
+    @Test func removingAccountDuringFleetRefreshDoesNotStrandCapabilityDiscovery() async {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extraAccount = registry.addAccount(for: .claude)!
+        let lane = ProviderPollingLane.serial("claude-cli")
+        let primary = SuspendedAccountProvider(
+            id: .claude,
+            accountID: .primary,
+            pollingLane: lane,
+            reportsProviderCapability: true
+        )
+        primary.releaseFetches()
+        let extra = SuspendedAccountProvider(
+            id: .claude,
+            accountID: extraAccount.id,
+            pollingLane: lane,
+            reportsProviderCapability: true
+        )
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .pending(for: account.providerID)
+                )
+            }
+        )
+        let fleet = Task { await store.refreshAll() }
+        await extra.waitUntilStarted()
+
+        #expect(await store.removeAccount(extraAccount.key) == .removed)
+        extra.releaseFetches()
+        await fleet.value
+
+        #expect(store.providerCapabilities[.claude]?.state == .available)
+    }
+
+    @Test func capabilityVerdictRemainsVisibleDuringLaterRefresh() async {
+        let provider = SuspendedAccountProvider(
+            id: .claude,
+            accountID: .primary,
+            pollingLane: .serial("claude-cli"),
+            reportsProviderCapability: true,
+            capability: .confirmedAbsent
+        )
+        provider.releaseFetches()
+        let store = UsageStore(
+            providers: [provider],
+            preferences: Preferences(defaults: freshDefaults())
+        )
+        await store.refreshAll()
+        #expect(store.providerCapabilities[.claude]?.state == .confirmedAbsent)
+
+        provider.suspendNextFetch()
+        let refresh = Task { await store.refreshAll() }
+        await provider.waitUntilStarted()
+
+        #expect(store.providerCapabilities[.claude]?.state == .confirmedAbsent)
+
+        provider.releaseFetches()
+        await refresh.value
     }
 
     @Test func widgetExportUsesPrimaryAccountOnly() async {

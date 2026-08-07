@@ -2,6 +2,12 @@ import Testing
 @testable import HeadroomCore
 
 @Suite struct ProviderSetupOutcomeTests {
+    @Test func onlyConfirmedProviderAbsenceOffersInstallation() {
+        #expect(ProviderCapabilityState.confirmedAbsent.recoveryPresentation?.primaryAction == .installClaudeCLI)
+        #expect(ProviderCapabilityState.inconclusive(.shellTimeout).recoveryPresentation?.primaryAction == .checkNow)
+        #expect(ProviderCapabilityState.available.recoveryPresentation == nil)
+    }
+
     @Test func everyProviderOutcomeHasOneTypedRecoveryPresentation() {
         let expectations: [(ProviderSetupOutcome, SetupRecoveryAction, SetupRecoveryAction?, SetupAutomaticPolicy)] = [
             (.claudeCLIMissing, .installClaudeCLI, .copyManualCommand, .none),

@@ -44,10 +44,13 @@ struct MirrorPresentationTests {
         #expect(treatment.isDimmed)
     }
 
-    @Test func resetTextPreservesSourceLabelWhenPresent() {
-        let window = window(resetLabel: "Resets 2:00 PM")
+    @Test func resetTextUsesSharedSemanticCopyInsteadOfSourceLabel() {
+        let window = window(
+            resetLabel: "Resets 2:00 PM",
+            resetsAt: now.addingTimeInterval(2 * 3600)
+        )
 
-        #expect(MirrorPresentation.resetText(for: window, now: now) == "Resets 2:00 PM")
+        #expect(MirrorPresentation.resetText(for: window, now: now) == "Resets in 2h")
     }
 
     @Test func resetTextComputesFallbackCountdown() {

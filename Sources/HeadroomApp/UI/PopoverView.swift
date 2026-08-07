@@ -65,6 +65,7 @@ struct PopoverView: View {
                                         snapshot: store.appDisplaySnapshot(for: account.key)
                                     )
                                 },
+                                capabilityStatus: store.providerCapabilities[id],
                                 percentageMode: store.usagePercentageMode,
                                 now: context.date,
                                 onRetrySetup: { store.refreshNow() },

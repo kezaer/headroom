@@ -22,6 +22,7 @@ public enum SetupSessionFailure: Error, Sendable, Equatable {
     case pasteboardFailed
     case retryExhausted
     case provider(ProviderSetupOutcome)
+    case providerCapability(ProviderCapabilityState)
 }
 
 public enum SetupSessionState: Sendable, Equatable {

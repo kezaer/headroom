@@ -54,10 +54,12 @@ struct ClaudeUsageParserTests {
         #expect(windows[0].kind == .fiveHour)
         #expect(windows[0].percentUsed == 100)
         #expect(windows[0].resetLabel == "Resets 10:10am")
+        #expect(windows[0].resetTimeZoneIdentifier == "America/Los_Angeles")
 
         #expect(windows[1].kind == .weekly)
         #expect(windows[1].percentUsed == 38)          // settled value, not the 37 mid-scan
         #expect(windows[1].resetLabel == "Resets Jul 2 at 10am")
+        #expect(windows[1].resetTimeZoneIdentifier == "America/Los_Angeles")
 
         #expect(windows[2].kind == .other("Weekly (Fable)"))
         #expect(windows[2].percentUsed == 62)
@@ -107,6 +109,7 @@ struct ClaudeUsageParserTests {
         #expect(windows[0].kind == .fiveHour)
         #expect(windows[0].percentUsed == 6)
         #expect(windows[0].resetLabel == "Resets Jul 31 at 5:20pm")
+        #expect(windows[0].resetTimeZoneIdentifier == "America/Los_Angeles")
 
         #expect(windows[1].kind == .weekly)
         #expect(windows[1].percentUsed == 4)
@@ -159,6 +162,89 @@ struct ClaudeProviderTests {
         #expect(snap.windows.first { $0.kind == .fiveHour }?.percentRemaining == 0)
         #expect(snap.windows.first { $0.kind == .weekly }?.percentRemaining == 62)
         #expect(snap.windows.first { $0.kind == .weekly }?.resetLabel == "Resets Jul 2 at 10am")
+    }
+
+    @Test func percentageWithoutResetStaysLiveWithoutFabricatedDeadline() async {
+        let panel = """
+        Current session
+        ████ 0% used
+        Current week (all models)
+        ████ 12% used
+        """
+
+        let snap = await provider(.panel(text: panel, planHint: nil)).fetchSnapshot()
+        let session = snap.windows.first { $0.kind == .fiveHour }
+        let weekly = snap.windows.first { $0.kind == .weekly }
+
+        #expect(snap.freshness == .live)
+        #expect(session?.resetSchedule == .unresolved(.absent))
+        #expect(weekly?.resetSchedule == .unresolved(.absent))
+        #expect(session.map { Countdown.resetText(for: $0, now: snap.capturedAt!) } == "Available")
+        #expect(weekly.map { Countdown.resetText(for: $0, now: snap.capturedAt!) } == "Reset info unavailable")
+    }
+
+    @Test func malformedAndInvalidZoneResetEvidenceRemainTyped() async throws {
+        let malformed = """
+        Current session
+        ████ 12% used
+        Resets bearer-secret (America/Los_Angeles)
+        """
+        let invalidZone = """
+        Current session
+        ████ 12% used
+        Resets 10:10am (secret-zone)
+        """
+
+        let malformedSnapshot = await provider(.panel(text: malformed, planHint: nil)).fetchSnapshot()
+        let invalidZoneSnapshot = await provider(.panel(text: invalidZone, planHint: nil)).fetchSnapshot()
+
+        #expect(malformedSnapshot.windows.first?.resetSchedule == .unresolved(.unparseable))
+        #expect(invalidZoneSnapshot.windows.first?.resetSchedule == .unresolved(.invalidZone))
+        #expect(malformedSnapshot.windows.first?.percentUsed == 12)
+        #expect(invalidZoneSnapshot.windows.first?.percentUsed == 12)
+        #expect(malformedSnapshot.windows.first?.resetLabel == nil)
+        #expect(malformedSnapshot.windows.first?.resetTimeZoneIdentifier == nil)
+        #expect(invalidZoneSnapshot.windows.first?.resetLabel == "Resets 10:10am")
+        #expect(invalidZoneSnapshot.windows.first?.resetTimeZoneIdentifier == nil)
+
+        let projected = WidgetSnapshotProjector.project(
+            snapshots: [.claude: malformedSnapshot],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: malformedSnapshot.capturedAt!
+        )
+        let synced = SyncedWidgetSnapshotEnvelope(
+            publishedAt: malformedSnapshot.capturedAt!,
+            sourceID: "test-mac",
+            sourcePlatform: .macOS,
+            snapshot: projected
+        )
+        let payload = String(decoding: try SyncedWidgetSnapshotCodec.encode(synced), as: UTF8.self)
+        #expect(!payload.contains("bearer-secret"))
+        #expect(!payload.contains("secret-zone"))
+    }
+
+    @Test func providerCapturesOneTimeAnchorForEveryWindow() async {
+        let capture = Date(timeIntervalSince1970: 1_800_000_000)
+        let clock = CountingClock(value: capture)
+        let panel = """
+        Current session
+        ████ 12% used
+        Current week (all models)
+        ████ 24% used
+        """
+        let provider = ClaudeProvider(
+            source: MockClaudeSource(result: .panel(text: panel, planHint: nil)),
+            now: { clock.read() }
+        )
+
+        let snapshot = await provider.fetchSnapshot()
+
+        #expect(clock.callCount == 1)
+        #expect(snapshot.capturedAt == capture)
+        #expect(snapshot.windows.allSatisfy { $0.resetSchedule == .unresolved(.absent) })
     }
 
     @Test func liveSnapshotCarriesPlanTier() async {
@@ -216,16 +302,64 @@ struct ClaudeProviderTests {
         #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"loggedIn":true}"#.utf8)) == nil)
     }
 
-    @Test func missingCLIDegradesToNotLoggedIn() async {
-        let snap = await provider(.cliNotFound).fetchSnapshot()
-        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason.providerSetupOutcome == .claudeCLIMissing)
+    @Test func confirmedCLIMissIsProviderCapabilityRatherThanAccountSetup() async {
+        let result = await provider(.cliNotFound).fetchResult()
+        #expect(result.capability == .confirmedAbsent)
+        guard case .stale(let reason) = result.snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+        #expect(reason.providerSetupOutcome == nil)
+        #expect(!reason.isPermanent)
+    }
+
+    @Test func inconclusiveCLIDiscoveryRemainsRetryableProviderCapability() async {
+        let result = await provider(.cliInconclusive(.shellTimeout)).fetchResult()
+        #expect(result.capability == .inconclusive(.shellTimeout))
+        guard case .stale(let reason) = result.snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+        #expect(reason.providerSetupOutcome == nil)
+        #expect(!reason.isPermanent)
     }
 
     @Test func captureFailureIsTransient() async {
         let snap = await provider(.transientCapture).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
         #expect(reason.providerSetupOutcome == .claudeTransientCapture)
+    }
+
+    @Test func probeInvalidatesLaunchRaceAndRetriesWithRediscoveredExecutable() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-claude-retry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replacement = directory.appendingPathComponent("claude")
+        try Data("#!/bin/zsh\nprint '{\"loggedIn\":false}'\n".utf8).write(to: replacement)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: replacement.path)
+
+        let missing = directory.appendingPathComponent("moved-claude").path
+        let searches = ExecutableSearchSequence([
+            .completed(candidates: [missing]),
+            .completed(candidates: [replacement.path]),
+        ])
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: ProbeHintStore(),
+            shellSearch: { await searches.next() },
+            // Model a time-of-check/time-of-use race: the first candidate passes
+            // discovery but disappears before Process launches it.
+            validate: { _ in .executable }
+        )
+        let result = await ClaudeUsageCLIProbe(
+            locator: locator,
+            workingDirectory: directory.path
+        ).capturePanel()
+
+        #expect(result == .loginRequired)
+        #expect(await searches.count == 2)
     }
 
     @Test func loggedOutPanelAsksToLogIn() async {
@@ -346,4 +480,41 @@ struct ClaudeProviderTests {
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
         #expect(reason.providerSetupOutcome == .claudeUnknownUI)
     }
+}
+
+private final class CountingClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private let value: Date
+    private var calls = 0
+
+    init(value: Date) { self.value = value }
+
+    var callCount: Int { lock.withLock { calls } }
+
+    func read() -> Date {
+        lock.withLock {
+            calls += 1
+            return value
+        }
+    }
+}
+
+private actor ExecutableSearchSequence {
+    private var results: [CLIExecutableShellResult]
+    private(set) var count = 0
+
+    init(_ results: [CLIExecutableShellResult]) { self.results = results }
+
+    func next() -> CLIExecutableShellResult {
+        count += 1
+        return results.removeFirst()
+    }
+}
+
+private final class ProbeHintStore: CLIExecutableHintStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    func hint(for executableName: String) -> String? { lock.withLock { value } }
+    func setHint(_ path: String?, for executableName: String) { lock.withLock { value = path } }
 }

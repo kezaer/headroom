@@ -79,12 +79,12 @@ public enum SyncedWidgetSnapshotResolution {
         local: SyncedWidgetSnapshotEnvelope?,
         remote: SyncedWidgetSnapshotDecodeResult
     ) -> SyncedWidgetSnapshotDecodeResult {
+        if remote == .incompatibleSchema { return .incompatibleSchema }
         guard case .snapshot(let remoteEnvelope) = remote else {
             return local.map(SyncedWidgetSnapshotDecodeResult.snapshot) ?? remote
         }
         guard let local else { return .snapshot(remoteEnvelope) }
-        if remoteEnvelope.publishedAt > local.publishedAt { return .snapshot(remoteEnvelope) }
-        if remoteEnvelope.publishedAt < local.publishedAt { return .snapshot(local) }
-        return remoteEnvelope.sourceID >= local.sourceID ? .snapshot(remoteEnvelope) : .snapshot(local)
+        if remoteEnvelope.snapshot.generatedAt > local.snapshot.generatedAt { return .snapshot(remoteEnvelope) }
+        return .snapshot(local)
     }
 }

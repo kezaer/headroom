@@ -37,6 +37,7 @@ struct ProviderCardView: View {
     let providerID: ProviderID
     let displayName: String
     let entries: [ProviderAccountEntry]
+    let capabilityStatus: ProviderCapabilityStatus?
     let percentageMode: UsagePercentageMode
     let now: Date
     let onRetrySetup: () -> Void
@@ -54,10 +55,26 @@ struct ProviderCardView: View {
     private var primaryAccount: ProviderAccount {
         primaryEntry?.account ?? .builtIn(for: providerID)
     }
+    private var hasActiveSetupSession: Bool {
+        entries.contains { SetupSessions.isWaiting(for: $0.account) }
+    }
+
+    static func capabilityRecoveryPresentation(
+        state: ProviderCapabilityState?,
+        hasActiveSetupSession: Bool
+    ) -> ProviderRecoveryPresentation? {
+        guard !hasActiveSetupSession else { return nil }
+        return state?.recoveryPresentation
+    }
 
     var body: some View {
         Group {
-            if isMultiAccount {
+            if let presentation = Self.capabilityRecoveryPresentation(
+                   state: capabilityStatus?.state,
+                   hasActiveSetupSession: hasActiveSetupSession
+               ) {
+                capabilityBody(presentation)
+            } else if isMultiAccount {
                 multiAccountBody
             } else {
                 singleAccountBody
@@ -83,6 +100,43 @@ struct ProviderCardView: View {
     }
 
     // MARK: - Single account (unchanged pre-multi-account layout)
+
+    private func capabilityBody(_ presentation: ProviderRecoveryPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            ProviderCapabilityRecoveryView(
+                presentation: presentation,
+                onPrimaryAction: {
+                    performRecovery(
+                        presentation.primaryAction,
+                        for: primaryAccount,
+                        onRetry: onRetrySetup
+                    )
+                },
+                onSecondaryAction: presentation.secondaryAction.map { action in
+                    {
+                        performRecovery(action, for: primaryAccount, onRetry: onRetrySetup)
+                    }
+                }
+            )
+            if isMultiAccount {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(entries.filter { $0.snapshot.freshness != .pending }) { entry in
+                        AccountSectionView(
+                            entry: entry,
+                            providerDisplayName: displayName,
+                            percentageMode: percentageMode,
+                            now: now,
+                            isMenuBarAccount: entry.id == entries.first?.id,
+                            onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
+                        )
+                    }
+                }
+            } else if !snapshot.windows.isEmpty {
+                bars(for: snapshot, dimmed: true)
+            }
+        }
+    }
 
     @ViewBuilder private var singleAccountBody: some View {
         if let outcome = claudeGuidedSetupOutcome {
@@ -433,6 +487,31 @@ private struct ProviderSetupRecoveryCard: View {
                    let onSecondaryAction {
                     Button(secondaryLabel, action: onSecondaryAction)
                         .buttonStyle(SetupChipButtonStyle())
+                }
+            }
+        }
+    }
+}
+
+private struct ProviderCapabilityRecoveryView: View {
+    let presentation: ProviderRecoveryPresentation
+    let onPrimaryAction: () -> Void
+    let onSecondaryAction: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(presentation.status, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Claude Code availability. \(presentation.status)")
+            HStack(spacing: 10) {
+                Button(presentation.primaryLabel, action: onPrimaryAction)
+                    .buttonStyle(SetupChipButtonStyle())
+                if let secondaryLabel = presentation.secondaryLabel, let onSecondaryAction {
+                    Button(secondaryLabel, action: onSecondaryAction)
+                        .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
                 }
             }
         }

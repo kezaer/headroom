@@ -37,7 +37,7 @@ struct DemoFixtureTests {
         let now = Date()
         func resetText(_ snapshot: UsageSnapshot, _ kind: WindowKind) -> String? {
             snapshot.windows.first { $0.kind == kind }
-                .map { Countdown.resetText(resetsAt: $0.resetsAt, now: now) }
+                .map { Countdown.resetText(for: $0, now: now) }
         }
         #expect(resetText(DemoFixture.claudeSnapshot, .weekly) == "Resets in 4d")
         #expect(resetText(DemoFixture.claudeSnapshot, .fiveHour) == "Resets in 3h 15m")

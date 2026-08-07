@@ -66,9 +66,9 @@ struct UsageMathTests {
         )
         let codex = UsageWindow(kind: .weekly, utilization: 20, resetsAt: reset)
 
-        #expect(Countdown.resetText(resetsAt: claude.resetsAt, now: now) == "Resets in 3d 4h")
-        #expect(Countdown.resetText(resetsAt: codex.resetsAt, now: now) == "Resets in 3d 4h")
-        #expect(Countdown.resetText(resetsAt: claude.resetsAt, now: now) == Countdown.resetText(resetsAt: codex.resetsAt, now: now))
+        #expect(Countdown.resetText(for: claude, now: now) == "Resets in 3d 4h")
+        #expect(Countdown.resetText(for: codex, now: now) == "Resets in 3d 4h")
+        #expect(Countdown.resetText(for: claude, now: now) == Countdown.resetText(for: codex, now: now))
     }
 
     @Test func resetTextHandlesShortAndElapsedWindows() {
@@ -76,8 +76,8 @@ struct UsageMathTests {
         let soon = UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: now.addingTimeInterval(4 * 3600 + 59 * 60))
         let elapsed = UsageWindow(kind: .fiveHour, utilization: 20, resetsAt: now.addingTimeInterval(-1))
 
-        #expect(Countdown.resetText(resetsAt: soon.resetsAt, now: now) == "Resets in 4h 59m")
-        #expect(Countdown.resetText(resetsAt: elapsed.resetsAt, now: now) == "Resets now")
+        #expect(Countdown.resetText(for: soon, now: now) == "Resets in 4h 59m")
+        #expect(Countdown.resetText(for: elapsed, now: now) == "Resets now")
     }
 
     @Test func otherWindowKindRoundTripsLabel() {

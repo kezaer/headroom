@@ -15,6 +15,7 @@ struct iCloudSnapshotSyncTests {
 
         #expect(store.keys == [iCloudSnapshotSync.snapshotKey])
         #expect(sync.read() == .snapshot(envelope))
+        #expect(store.synchronizeCount == 0)
     }
 
     @Test func readPrefersNewestLocalOrRemoteSnapshot() throws {
@@ -26,19 +27,23 @@ struct iCloudSnapshotSyncTests {
 
         #expect(sync.read() == .snapshot(local))
 
-        let newerRemote = syncedEnvelope(publishedAt: Date(timeIntervalSince1970: 30), sourceID: "remote")
+        let newerRemote = syncedEnvelope(
+            publishedAt: Date(timeIntervalSince1970: 30),
+            sourceID: "remote",
+            generatedAt: generatedAt.addingTimeInterval(1)
+        )
         try store.seed(newerRemote)
         #expect(sync.read() == .snapshot(newerRemote))
     }
 
-    @Test func equalTimestampsResolveDeterministicallyBySourceID() throws {
+    @Test func equalSnapshotGenerationKeepsLocalRegardlessOfPublicationMetadata() throws {
         let store = MemoryiCloudKeyValueStore()
-        let local = syncedEnvelope(publishedAt: publishedAt, sourceID: "a")
-        let remote = syncedEnvelope(publishedAt: publishedAt, sourceID: "b")
+        let local = syncedEnvelope(publishedAt: Date(timeIntervalSince1970: 10), sourceID: "a")
+        let remote = syncedEnvelope(publishedAt: Date(timeIntervalSince1970: 20), sourceID: "b")
         try store.seed(remote)
         let sync = iCloudSnapshotSync(store: store, localEnvelope: { local })
 
-        #expect(sync.read() == .snapshot(remote))
+        #expect(sync.read() == .snapshot(local))
     }
 
     @Test func unavailableStoreReturnsUnavailableAndThrowsOnPublish() {
@@ -100,13 +105,14 @@ struct iCloudSnapshotSyncTests {
 
     private func syncedEnvelope(
         publishedAt: Date? = nil,
-        sourceID: String = "mac"
+        sourceID: String = "mac",
+        generatedAt: Date? = nil
     ) -> SyncedWidgetSnapshotEnvelope {
         SyncedWidgetSnapshotEnvelope(
             publishedAt: publishedAt ?? self.publishedAt,
             sourceID: sourceID,
             sourcePlatform: .macOS,
-            snapshot: .disabled(generatedAt: generatedAt)
+            snapshot: .disabled(generatedAt: generatedAt ?? self.generatedAt)
         )
     }
 }
@@ -115,6 +121,7 @@ final class MemoryiCloudKeyValueStore: iCloudKeyValueSyncing, @unchecked Sendabl
     private let lock = NSLock()
     private var storage: [String: Data] = [:]
     var shouldFailWrites = false
+    private(set) var synchronizeCount = 0
 
     var keys: [String] { lock.withLock { storage.keys.sorted() } }
 
@@ -131,7 +138,10 @@ final class MemoryiCloudKeyValueStore: iCloudKeyValueSyncing, @unchecked Sendabl
     }
 
     @discardableResult func synchronize() -> Bool {
-        lock.withLock { !shouldFailWrites }
+        lock.withLock {
+            synchronizeCount += 1
+            return !shouldFailWrites
+        }
     }
 
     func seed(_ envelope: SyncedWidgetSnapshotEnvelope) throws {

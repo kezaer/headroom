@@ -67,7 +67,7 @@ struct UsageBarView: View {
     private var resetText: String? {
         window.freshness.isUnavailable
             ? nil
-            : Countdown.resetText(resetsAt: window.resetsAt, now: now)
+            : Countdown.resetText(for: window, now: now)
     }
 
     private var stateText: String? {

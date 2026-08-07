@@ -63,7 +63,7 @@ public struct GrokProvider: UsageProvider {
         let period = config.currentPeriod
         let start = DateParsing.iso8601(period?.start ?? config.billingPeriodStart)
         guard let end = DateParsing.iso8601(period?.end ?? config.billingPeriodEnd) else {
-            // `UsageWindow.resetsAt` is intentionally non-optional. Do not manufacture a
+            // Scheduled reset evidence requires a genuine date. Do not manufacture a
             // sentinel when the source stops providing a real period bound.
             return nil
         }

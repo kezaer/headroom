@@ -56,15 +56,12 @@ public enum MirrorPresentation {
         if window.freshness.isUnavailable {
             return "Unavailable"
         }
-        if let resetLabel = window.resetLabel, !resetLabel.isEmpty {
-            return resetLabel
-        }
-
-        let countdown = Countdown.string(to: window.resetsAt, now: now)
-        if countdown == "resets now" {
-            return "Resets now"
-        }
-        return "Resets in \(countdown)"
+        return Countdown.resetText(
+            schedule: window.resetSchedule,
+            utilization: window.utilization,
+            isLive: window.freshness.isLive,
+            now: now
+        )
     }
 
     public static func windowStateText(for window: WidgetWindowSummary) -> String? {

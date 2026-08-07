@@ -246,10 +246,13 @@ public struct HeadroomWidgetUsageMeter: View {
     private var resetText: String? {
         guard let window, showsResetInline else { return nil }
         if window.freshness.isUnavailable { return "Unavailable" }
-        if let label = window.resetLabel { return label }
         guard let now else { return nil }
-        if window.resetsAt <= now { return "Resets now" }
-        return "Resets in \(Countdown.string(to: window.resetsAt, now: now))"
+        return Countdown.resetText(
+            schedule: window.resetSchedule,
+            utilization: window.utilization,
+            isLive: window.freshness.isLive,
+            now: now
+        )
     }
 
     private var accessibilityValue: String {

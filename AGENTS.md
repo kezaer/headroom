@@ -107,8 +107,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   new behavior behind a seam and test it the same way.
 - **Failures are the typed `FailureReason` enum, never interpolated errors** (no token/PII
   leakage). Providers never throw — they return a stale snapshot (`.stale(for:reason:)`).
-- **Reset times are shown verbatim** via `UsageWindow.resetLabel` when the source provides
-  text (Claude); Codex uses a computed countdown from `resetsAt`.
+- **Reset times use the shared semantic formatter** from `UsageWindow.resetSchedule` on
+  every surface. Source labels and valid IANA zones are non-visible provenance only.
 - Comments cite plan/decision anchors (e.g. `KTD7`, `R12`) as WHY notes — keep those; drop
   comments that just narrate WHAT the next line does.
 - Don't commit build artifacts (`.build/`, `Headroom.app/`) — already gitignored.
@@ -171,7 +171,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   the CLI billing HTTP path (some CLI versions return JSON-RPC `-32601` for the method).
   Both hit the same free status method. The source model requires a genuine period end;
   if it's absent Headroom fails safe to a transient stale snapshot because
-  `UsageWindow.resetsAt` is non-optional and inventing a reset would violate R4. Decode
+  `UsageWindow.resetSchedule` must contain genuine scheduled evidence rather than an
+  invented deadline. Decode
   preferred+fallback fields (schema migrated recently, deprecated cent fields) — don't
   "fix" the parser when the source changed. `GROK_HOME` isolation is verified the same way
   as Claude/Codex; re-diagnose with `--probe-grok`.

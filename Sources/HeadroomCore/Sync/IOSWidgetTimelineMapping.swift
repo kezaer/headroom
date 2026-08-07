@@ -40,8 +40,8 @@ public enum IOSWidgetSnapshotState: Equatable, Sendable {
     }
 
     /// Newest-valid-snapshot wins. When both the local cache and the iCloud read carry
-    /// a snapshot, the one with the newer `generatedAt` is shown (ties go to iCloud, the
-    /// published source of truth) so a stale local cache can never mask a fresher sync —
+    /// a snapshot, the one with the newer `generatedAt` is shown (ties stay local) so a
+    /// stale local cache can never mask a fresher sync —
     /// or vice-versa. When only one side has a snapshot it is used, so a missing/corrupt
     /// iCloud read never hides usable cached content. Only when neither side has a
     /// snapshot do we surface the most actionable setup/wait state.
@@ -53,12 +53,15 @@ public enum IOSWidgetSnapshotState: Equatable, Sendable {
         if let demoEnvelope {
             return IOSWidgetResolution(state: .demo(demoEnvelope), origin: .demo)
         }
+        if cacheRead == .incompatibleSchema || syncRead == .incompatibleSchema {
+            return IOSWidgetResolution(state: .incompatibleSchema, origin: nil)
+        }
 
         let cacheSnapshot = cacheRead.envelope
         let syncSnapshot = syncRead?.envelope?.snapshot
 
         if let cacheSnapshot, let syncSnapshot {
-            let syncWins = syncSnapshot.generatedAt >= cacheSnapshot.generatedAt
+            let syncWins = syncSnapshot.generatedAt > cacheSnapshot.generatedAt
             let winner = syncWins ? syncSnapshot : cacheSnapshot
             return IOSWidgetResolution(state: contentState(for: winner), origin: syncWins ? .sync : .cache)
         }
@@ -84,6 +87,8 @@ public enum IOSWidgetSnapshotState: Equatable, Sendable {
             return .setupNeeded
         case .corrupt:
             return .corrupt
+        case .incompatibleSchema:
+            return .incompatibleSchema
         case .empty, .snapshot:
             break
         }

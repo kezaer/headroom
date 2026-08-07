@@ -63,6 +63,17 @@ official `claude` CLI's `/usage` panel instead.
   mock source (fast, deterministic). The real `ClaudeUsageCLIProbe` is verified manually
   via `--probe-claude`; a machine-dependent integration test would need the CLI logged in.
 
+## Grok/Cursor executable locator characterization
+
+- **Characterize before migrating either provider to the refreshable generic locator.** Claude
+  now revalidates persisted executable hints and rediscovers path changes without relaunching.
+  Grok and Cursor still use their existing executable-resolution paths. Before sharing Claude's
+  locator, capture sanitized behavior for native, Homebrew, and version-manager installs; launch
+  races; missing versus inaccessible candidates; Finder's sparse `PATH`; and each provider's
+  account-home isolation rules. Preserve Grok's ACP/HTTP transport boundary and Cursor's guarded
+  PTY input gates. This follow-up is characterization only until those provider-specific fixtures
+  and a signed installed-app matrix exist.
+
 ## Reliability (carried from earlier review)
 
 - **No backoff on repeated failures.** Both providers retry every cycle at the fixed

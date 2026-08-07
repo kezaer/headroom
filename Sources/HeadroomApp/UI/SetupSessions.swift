@@ -37,16 +37,28 @@ enum SetupSessions {
     private struct PreparedScript: Sendable {
         let scriptURL: URL
         let completionMarker: SetupCompletionMarker
+        let manualCommand: String
     }
 
     private static var coordinator: SetupSessionCoordinator?
     private static var preparedScripts: [AccountKey: PreparedScript] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
+    private static var claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
 
-    static func configure(store: UsageStore) {
+    static func configure(
+        store: UsageStore,
+        claudeExecutableLocator: any CLIExecutableLocating
+    ) {
+        self.claudeExecutableLocator = claudeExecutableLocator
         let coordinator = SetupSessionCoordinator(
-            prepare: { account, mode in await prepareHandoff(for: account, mode: mode) },
+            prepare: { account, mode in
+                await prepareHandoff(
+                    for: account,
+                    mode: mode,
+                    claudeExecutableLocator: claudeExecutableLocator
+                )
+            },
             open: { handoff in openPreparedHandoff(handoff) },
             discard: { handoff in await discardPreparedHandoff(handoff) },
             accountExists: { key in
@@ -112,7 +124,7 @@ enum SetupSessions {
                 CodexSetupSession.openSetup(for: account, onRetry: onRetry)
             }
         case .copyManualCommand(let mode):
-            _ = copyManualCommand(for: account.key, mode: mode)
+            Task { _ = await copyManualCommand(for: account.key, mode: mode) }
         case .checkNow:
             onRetry()
         }
@@ -192,6 +204,9 @@ enum SetupSessions {
             return "Sign-in wasn't confirmed. Check now or reopen the official CLI."
         case .provider(let outcome):
             return outcome.message
+        case .providerCapability(let capability):
+            return capability.recoveryPresentation?.status
+                ?? "Claude Code availability couldn't be confirmed. Try again."
         }
     }
 
@@ -247,9 +262,7 @@ enum SetupSessions {
         for account: ProviderAccount,
         mode: SetupHandoffMode,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
-        resolveClaudeExecutable: @escaping @Sendable () -> String? = {
-            ClaudeUsageCLIProbe.resolveClaudePath()
-        }
+        claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
     ) async -> SetupPreparationResult {
         let accountCompletionMarker = completionMarker(
             for: account,
@@ -276,10 +289,20 @@ enum SetupSessions {
                     .appendingPathComponent("\(UUID().uuidString).command")
                 let completionMarker = accountCompletionMarker
                 let script: String
+                let manualCommand: String
                 switch account.providerID {
                 case .claude:
-                    let executable = resolveClaudeExecutable()
-                    guard executable != nil else { return .failure(.executableMissing) }
+                    let location = await claudeExecutableLocator.locate()
+                    guard let executable = location.path else {
+                        switch location {
+                        case .confirmedAbsent:
+                            return .failure(.providerCapability(.confirmedAbsent))
+                        case .inconclusive(let issue):
+                            return .failure(.providerCapability(.inconclusive(issue)))
+                        case .available:
+                            return .failure(.stagingFailed)
+                        }
+                    }
                     let configuration = ProviderAccountConfiguration.make(
                         for: account,
                         builtInClaudeWorkspace: builtInClaudeWorkspace
@@ -298,6 +321,7 @@ enum SetupSessions {
                         completionMarker: completionMarker
                     )
                     script = ClaudeSetupCommand.script(for: descriptor)
+                    manualCommand = ClaudeSetupCommand.manualCommand(for: descriptor)
                 case .codex:
                     let executable = CodexCLI.resolveExecutable()
                     guard executable != nil else { return .failure(.executableMissing) }
@@ -307,6 +331,10 @@ enum SetupSessions {
                         codexHome: configuration.codexHomeDirectory?.path,
                         mode: mode,
                         completionMarker: completionMarker
+                    )
+                    manualCommand = CodexCLI.accountLoginCommand(
+                        codexHome: configuration.codexHomeDirectory?.path,
+                        mode: mode
                     )
                 case .grok:
                     let executable = GrokCLI.resolveExecutable()
@@ -318,6 +346,10 @@ enum SetupSessions {
                         mode: mode,
                         completionMarker: completionMarker
                     )
+                    manualCommand = GrokCLI.accountLoginCommand(
+                        grokHome: configuration.grokHomeDirectory?.path,
+                        mode: mode
+                    )
                 case .cursor:
                     let executable = CursorCLI.resolveExecutable()
                     guard executable != nil else { return .failure(.executableMissing) }
@@ -325,12 +357,17 @@ enum SetupSessions {
                         executablePath: executable,
                         completionMarker: completionMarker
                     )
+                    manualCommand = CursorCLI.loginCommand
                 default:
                     return .failure(.stagingFailed)
                 }
                 try script.write(to: scriptURL, atomically: true, encoding: .utf8)
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
-                return .success(PreparedScript(scriptURL: scriptURL, completionMarker: completionMarker))
+                return .success(PreparedScript(
+                    scriptURL: scriptURL,
+                    completionMarker: completionMarker,
+                    manualCommand: manualCommand
+                ))
             } catch {
                 return .failure(.stagingFailed)
             }
@@ -358,7 +395,7 @@ enum SetupSessions {
         guard NSWorkspace.shared.open(prepared.scriptURL) else {
             AccountStorage.clearPreparedSetupCompletionMarker(prepared.completionMarker)
             try? FileManager.default.removeItem(at: prepared.scriptURL)
-            return copyManualCommand(for: handoff.accountKey, mode: handoff.mode)
+            return copyCommand(prepared.manualCommand)
                 ? .failure(.terminalRejected)
                 : .failure(.pasteboardFailed)
         }
@@ -409,7 +446,7 @@ enum SetupSessions {
     private static func copyManualCommand(
         for key: AccountKey,
         mode: SetupHandoffMode
-    ) -> Bool {
+    ) async -> Bool {
         let account = ProviderAccount(
             id: key.accountID,
             providerID: key.providerID,
@@ -422,9 +459,10 @@ enum SetupSessions {
             let configuration = ProviderAccountConfiguration.make(for: account)
             guard let workspace = configuration.claudeWorkspaceDirectory else { return false }
             _ = try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)
+            let executable = await claudeExecutableLocator.locate().path
             command = ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
                 accountKey: key,
-                executablePath: ClaudeUsageCLIProbe.resolveClaudePath(),
+                executablePath: executable,
                 loginPath: "",
                 workspaceDirectory: workspace.path,
                 configDirectory: configuration.claudeConfigDirectory?.path
@@ -444,6 +482,10 @@ enum SetupSessions {
         default:
             return false
         }
+        return copyCommand(command)
+    }
+
+    private static func copyCommand(_ command: String) -> Bool {
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(command, forType: .string)
     }

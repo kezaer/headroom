@@ -59,7 +59,14 @@ public enum WidgetSnapshotProjector {
             displayName: displayName,
             planLabel: snapshot.planLabel,
             freshness: freshness(snapshot.freshness),
-            windows: snapshot.windows.compactMap { windowSummary($0, providerID: id, showsCodexSparkCounters: showsCodexSparkCounters) },
+            windows: snapshot.windows.compactMap {
+                windowSummary(
+                    $0,
+                    providerID: id,
+                    capturedAt: snapshot.capturedAt,
+                    showsCodexSparkCounters: showsCodexSparkCounters
+                )
+            },
             renewalDate: renewalDate
         )
     }
@@ -91,6 +98,7 @@ public enum WidgetSnapshotProjector {
     private static func windowSummary(
         _ window: UsageWindow,
         providerID: ProviderID,
+        capturedAt: Date?,
         showsCodexSparkCounters: Bool
     ) -> WidgetWindowSummary? {
         guard let kind = widgetKind(window.kind, providerID: providerID, showsCodexSparkCounters: showsCodexSparkCounters) else { return nil }
@@ -98,8 +106,11 @@ public enum WidgetSnapshotProjector {
             kind: kind,
             label: window.kind.shortLabel,
             percentRemaining: window.percentRemaining,
-            resetsAt: window.resetsAt,
+            utilization: window.utilization,
+            resetSchedule: window.resetSchedule,
             resetLabel: window.resetLabel,
+            resetTimeZoneIdentifier: window.resetTimeZoneIdentifier,
+            observedAt: window.observedAt ?? window.freshness.observedAt ?? capturedAt,
             severity: widgetSeverity(window.severity),
             freshness: widgetFreshness(window.freshness),
             billingPeriodDuration: billingPeriodDuration(window.kind)

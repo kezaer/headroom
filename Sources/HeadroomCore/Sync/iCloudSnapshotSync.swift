@@ -42,7 +42,6 @@ public struct iCloudSnapshotSync: Sendable {
 
     public func read() -> iCloudSnapshotSyncRead {
         guard let store else { return .unavailable }
-        _ = store.synchronize()
         let remote = SyncedWidgetSnapshotCodec.decode(store.data(forKey: key))
         return read(from: SyncedWidgetSnapshotResolution.newestValid(local: localEnvelope(), remote: remote))
     }
@@ -50,7 +49,7 @@ public struct iCloudSnapshotSync: Sendable {
     public func publish(_ envelope: SyncedWidgetSnapshotEnvelope) throws {
         guard let store else { throw iCloudSnapshotSyncError.unavailable }
         let data = try SyncedWidgetSnapshotCodec.encode(envelope)
-        guard store.set(data, forKey: key), store.synchronize() else {
+        guard store.set(data, forKey: key) else {
             throw iCloudSnapshotSyncError.writeFailed
         }
     }

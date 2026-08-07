@@ -118,6 +118,28 @@ struct WidgetSnapshotCacheTests {
         #expect(cache.read() == .snapshot(envelope))
     }
 
+    @Test func futurePrimaryFileDoesNotFallBackOrGetOverwritten() throws {
+        let primary = freshFileURL()
+        let fallback = siblingFileURL()
+        let current = WidgetSnapshotEnvelope.disabled(generatedAt: Date(timeIntervalSince1970: 1_000))
+        var futureObject = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(current)) as? [String: Any]
+        )
+        futureObject["schemaVersion"] = WidgetSnapshotEnvelope.schemaVersion + 1
+        let futureData = try JSONSerialization.data(withJSONObject: futureObject)
+        try FileManager.default.createDirectory(at: primary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: fallback.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try futureData.write(to: primary)
+        try JSONEncoder().encode(current).write(to: fallback)
+        let cache = WidgetSnapshotCache(defaults: nil, fileURL: primary, fallbackFileURLs: [fallback])
+
+        #expect(cache.read() == .incompatibleSchema)
+        #expect(throws: WidgetSnapshotCacheError.incompatibleSchema) {
+            try cache.write(current)
+        }
+        #expect(try Data(contentsOf: primary) == futureData)
+    }
+
     @Test func fileCacheFallsBackToDefaultsWhenFileIsMissing() throws {
         let defaults = freshDefaults()
         let envelope = WidgetSnapshotEnvelope.disabled(generatedAt: Date(timeIntervalSince1970: 1_000))

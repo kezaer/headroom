@@ -4,6 +4,7 @@ public enum WidgetSnapshotCacheRead: Equatable, Sendable {
     case unavailable
     case empty
     case corrupt
+    case incompatibleSchema
     case snapshot(WidgetSnapshotEnvelope)
 
     public var envelope: WidgetSnapshotEnvelope? {
@@ -70,10 +71,17 @@ public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thre
     public func read() -> WidgetSnapshotCacheRead {
         var sawFileReadFailure = false
         for fileURL in fileURLs {
-            guard FileManager.default.fileExists(atPath: fileURL.path) else { continue }
             do {
                 let data = try Data(contentsOf: fileURL)
-                return .snapshot(try decoder.decode(WidgetSnapshotEnvelope.self, from: data))
+                switch decode(data) {
+                case .snapshot(let envelope): return .snapshot(envelope)
+                case .incompatibleSchema: return .incompatibleSchema
+                case .corrupt, .unavailable, .empty:
+                    sawFileReadFailure = true
+                    continue
+                }
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                continue
             } catch {
                 sawFileReadFailure = true
                 continue
@@ -96,14 +104,13 @@ public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thre
         guard let data = defaults.data(forKey: Self.key) else {
             return fallback == .unavailable ? .empty : fallback
         }
-        do {
-            return .snapshot(try decoder.decode(WidgetSnapshotEnvelope.self, from: data))
-        } catch {
-            return .corrupt
-        }
+        return decode(data)
     }
 
     public func write(_ envelope: WidgetSnapshotEnvelope) throws {
+        guard !containsIncompatiblePayload else {
+            throw WidgetSnapshotCacheError.incompatibleSchema
+        }
         let data = try encoder.encode(envelope)
         var didWrite = false
         var lastFileWriteFailed = false
@@ -136,6 +143,36 @@ public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thre
         Self.unique([fileURL] + fallbackFileURLs.map(Optional.some))
     }
 
+    private var containsIncompatiblePayload: Bool {
+        for fileURL in fileURLs {
+            guard let data = try? Data(contentsOf: fileURL) else { continue }
+            if hasIncompatibleSchema(data) { return true }
+        }
+        if let data = defaults?.data(forKey: Self.key), hasIncompatibleSchema(data) {
+            return true
+        }
+        return false
+    }
+
+    private func hasIncompatibleSchema(_ data: Data) -> Bool {
+        guard let header = try? decoder.decode(WidgetSnapshotHeader.self, from: data) else {
+            return false
+        }
+        return !WidgetSnapshotEnvelope.supports(schemaVersion: header.schemaVersion)
+    }
+
+    private func decode(_ data: Data) -> WidgetSnapshotCacheRead {
+        do {
+            let header = try decoder.decode(WidgetSnapshotHeader.self, from: data)
+            guard WidgetSnapshotEnvelope.supports(schemaVersion: header.schemaVersion) else {
+                return .incompatibleSchema
+            }
+            return .snapshot(try decoder.decode(WidgetSnapshotEnvelope.self, from: data))
+        } catch {
+            return .corrupt
+        }
+    }
+
     private static func unique(_ urls: [URL?]) -> [URL] {
         var seen: Set<String> = []
         var result: [URL] = []
@@ -151,4 +188,9 @@ public struct WidgetSnapshotCache: @unchecked Sendable { // UserDefaults is thre
 public enum WidgetSnapshotCacheError: Error, Equatable {
     case unavailable
     case writeFailed
+    case incompatibleSchema
+}
+
+private struct WidgetSnapshotHeader: Decodable {
+    let schemaVersion: Int
 }

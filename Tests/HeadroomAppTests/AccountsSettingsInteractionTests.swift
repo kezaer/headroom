@@ -34,7 +34,7 @@ struct AccountsSettingsInteractionTests {
             for: .builtIn(for: .claude),
             mode: .standard,
             builtInClaudeWorkspace: workspace,
-            resolveClaudeExecutable: { "/usr/bin/true" }
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true")
         )
 
         guard case .success(let handoff) = result else {
@@ -45,6 +45,21 @@ struct AccountsSettingsInteractionTests {
         var isDirectory: ObjCBool = false
         #expect(FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory))
         #expect(isDirectory.boolValue)
+    }
+
+    @Test func guidedSetupKeepsInconclusiveClaudeDiscoveryRetryable() async {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-setup-inconclusive-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let result = await SetupSessions.prepareHandoff(
+            for: .builtIn(for: .claude),
+            mode: .standard,
+            builtInClaudeWorkspace: workspace,
+            claudeExecutableLocator: FixedExecutableLocator(location: .inconclusive(.shellTimeout))
+        )
+
+        #expect(result == .failure(.providerCapability(.inconclusive(.shellTimeout))))
     }
 
     @Test func addFlowReachesPreparingWaitingAndLiveForEachProviderWithoutMountedViews() async {
@@ -232,6 +247,24 @@ struct AccountsSettingsInteractionTests {
     }
 }
 
+private struct FixedExecutableLocator: CLIExecutableLocating {
+    let location: CLIExecutableLocation
+
+    init(path: String) {
+        self.location = .available(path: path, source: .memoryHint)
+    }
+
+    init(location: CLIExecutableLocation) {
+        self.location = location
+    }
+
+    func locate(forceRefresh: Bool) async -> CLIExecutableLocation {
+        location
+    }
+
+    func invalidate(path: String, reason: CLIExecutableInvalidationReason) async {}
+}
+
 @MainActor
 private struct InteractionFixture {
     let store: UsageStore
@@ -318,5 +351,22 @@ private final class AppSetupHarness {
         #expect(ProviderStyle.svgResourceName(for: .grok, scheme: .dark) == "grok-dark")
         #expect(ProviderStyle.svgResourceName(for: .cursor, scheme: .light) == "cursor-light")
         #expect(ProviderStyle.svgResourceName(for: .cursor, scheme: .dark) == "cursor-dark")
+    }
+}
+
+@Suite struct ProviderCardCapabilityTests {
+    @MainActor @Test func activeSetupSessionTakesPrecedenceOverCapabilityRecovery() {
+        #expect(ProviderCardView.capabilityRecoveryPresentation(
+            state: .inconclusive(.shellTimeout),
+            hasActiveSetupSession: false
+        ) != nil)
+        #expect(ProviderCardView.capabilityRecoveryPresentation(
+            state: .inconclusive(.shellTimeout),
+            hasActiveSetupSession: true
+        ) == nil)
+        #expect(ProviderCardView.capabilityRecoveryPresentation(
+            state: .available,
+            hasActiveSetupSession: false
+        ) == nil)
     }
 }

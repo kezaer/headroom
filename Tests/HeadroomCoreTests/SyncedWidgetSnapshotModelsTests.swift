@@ -16,22 +16,28 @@ struct SyncedWidgetSnapshotModelsTests {
     }
 
     @Test func currentSnapshotSchemaRejectsFreshnessBlindClientsButAcceptsLegacyPayloads() throws {
-        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 3)
         #expect(SyncedWidgetSnapshotEnvelope.schemaVersion == 1)
 
-        let legacySnapshot = WidgetSnapshotEnvelope(
-            schemaVersion: 1,
-            generatedAt: generatedAt,
-            status: .enabled,
-            providers: liveSnapshot.providers
-        )
-        let envelope = makeSyncedEnvelope(snapshot: legacySnapshot)
+        let decoded = SyncedWidgetSnapshotCodec.decode(try legacyData(schemaVersion: 1))
 
-        let decoded = SyncedWidgetSnapshotCodec.decode(
-            try SyncedWidgetSnapshotCodec.encode(envelope)
-        )
+        #expect(decoded.envelope?.snapshot.schemaVersion == 1)
+        #expect(decoded.envelope?.snapshot.providers.first?.windows.first?.resetSchedule == .scheduled(reset))
+        #expect(decoded.envelope?.snapshot.providers.first?.windows.first?.utilization == nil)
+    }
 
-        #expect(decoded == .snapshot(envelope))
+    @Test func legacyWidgetSentinelsMigrateWithoutInventingResetEvidence() throws {
+        for schemaVersion in [1, 2] {
+            let decoded = SyncedWidgetSnapshotCodec.decode(
+                try legacyData(schemaVersion: schemaVersion, usesSentinelReset: true)
+            )
+            let window = try #require(decoded.envelope?.snapshot.providers.first?.windows.first)
+
+            #expect(window.resetSchedule == .unresolved(.legacyUnknown))
+            #expect(window.utilization == nil)
+            #expect(window.observedAt == generatedAt)
+            #expect(MirrorPresentation.resetText(for: window, now: generatedAt) == "Reset info unavailable")
+        }
     }
 
     @Test func futureSnapshotSchemaIsIncompatible() throws {
@@ -65,7 +71,7 @@ struct SyncedWidgetSnapshotModelsTests {
     }
 
     @Test func billingPeriodUsesAdditiveV2Discriminator() throws {
-        #expect(WidgetSnapshotEnvelope.schemaVersion == 2)
+        #expect(WidgetSnapshotEnvelope.schemaVersion == 3)
         let window = WidgetWindowSummary(
             kind: .other("Monthly"),
             label: "Monthly",
@@ -91,6 +97,31 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(!legacy.isBillingPeriod)
         #expect(!legacy.isSubscriptionWindow)
         #expect(legacy.freshness == .stale(observedAt: generatedAt))
+    }
+
+    @Test func unresolvedV3WindowEncodesNoDeadlineAndPreservesExactEvidence() throws {
+        let observedAt = generatedAt.addingTimeInterval(-60)
+        let window = WidgetWindowSummary(
+            kind: .fiveHour,
+            label: "5h",
+            percentRemaining: 100,
+            utilization: 0,
+            resetSchedule: .unresolved(.absent),
+            resetLabel: nil,
+            observedAt: observedAt,
+            severity: .healthy
+        )
+
+        let data = try JSONEncoder().encode(window)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["resetKind"] as? String == "unresolved")
+        #expect(object["resetReason"] as? String == "absent")
+        #expect(object["resetDeadline"] == nil)
+
+        let decoded = try JSONDecoder().decode(WidgetWindowSummary.self, from: data)
+        #expect(decoded.resetSchedule == .unresolved(.absent))
+        #expect(decoded.utilization == 0)
+        #expect(decoded.observedAt == observedAt)
     }
 
     @Test func unsupportedInnerSchemaWinsOverMalformedPayload() {
@@ -136,15 +167,7 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(decoded.envelope?.snapshot.widgetProviderSelection == ["claude"])
         #expect(decoded.envelope?.snapshot.widgetProviders.map(\.id) == ["claude"])
 
-        let encoded = try SyncedWidgetSnapshotCodec.encode(makeSyncedEnvelope(snapshot: selected))
-        var legacyObject = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        var legacySnapshot = try #require(legacyObject["snapshot"] as? [String: Any])
-        legacySnapshot.removeValue(forKey: "widgetProviderSelection")
-        legacySnapshot["schemaVersion"] = 2
-        legacyObject["snapshot"] = legacySnapshot
-        let legacy = SyncedWidgetSnapshotCodec.decode(
-            try JSONSerialization.data(withJSONObject: legacyObject)
-        )
+        let legacy = SyncedWidgetSnapshotCodec.decode(try legacyData(schemaVersion: 2))
 
         #expect(legacy.envelope?.snapshot.widgetProviderSelection == nil)
         #expect(legacy.envelope?.snapshot.widgetProviders.map(\.id) == ["claude"])
@@ -278,9 +301,21 @@ struct SyncedWidgetSnapshotModelsTests {
         #expect(SyncedWidgetSnapshotResolution.newestValid(local: local, remote: .corrupt) == .snapshot(local))
     }
 
+    @Test func newestValidSurfacesIncompatibleRemoteWithoutFallingBack() {
+        let local = makeSyncedEnvelope(snapshot: liveSnapshot)
+
+        #expect(
+            SyncedWidgetSnapshotResolution.newestValid(local: local, remote: .incompatibleSchema)
+                == .incompatibleSchema
+        )
+    }
+
     @Test func newestValidUsesRemoteWhenNewer() {
         let local = makeSyncedEnvelope(publishedAt: Date(timeIntervalSince1970: 10), snapshot: liveSnapshot)
-        let newer = makeSyncedEnvelope(publishedAt: Date(timeIntervalSince1970: 11), snapshot: .disabled(generatedAt: generatedAt))
+        let newer = makeSyncedEnvelope(
+            publishedAt: Date(timeIntervalSince1970: 11),
+            snapshot: .disabled(generatedAt: generatedAt.addingTimeInterval(1))
+        )
 
         #expect(SyncedWidgetSnapshotResolution.newestValid(local: local, remote: .snapshot(newer)) == .snapshot(newer))
     }
@@ -342,5 +377,32 @@ struct SyncedWidgetSnapshotModelsTests {
             sourcePlatform: .macOS,
             snapshot: snapshot
         )
+    }
+
+    private func legacyData(schemaVersion: Int, usesSentinelReset: Bool = false) throws -> Data {
+        let encoded = try SyncedWidgetSnapshotCodec.encode(makeSyncedEnvelope(snapshot: liveSnapshot))
+        var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var snapshot = try #require(root["snapshot"] as? [String: Any])
+        snapshot["schemaVersion"] = schemaVersion
+        snapshot.removeValue(forKey: "widgetProviderSelection")
+        var providers = try #require(snapshot["providers"] as? [[String: Any]])
+        for providerIndex in providers.indices {
+            var windows = try #require(providers[providerIndex]["windows"] as? [[String: Any]])
+            for windowIndex in windows.indices {
+                windows[windowIndex]["resetsAt"] = usesSentinelReset
+                    ? snapshot["generatedAt"]
+                    : windows[windowIndex]["resetDeadline"]
+                windows[windowIndex].removeValue(forKey: "resetKind")
+                windows[windowIndex].removeValue(forKey: "resetDeadline")
+                windows[windowIndex].removeValue(forKey: "resetReason")
+                windows[windowIndex].removeValue(forKey: "utilization")
+                windows[windowIndex].removeValue(forKey: "resetTimeZoneIdentifier")
+                windows[windowIndex].removeValue(forKey: "observedAt")
+            }
+            providers[providerIndex]["windows"] = windows
+        }
+        snapshot["providers"] = providers
+        root["snapshot"] = snapshot
+        return try JSONSerialization.data(withJSONObject: root)
     }
 }

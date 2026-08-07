@@ -50,7 +50,32 @@ struct IOSWidgetTimelineMappingTests {
 
     @Test func corruptAndIncompatibleStatesAreTyped() {
         #expect(IOSWidgetSnapshotState.from(cacheRead: .corrupt) == .corrupt)
+        #expect(IOSWidgetSnapshotState.from(cacheRead: .incompatibleSchema) == .incompatibleSchema)
         #expect(IOSWidgetSnapshotState.from(cacheRead: .empty, syncRead: .incompatibleSchema) == .incompatibleSchema)
+    }
+
+    @Test func incompatibleLocalSchemaDoesNotFallBackToSyncedContent() {
+        let remote = WidgetSnapshotEnvelope(generatedAt: now, status: .enabled, providers: [])
+
+        #expect(
+            IOSWidgetSnapshotState.from(
+                cacheRead: .incompatibleSchema,
+                syncRead: .snapshot(synced(remote))
+            ) == .incompatibleSchema
+        )
+    }
+
+    @Test func equalGeneratedAtKeepsLocalCache() {
+        let cache = WidgetSnapshotEnvelope(generatedAt: now, status: .enabled, providers: [])
+        let remote = WidgetSnapshotEnvelope.disabled(generatedAt: now)
+
+        let resolution = IOSWidgetSnapshotState.resolve(
+            cacheRead: .snapshot(cache),
+            syncRead: .snapshot(synced(remote))
+        )
+
+        #expect(resolution.state == .content(cache))
+        #expect(resolution.origin == .cache)
     }
 
     @Test func newerRemoteSnapshotWinsOverStaleCache() {
