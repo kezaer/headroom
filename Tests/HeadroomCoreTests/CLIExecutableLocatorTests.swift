@@ -46,6 +46,22 @@ struct CLIExecutableLocatorTests {
         ])
     }
 
+    @Test func invalidatedHintIsInconclusiveForOneCycleThenCanConfirmAbsence() async {
+        let hints = TestExecutableHintStore(["claude": "/moved/claude"])
+        let shell = ShellSearchRecorder(result: .completed(candidates: []))
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: hints,
+            shellSearch: { await shell.search() },
+            validate: { _ in .missing }
+        )
+
+        #expect(await locator.locate() == .inconclusive(.invalidatedHint))
+        #expect(await locator.locate() == .confirmedAbsent)
+        #expect(await shell.count == 2)
+    }
+
     @Test func onlyCompletedSearchWithoutCandidatesConfirmsAbsence() async {
         for result in [
             CLIExecutableShellResult.timedOut,
@@ -76,6 +92,19 @@ struct CLIExecutableLocatorTests {
             validation: ["/opt/homebrew/bin/claude": .missing]
         )
         #expect(await absent.locate() == .confirmedAbsent)
+
+        let nonPathShellCandidate = makeLocator(
+            shellResult: .completed(candidates: ["claude"]),
+            validation: ["claude": .missing]
+        )
+        #expect(await nonPathShellCandidate.locate() == .confirmedAbsent)
+
+        let inaccessibleFallback = makeLocator(
+            shellResult: .completed(candidates: []),
+            fallbackPaths: ["/opt/homebrew/bin/claude"],
+            validation: ["/opt/homebrew/bin/claude": .inaccessible]
+        )
+        #expect(await inaccessibleFallback.locate() == .inconclusive(.inaccessibleCandidate))
     }
 
     @Test func fallbackCanRecoverFromLoginShellFailure() async {

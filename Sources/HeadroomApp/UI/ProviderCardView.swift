@@ -55,10 +55,24 @@ struct ProviderCardView: View {
     private var primaryAccount: ProviderAccount {
         primaryEntry?.account ?? .builtIn(for: providerID)
     }
+    private var hasActiveSetupSession: Bool {
+        entries.contains { SetupSessions.isWaiting(for: $0.account) }
+    }
+
+    static func capabilityRecoveryPresentation(
+        state: ProviderCapabilityState?,
+        hasActiveSetupSession: Bool
+    ) -> ProviderRecoveryPresentation? {
+        guard !hasActiveSetupSession else { return nil }
+        return state?.recoveryPresentation
+    }
 
     var body: some View {
         Group {
-            if let presentation = capabilityStatus?.state.recoveryPresentation {
+            if let presentation = Self.capabilityRecoveryPresentation(
+                   state: capabilityStatus?.state,
+                   hasActiveSetupSession: hasActiveSetupSession
+               ) {
                 capabilityBody(presentation)
             } else if isMultiAccount {
                 multiAccountBody

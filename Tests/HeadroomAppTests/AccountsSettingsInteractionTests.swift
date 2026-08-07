@@ -353,3 +353,20 @@ private final class AppSetupHarness {
         #expect(ProviderStyle.svgResourceName(for: .cursor, scheme: .dark) == "cursor-dark")
     }
 }
+
+@Suite struct ProviderCardCapabilityTests {
+    @MainActor @Test func activeSetupSessionTakesPrecedenceOverCapabilityRecovery() {
+        #expect(ProviderCardView.capabilityRecoveryPresentation(
+            state: .inconclusive(.shellTimeout),
+            hasActiveSetupSession: false
+        ) != nil)
+        #expect(ProviderCardView.capabilityRecoveryPresentation(
+            state: .inconclusive(.shellTimeout),
+            hasActiveSetupSession: true
+        ) == nil)
+        #expect(ProviderCardView.capabilityRecoveryPresentation(
+            state: .available,
+            hasActiveSetupSession: false
+        ) == nil)
+    }
+}

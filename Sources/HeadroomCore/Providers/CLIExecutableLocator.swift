@@ -219,10 +219,20 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
         }
         let ownsCompletion = inFlight?.id == flight.id
         if ownsCompletion { inFlight = nil }
-        if ownsCompletion, case .available(let path, _) = result {
-            cachedPath = path
-            hintStore.setHint(path, for: executableName)
-            pendingInvalidation = nil
+        if ownsCompletion {
+            switch result {
+            case .available(let path, _):
+                cachedPath = path
+                hintStore.setHint(path, for: executableName)
+                pendingInvalidation = nil
+            case .inconclusive(.invalidatedHint), .inconclusive(.launchRace):
+                // The invalidation is a one-cycle stop-loss: it prevents a transient
+                // path change from becoming a false install notice, but a later
+                // complete search is allowed to confirm that the CLI is absent.
+                pendingInvalidation = nil
+            default:
+                break
+            }
         }
         if ownsCompletion { record(result.diagnosticCategory) }
         return result
@@ -251,22 +261,38 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
         validate: Validate,
         priorInvalidation: CLIExecutableDiscoveryIssue?
     ) -> CLIExecutableLocation {
-        var shellHadCandidate = false
+        var shellHadInaccessibleCandidate = false
         switch shell {
         case .completed(let candidates):
-            shellHadCandidate = !candidates.isEmpty
-            if let path = candidates.last(where: { validate($0) == .executable }) {
-                return .available(path: path, source: .loginShell)
+            for path in candidates.reversed() {
+                switch validate(path) {
+                case .executable:
+                    return .available(path: path, source: .loginShell)
+                case .inaccessible:
+                    shellHadInaccessibleCandidate = true
+                case .missing:
+                    break
+                }
             }
         case .timedOut, .spawnFailed, .invalidOutput:
             break
         }
 
-        if let path = fallbackPaths.first(where: { validate($0) == .executable }) {
-            return .available(path: path, source: .fallback)
+        var fallbackHadInaccessibleCandidate = false
+        for path in fallbackPaths {
+            switch validate(path) {
+            case .executable:
+                return .available(path: path, source: .fallback)
+            case .inaccessible:
+                fallbackHadInaccessibleCandidate = true
+            case .missing:
+                break
+            }
         }
 
-        if shellHadCandidate { return .inconclusive(.inaccessibleCandidate) }
+        if shellHadInaccessibleCandidate || fallbackHadInaccessibleCandidate {
+            return .inconclusive(.inaccessibleCandidate)
+        }
         switch shell {
         case .timedOut: return .inconclusive(.shellTimeout)
         case .spawnFailed: return .inconclusive(.shellSpawnFailure)

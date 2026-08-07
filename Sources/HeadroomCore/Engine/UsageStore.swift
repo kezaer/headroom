@@ -346,7 +346,6 @@ public final class UsageStore {
             return .setupActive
         }
         removingAccounts.insert(key)
-        capabilityGenerations[key.providerID, default: 0] &+= 1
         pendingAccountRefreshes.remove(key)
         accountRemovalStates[key] = .removing
         setupCoordinator?.markRemoving(key)
@@ -623,10 +622,10 @@ public final class UsageStore {
                 let notifiesSetup = result.capability == nil || result.capability == .available
                 if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup),
                    let capability = result.capability {
-                    capabilityResults[key.providerID] = mergedCapability(
-                        capabilityResults[key.providerID],
-                        with: capability
-                    )
+                    // Serial CLI lanes are ordered observations. Keep the newest
+                    // provider-wide result so a recovered later account can clear an
+                    // earlier path miss from the same refresh cycle.
+                    capabilityResults[key.providerID] = capability
                 }
             }
             await group.waitForAll()
@@ -772,10 +771,15 @@ public final class UsageStore {
             capabilityGenerations[providerID, default: 0] &+= 1
             let generation = capabilityGenerations[providerID] ?? 0
             cycle[providerID] = generation
-            providerCapabilities[providerID] = ProviderCapabilityStatus(
-                state: .discovering,
-                observedAt: now()
-            )
+            // Keep the last actionable verdict visible during later polls. Only the
+            // first discovery has no prior result to preserve.
+            if providerCapabilities[providerID]?.state == .unknown
+                || providerCapabilities[providerID] == nil {
+                providerCapabilities[providerID] = ProviderCapabilityStatus(
+                    state: .discovering,
+                    observedAt: now()
+                )
+            }
         }
         return cycle
     }
@@ -787,23 +791,6 @@ public final class UsageStore {
     ) {
         guard let generation, capabilityGenerations[providerID] == generation else { return }
         providerCapabilities[providerID] = ProviderCapabilityStatus(state: state, observedAt: now())
-    }
-
-    private func mergedCapability(
-        _ current: ProviderCapabilityState?,
-        with incoming: ProviderCapabilityState
-    ) -> ProviderCapabilityState {
-        guard let current else { return incoming }
-        return capabilityPriority(incoming) > capabilityPriority(current) ? incoming : current
-    }
-
-    private func capabilityPriority(_ state: ProviderCapabilityState) -> Int {
-        switch state {
-        case .unknown, .discovering: 0
-        case .available: 1
-        case .inconclusive: 2
-        case .confirmedAbsent: 3
-        }
     }
 
     private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {

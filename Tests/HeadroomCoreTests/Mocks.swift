@@ -112,6 +112,7 @@ struct CapabilityStubProvider: UsageProvider {
     let displayName: String
     let result: UsageProviderFetchResult
     let reportsProviderCapability = true
+    let pollingLane: ProviderPollingLane = .serial("claude-cli")
 
     func fetchSnapshot() async -> UsageSnapshot { result.snapshot }
     func fetchResult() async -> UsageProviderFetchResult { result }
@@ -122,6 +123,7 @@ final class MutableCapabilityStubProvider: UsageProvider, @unchecked Sendable {
     let accountID: AccountID
     let displayName: String
     let reportsProviderCapability = true
+    let pollingLane: ProviderPollingLane = .serial("claude-cli")
     private let lock = NSLock()
     private var result: UsageProviderFetchResult
 
