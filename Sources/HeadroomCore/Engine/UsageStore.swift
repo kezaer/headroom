@@ -706,7 +706,9 @@ public final class UsageStore {
     }
 
     private func updateContinuityCache(_ snapshot: UsageSnapshot, for key: AccountKey) {
-        if case .stale(let reason) = snapshot.freshness, reason.isPermanent {
+        if case .stale(let reason) = snapshot.freshness,
+           reason.isPermanent,
+           !(key.providerID == .claude && reason.providerSetupOutcome == .claudeCLIMissing) {
             continuityCache?.remove(for: key)
         } else if !snapshot.windows.isEmpty {
             continuityCache?.save(snapshot, for: key)

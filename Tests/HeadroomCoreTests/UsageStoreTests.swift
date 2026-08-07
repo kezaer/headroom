@@ -623,6 +623,46 @@ struct UsageStoreTests {
         #expect(relaunched.snapshot(for: key).freshness == .pending)
     }
 
+    @Test func claudeCLIMissingRetainsPersistedContinuityBeforeRelaunch() async {
+        let capture = Date(timeIntervalSince1970: 2_000_000)
+        let refresh = capture.addingTimeInterval(300)
+        let defaults = freshContinuityDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let cache = UsageContinuityCache(defaults: defaults)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 25, resetsAt: .distantFuture),
+            ], at: capture),
+            for: key
+        )
+        let unavailable = StubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .stale(for: .claude, reason: .providerSetup(.claudeCLIMissing))
+        )
+        let store = UsageStore(
+            providers: [unavailable],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { refresh }
+        )
+
+        await store.refreshAll()
+
+        let retained = cache.load()[key]
+        #expect(retained?.capturedAt == capture)
+        #expect(retained?.windows.first?.freshness == .stale(observedAt: capture))
+
+        let relaunched = UsageStore(
+            providers: [unavailable],
+            preferences: freshPreferences(),
+            continuityCache: cache,
+            now: { refresh }
+        )
+        #expect(relaunched.snapshot(for: key).capturedAt == capture)
+        #expect(relaunched.snapshot(for: key).windows.first?.freshness == .stale(observedAt: capture))
+    }
+
     @Test func relaunchMarksExpiredCachedClaudeSubLimitUnavailable() {
         let restorationDate = Date(timeIntervalSince1970: 2_000_000)
         let capturedAt = restorationDate.addingTimeInterval(-3_600)
