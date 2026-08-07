@@ -228,6 +228,38 @@ struct ClaudeProviderTests {
         #expect(reason.providerSetupOutcome == .claudeTransientCapture)
     }
 
+    @Test func probeInvalidatesLaunchRaceAndRetriesWithRediscoveredExecutable() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-claude-retry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replacement = directory.appendingPathComponent("claude")
+        try Data("#!/bin/zsh\nprint '{\"loggedIn\":false}'\n".utf8).write(to: replacement)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: replacement.path)
+
+        let missing = directory.appendingPathComponent("moved-claude").path
+        let searches = ExecutableSearchSequence([
+            .completed(candidates: [missing]),
+            .completed(candidates: [replacement.path]),
+        ])
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: ProbeHintStore(),
+            shellSearch: { await searches.next() },
+            // Model a time-of-check/time-of-use race: the first candidate passes
+            // discovery but disappears before Process launches it.
+            validate: { _ in .executable }
+        )
+        let result = await ClaudeUsageCLIProbe(
+            locator: locator,
+            workingDirectory: directory.path
+        ).capturePanel()
+
+        #expect(result == .loginRequired)
+        #expect(await searches.count == 2)
+    }
+
     @Test func loggedOutPanelAsksToLogIn() async {
         let snap = await provider(.loginRequired).fetchSnapshot()
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
@@ -346,4 +378,24 @@ struct ClaudeProviderTests {
         guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
         #expect(reason.providerSetupOutcome == .claudeUnknownUI)
     }
+}
+
+private actor ExecutableSearchSequence {
+    private var results: [CLIExecutableShellResult]
+    private(set) var count = 0
+
+    init(_ results: [CLIExecutableShellResult]) { self.results = results }
+
+    func next() -> CLIExecutableShellResult {
+        count += 1
+        return results.removeFirst()
+    }
+}
+
+private final class ProbeHintStore: CLIExecutableHintStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    func hint(for executableName: String) -> String? { lock.withLock { value } }
+    func setHint(_ path: String?, for executableName: String) { lock.withLock { value = path } }
 }

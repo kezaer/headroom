@@ -54,7 +54,7 @@ public enum ClaudeAuthStatus: Sendable, Equatable {
 /// re-renders, and login-shell PATH resolution so it finds `claude` even when launched
 /// from Finder with a bare environment.
 public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
-    public let claudePath: String?
+    public let locator: any CLIExecutableLocating
     public let workingDirectory: String
     /// Extra environment applied over the inherited env — how additional accounts
     /// route the CLI at their own config home (`CLAUDE_CONFIG_DIR`). Empty for the
@@ -64,13 +64,13 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     public let panelTimeout: TimeInterval
 
     public init(
-        claudePath: String? = ClaudeUsageCLIProbe.resolveClaudePath(),
+        locator: any CLIExecutableLocating = CLIExecutableLocator.claude(),
         workingDirectory: String = FileManager.default.currentDirectoryPath,
         environmentOverrides: [String: String] = [:],
         bootTimeout: TimeInterval = 30,
         panelTimeout: TimeInterval = 26
     ) {
-        self.claudePath = claudePath
+        self.locator = locator
         self.workingDirectory = workingDirectory
         self.environmentOverrides = environmentOverrides
         self.bootTimeout = bootTimeout
@@ -78,22 +78,46 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     }
 
     public func capturePanel() async -> ClaudePanelResult {
-        guard let claudePath, FileManager.default.isExecutableFile(atPath: claudePath) else {
-            return .cliNotFound
+        for attempt in 0...1 {
+            let location = await locator.locate(forceRefresh: attempt > 0)
+            switch location {
+            case .confirmedAbsent:
+                return .cliNotFound
+            case .inconclusive:
+                return .transientCapture
+            case .available(let claudePath, _):
+                let result = await capture(at: claudePath)
+                switch result {
+                case .result(let panel):
+                    return panel
+                case .launchNotFound where attempt == 0:
+                    await locator.invalidate(path: claudePath, reason: .launchNotFound)
+                case .launchNotFound:
+                    return .transientCapture
+                }
+            }
         }
-        // Run the blocking pty work off the cooperative pool.
+        return .transientCapture
+    }
+
+    private func capture(at claudePath: String) async -> ExecutableCaptureResult {
+        // Run the blocking process and pty work off the cooperative pool.
         return await withCheckedContinuation { continuation in
             Thread.detachNewThread { [environmentOverrides] in
-                let auth = Self.runAuthCheck(
+                let authResult = Self.runAuthCheck(
                     claudePath: claudePath,
                     environmentOverrides: environmentOverrides
                 )
+                guard case .status(let auth) = authResult else {
+                    continuation.resume(returning: .launchNotFound)
+                    return
+                }
                 switch auth.status {
                 case .loggedOut:
-                    continuation.resume(returning: .loginRequired)
+                    continuation.resume(returning: .result(.loginRequired))
                     return
                 case .unsupported:
-                    continuation.resume(returning: .unknownUI)
+                    continuation.resume(returning: .result(.unknownUI))
                     return
                 case .loggedIn:
                     break
@@ -103,13 +127,19 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
                 // for the separately fetched model rows, which is the failure class
                 // that intermittently dropped "Weekly (Fable)". Any miss (old CLI,
                 // unparseable output, timeout) falls back to the PTY panel unchanged.
-                if let report = Self.runPrintUsage(
+                switch Self.runPrintUsage(
                     claudePath: claudePath,
                     workingDirectory: workingDirectory,
                     environmentOverrides: environmentOverrides
                 ) {
-                    continuation.resume(returning: .panel(text: report, planHint: auth.planHint))
+                case .report(let report):
+                    continuation.resume(returning: .result(.panel(text: report, planHint: auth.planHint)))
                     return
+                case .launchNotFound:
+                    continuation.resume(returning: .launchNotFound)
+                    return
+                case .unavailable:
+                    break
                 }
                 let result = Self.runBlocking(
                     claudePath: claudePath,
@@ -174,19 +204,48 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         let planHint: String?
     }
 
+    private enum ExecutableCaptureResult: Sendable {
+        case result(ClaudePanelResult)
+        case launchNotFound
+    }
+
+    private enum AuthCheckResult: Sendable {
+        case status(AuthCheck)
+        case launchNotFound
+    }
+
+    private enum PrintUsageResult: Sendable {
+        case report(String)
+        case unavailable
+        case launchNotFound
+    }
+
+    private enum ProcessOutputResult: Sendable {
+        case data(Data)
+        case failed
+        case launchNotFound
+    }
+
     private static func runAuthCheck(
         claudePath: String,
         environmentOverrides: [String: String]
-    ) -> AuthCheck {
-        guard let data = runForOutput(
+    ) -> AuthCheckResult {
+        switch runForOutput(
             claudePath: claudePath,
             arguments: ["auth", "status", "--json"],
             environmentOverrides: environmentOverrides,
             deadline: 5
-        ) else {
-            return AuthCheck(status: .unsupported, planHint: nil)
+        ) {
+        case .launchNotFound:
+            return .launchNotFound
+        case .failed:
+            return .status(AuthCheck(status: .unsupported, planHint: nil))
+        case .data(let data):
+            return .status(AuthCheck(
+                status: classifyAuthStatus(data),
+                planHint: subscriptionPlanHint(data)
+            ))
         }
-        return AuthCheck(status: classifyAuthStatus(data), planHint: subscriptionPlanHint(data))
     }
 
     /// Gate for the print-first capture. 2.1.217 is the oldest CLI verified to run
@@ -209,23 +268,35 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         claudePath: String,
         workingDirectory: String,
         environmentOverrides: [String: String]
-    ) -> String? {
-        guard let versionData = runForOutput(
+    ) -> PrintUsageResult {
+        let versionData: Data
+        switch runForOutput(
             claudePath: claudePath,
             arguments: ["--version"],
             environmentOverrides: environmentOverrides,
             deadline: 5
-        ), printUsageSupported(versionOutput: String(decoding: versionData, as: UTF8.self))
-        else { return nil }
-        guard let data = runForOutput(
+        ) {
+        case .launchNotFound: return .launchNotFound
+        case .failed: return .unavailable
+        case .data(let data): versionData = data
+        }
+        guard printUsageSupported(versionOutput: String(decoding: versionData, as: UTF8.self)) else {
+            return .unavailable
+        }
+        let data: Data
+        switch runForOutput(
             claudePath: claudePath,
             arguments: ["-p", "/usage", "--no-session-persistence"],
             environmentOverrides: environmentOverrides,
             workingDirectory: workingDirectory,
             deadline: 20
-        ) else { return nil }
+        ) {
+        case .launchNotFound: return .launchNotFound
+        case .failed: return .unavailable
+        case .data(let value): data = value
+        }
         let text = ANSI.strip(String(decoding: data, as: UTF8.self))
-        return ClaudeUsageParser.parse(text).isEmpty ? nil : text
+        return ClaudeUsageParser.parse(text).isEmpty ? .unavailable : .report(text)
     }
 
     /// Spawn `claude` with pipes (no pty), enforce a hard deadline, and return stdout.
@@ -239,7 +310,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         environmentOverrides: [String: String],
         workingDirectory: String? = nil,
         deadline seconds: TimeInterval
-    ) -> Data? {
+    ) -> ProcessOutputResult {
         let process = Process()
         let output = Pipe()
         let cwd = workingDirectory ?? FileManager.default.currentDirectoryPath
@@ -259,7 +330,11 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         do {
             try process.run()
         } catch {
-            return nil
+            let nsError = error as NSError
+            return (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ENOENT))
+                || !FileManager.default.fileExists(atPath: claudePath)
+                ? .launchNotFound
+                : .failed
         }
 
         let deadline = Date().addingTimeInterval(seconds)
@@ -270,10 +345,10 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
             while process.isRunning, Date() < terminationDeadline { usleep(20_000) }
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             process.waitUntilExit()
-            return nil
+            return .failed
         }
         process.waitUntilExit()
-        return output.fileHandleForReading.readDataToEndOfFile()
+        return .data(output.fileHandleForReading.readDataToEndOfFile())
     }
 
     // MARK: pty mechanics
@@ -285,11 +360,13 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         boot: TimeInterval,
         panel: TimeInterval,
         planHint: String? = nil
-    ) -> ClaudePanelResult {
+    ) -> ExecutableCaptureResult {
         var master: Int32 = -1
         var slave: Int32 = -1
         var win = winsize(ws_row: 45, ws_col: 140, ws_xpixel: 0, ws_ypixel: 0)
-        guard openpty(&master, &slave, nil, nil, &win) == 0 else { return .transientCapture }
+        guard openpty(&master, &slave, nil, nil, &win) == 0 else {
+            return .result(.transientCapture)
+        }
 
         var fileActions = posix_spawn_file_actions_t(bitPattern: 0)
         posix_spawn_file_actions_init(&fileActions)
@@ -338,7 +415,10 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
 
         let spawnResult = posix_spawn(&pid, claudePath, &fileActions, &attr, cArgv, cEnv)
         close(slave)
-        guard spawnResult == 0 else { close(master); return .transientCapture }
+        guard spawnResult == 0 else {
+            close(master)
+            return spawnResult == ENOENT ? .launchNotFound : .result(.transientCapture)
+        }
 
         // Guaranteed teardown regardless of how we leave.
         func teardown() {
@@ -363,16 +443,16 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
             break
         case .loginRequired:
             teardown()
-            return .loginRequired
+            return .result(.loginRequired)
         case .trustRequired:
             teardown()
-            return .workspaceTrustRequired
+            return .result(.workspaceTrustRequired)
         case .unknown:
             teardown()
-            return .unknownUI
+            return .result(.unknownUI)
         case .noOutput:
             teardown()
-            return .transientCapture
+            return .result(.transientCapture)
         }
         usleep(800_000) // let the input box settle before typing
         _ = "/usage".withCString { write(master, $0, strlen($0)) }
@@ -392,7 +472,9 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         teardown()
 
         let captured = ANSI.strip(String(decoding: buffer, as: UTF8.self))
-        return captured.isEmpty ? .transientCapture : .panel(text: captured, planHint: planHint)
+        return .result(
+            captured.isEmpty ? .transientCapture : .panel(text: captured, planHint: planHint)
+        )
     }
 
     /// The one marker list for the CLI's first-run screens — shared by the boot bail

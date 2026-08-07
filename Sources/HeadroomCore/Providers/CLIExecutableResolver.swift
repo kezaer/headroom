@@ -12,15 +12,17 @@ public enum CLIExecutableResolver {
         named executableName: String,
         fallbackPaths: [String]
     ) -> String? {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        guard !executableName.isEmpty,
-              executableName.unicodeScalars.allSatisfy(allowed.contains) else { return nil }
+        guard isValidExecutableName(executableName) else { return nil }
 
         // Interactive login mode loads version-manager initialization commonly kept in
         // .zshrc (NVM/asdf/mise). Login-only mode can instead select an older global shim.
-        let output = runLoginShell(
+        let output: String?
+        switch runLoginShell(
             command: "printf '\\n\(executableMarker)\\n'; command -v -- \(executableName)"
-        )
+        ) {
+        case .completed(let value): output = value
+        case .timedOut, .spawnFailed: output = nil
+        }
 
         return selectExecutable(
             loginShellOutput: output,
@@ -47,7 +49,11 @@ public enum CLIExecutableResolver {
     }
 
     public static func resolveLoginPath(fallback: String) -> String {
-        let output = runLoginShell(command: "printf '\\n\(pathMarker)%s' \"$PATH\"")
+        let output: String?
+        switch runLoginShell(command: "printf '\\n\(pathMarker)%s' \"$PATH\"") {
+        case .completed(let value): output = value
+        case .timedOut, .spawnFailed: output = nil
+        }
         return selectLoginPath(loginShellOutput: output, fallback: fallback)
     }
 
@@ -62,9 +68,46 @@ public enum CLIExecutableResolver {
         return "\(marked):\(fallback)"
     }
 
+    /// Typed, off-main discovery for refreshable locators. Only a normally completed
+    /// shell command with its marker intact is evidence that the shell found no path.
+    public static func searchExecutable(named executableName: String) async -> CLIExecutableShellResult {
+        guard isValidExecutableName(executableName) else { return .invalidOutput }
+        return await Task.detached(priority: .utility) {
+            switch runLoginShell(
+                command: "printf '\\n\(executableMarker)\\n'; command -v -- \(executableName)"
+            ) {
+            case .timedOut:
+                return .timedOut
+            case .spawnFailed:
+                return .spawnFailed
+            case .completed(let output):
+                guard let marker = output.range(of: executableMarker, options: .backwards) else {
+                    return .invalidOutput
+                }
+                let candidates = output[marker.upperBound...]
+                    .split(whereSeparator: { $0.isNewline })
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                return .completed(candidates: candidates)
+            }
+        }.value
+    }
+
+    private enum LoginShellResult {
+        case completed(String)
+        case timedOut
+        case spawnFailed
+    }
+
+    private static func isValidExecutableName(_ executableName: String) -> Bool {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        return !executableName.isEmpty
+            && executableName.unicodeScalars.allSatisfy(allowed.contains)
+    }
+
     /// Shell startup files are user-controlled and can hang. Bound discovery so a bad
     /// profile cannot freeze app launch or a setup action indefinitely.
-    private static func runLoginShell(command: String, timeout: TimeInterval = 5) -> String? {
+    private static func runLoginShell(command: String, timeout: TimeInterval = 5) -> LoginShellResult {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: shell)
@@ -89,14 +132,14 @@ public enum CLIExecutableResolver {
                     kill(probe.processIdentifier, SIGKILL)
                     probe.waitUntilExit()
                 }
-                return nil
+                return .timedOut
             }
-            return String(
+            return .completed(String(
                 data: pipe.fileHandleForReading.readDataToEndOfFile(),
                 encoding: .utf8
-            )
+            ) ?? "")
         } catch {
-            return nil
+            return .spawnFailed
         }
     }
 }

@@ -55,7 +55,8 @@ enum Entry {
     private static func runClaudeProbe() {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            print("claude CLI: \(ClaudeUsageCLIProbe.resolveClaudePath() == nil ? "missing" : "available")")
+            let location = await AppComposition.claudeExecutableLocator.locate()
+            print("claude CLI: \(location.path == nil ? "unavailable" : "available")")
             // `--claude-config <dir>`: probe an alternate account home (multi-account
             // diagnostic) — exercises the same CLAUDE_CONFIG_DIR override the extra
             // accounts use in production.
@@ -68,6 +69,7 @@ enum Entry {
                 print("account home: built-in")
             }
             switch await ClaudeUsageCLIProbe(
+                locator: AppComposition.claudeExecutableLocator,
                 workingDirectory: claudeWorkingDirectory(),
                 environmentOverrides: overrides
             ).capturePanel() {
@@ -543,6 +545,7 @@ enum AppComposition {
     }
 
     private static let cursorUsageSource = CursorUsageCaptureCache(source: CursorUsageCLIProbe())
+    static let claudeExecutableLocator = CLIExecutableLocator.claude()
 
     /// Ordered composition registry. Adding a provider extends this table; Settings,
     /// account management, polling, and presentation discover the resulting order from
@@ -735,13 +738,17 @@ enum AppComposition {
             return UnavailableAccountProvider(account: account)
         }
         guard !account.isBuiltIn else {
-            return ClaudeProvider(source: ClaudeUsageCLIProbe(workingDirectory: workspace.path))
+            return ClaudeProvider(source: ClaudeUsageCLIProbe(
+                locator: claudeExecutableLocator,
+                workingDirectory: workspace.path
+            ))
         }
         guard let configDirectory = configuration.claudeConfigDirectory else {
             return UnavailableAccountProvider(account: account)
         }
         return ClaudeProvider(
             source: ClaudeUsageCLIProbe(
+                locator: claudeExecutableLocator,
                 workingDirectory: workspace.path,
                 environmentOverrides: ["CLAUDE_CONFIG_DIR": configDirectory.path]
             ),
