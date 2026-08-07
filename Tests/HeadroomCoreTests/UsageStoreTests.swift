@@ -623,7 +623,7 @@ struct UsageStoreTests {
         #expect(relaunched.snapshot(for: key).freshness == .pending)
     }
 
-    @Test func claudeCLIMissingRetainsPersistedContinuityBeforeRelaunch() async {
+    @Test func claudeCapabilityFailureRetainsPersistedContinuityBeforeRelaunch() async {
         let capture = Date(timeIntervalSince1970: 2_000_000)
         let refresh = capture.addingTimeInterval(300)
         let defaults = freshContinuityDefaults()
@@ -635,10 +635,14 @@ struct UsageStoreTests {
             ], at: capture),
             for: key
         )
-        let unavailable = StubProvider(
+        let unavailable = CapabilityStubProvider(
             id: .claude,
+            accountID: .primary,
             displayName: "Claude",
-            snapshot: .stale(for: .claude, reason: .providerSetup(.claudeCLIMissing))
+            result: UsageProviderFetchResult(
+                snapshot: .stale(for: .claude, reason: .transient("Claude capability unavailable")),
+                capability: .inconclusive(.shellTimeout)
+            )
         )
         let store = UsageStore(
             providers: [unavailable],
@@ -661,6 +665,81 @@ struct UsageStoreTests {
         )
         #expect(relaunched.snapshot(for: key).capturedAt == capture)
         #expect(relaunched.snapshot(for: key).windows.first?.freshness == .stale(observedAt: capture))
+        #expect(store.providerCapabilities[.claude]?.state == .inconclusive(.shellTimeout))
+    }
+
+    @Test func confirmedClaudeAbsenceWithNoHistoryDoesNotInventAccountSetup() async {
+        let provider = CapabilityStubProvider(
+            id: .claude,
+            accountID: .primary,
+            displayName: "Claude",
+            result: UsageProviderFetchResult(
+                snapshot: .stale(for: .claude, reason: .transient("Claude capability unavailable")),
+                capability: .confirmedAbsent
+            )
+        )
+        let store = UsageStore(providers: [provider], preferences: freshPreferences())
+
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .claude).windows.isEmpty)
+        #expect(store.snapshot(for: .claude).freshness == .pending)
+        #expect(store.providerCapabilities[.claude]?.state == .confirmedAbsent)
+    }
+
+    @Test func claudeCapabilityFailurePreservesPriorAccountSetupState() async {
+        let provider = MutableCapabilityStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            result: UsageProviderFetchResult(
+                snapshot: .stale(for: .claude, reason: .providerSetup(.claudeTrustRequired)),
+                capability: .available
+            )
+        )
+        let store = UsageStore(providers: [provider], preferences: freshPreferences())
+        await store.refreshAll()
+        #expect(store.snapshot(for: .claude).freshness == .stale(.providerSetup(.claudeTrustRequired)))
+
+        provider.setResult(UsageProviderFetchResult(
+            snapshot: .stale(for: .claude, reason: .transient("Claude capability unavailable")),
+            capability: .inconclusive(.shellTimeout)
+        ))
+        await store.refreshAll()
+
+        #expect(store.snapshot(for: .claude).freshness == .stale(.providerSetup(.claudeTrustRequired)))
+        #expect(store.providerCapabilities[.claude]?.state == .inconclusive(.shellTimeout))
+    }
+
+    @Test func providerCapabilityFailureDoesNotSettleAccountSetupSession() async {
+        let account = ProviderAccount.builtIn(for: .claude)
+        let provider = CapabilityStubProvider(
+            id: .claude,
+            accountID: .primary,
+            displayName: "Claude",
+            result: UsageProviderFetchResult(
+                snapshot: .stale(for: .claude, reason: .transient("Claude capability unavailable")),
+                capability: .inconclusive(.shellTimeout)
+            )
+        )
+        let store = UsageStore(providers: [provider], preferences: freshPreferences())
+        let coordinator = SetupSessionCoordinator(
+            retryDelays: [.seconds(60)],
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in }
+        )
+        store.attachSetupCoordinator(coordinator)
+        coordinator.begin(for: account)
+        for _ in 0..<20 where coordinator.state(for: account.key) != .waiting(attempt: 0) {
+            await Task.yield()
+        }
+
+        await store.refreshAll()
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
     }
 
     @Test func relaunchMarksExpiredCachedClaudeSubLimitUnavailable() {

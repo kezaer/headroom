@@ -26,6 +26,7 @@ public enum ClaudePanelResult: Sendable, Equatable {
     /// fails closed and sends no input.
     case unknownUI
     case cliNotFound
+    case cliInconclusive(CLIExecutableDiscoveryIssue)
     case transientCapture
 }
 
@@ -83,8 +84,8 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
             switch location {
             case .confirmedAbsent:
                 return .cliNotFound
-            case .inconclusive:
-                return .transientCapture
+            case .inconclusive(let issue):
+                return .cliInconclusive(issue)
             case .available(let claudePath, _):
                 let result = await capture(at: claudePath)
                 switch result {
@@ -93,11 +94,11 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
                 case .launchNotFound where attempt == 0:
                     await locator.invalidate(path: claudePath, reason: .launchNotFound)
                 case .launchNotFound:
-                    return .transientCapture
+                    return .cliInconclusive(.launchRace)
                 }
             }
         }
-        return .transientCapture
+        return .cliInconclusive(.launchRace)
     }
 
     private func capture(at claudePath: String) async -> ExecutableCaptureResult {

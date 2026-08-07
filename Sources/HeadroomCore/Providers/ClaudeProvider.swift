@@ -9,6 +9,7 @@ public struct ClaudeProvider: UsageProvider {
     public let accountID: AccountID
     public let displayName = "Claude"
     public let pollingLane: ProviderPollingLane = .serial("claude-cli")
+    public let reportsProviderCapability = true
 
     private let source: ClaudeUsageSource
     private let emailSource: ClaudeAccountEmailReading
@@ -30,21 +31,27 @@ public struct ClaudeProvider: UsageProvider {
     }
 
     public func fetchSnapshot() async -> UsageSnapshot {
+        await fetchResult().snapshot
+    }
+
+    public func fetchResult() async -> UsageProviderFetchResult {
         switch await source.capturePanel() {
         case .cliNotFound:
-            return stale(.providerSetup(.claudeCLIMissing))
+            return capabilityFailure(.confirmedAbsent)
+        case .cliInconclusive(let issue):
+            return capabilityFailure(.inconclusive(issue))
         case .loginRequired:
-            return stale(.providerSetup(.claudeLoginRequired))
+            return accountResult(stale(.providerSetup(.claudeLoginRequired)))
         case .workspaceTrustRequired:
-            return stale(.providerSetup(.claudeTrustRequired))
+            return accountResult(stale(.providerSetup(.claudeTrustRequired)))
         case .unknownUI:
-            return stale(.providerSetup(.claudeUnknownUI))
+            return accountResult(stale(.providerSetup(.claudeUnknownUI)))
         case .transientCapture:
-            return stale(.providerSetup(.claudeTransientCapture))
+            return accountResult(stale(.providerSetup(.claudeTransientCapture)))
         case .panel(let text, let planHint):
             let parsed = ClaudeUsageParser.parse(text)
             guard !parsed.isEmpty else {
-                return stale(.providerSetup(.claudeTransientCapture))
+                return accountResult(stale(.providerSetup(.claudeTransientCapture)))
             }
             let windows = parsed.map { window in
                 UsageWindow(
@@ -54,7 +61,7 @@ public struct ClaudeProvider: UsageProvider {
                     resetLabel: window.resetLabel
                 )
             }
-            return UsageSnapshot(
+            return accountResult(UsageSnapshot(
                 providerID: id,
                 windows: windows,
                 // Panel-text tier first ("Max 20x" fidelity); the auth-status hint
@@ -63,8 +70,19 @@ public struct ClaudeProvider: UsageProvider {
                 accountEmail: emailSource.readAccountEmail(),
                 capturedAt: now(),
                 freshness: .live
-            )
+            ))
         }
+    }
+
+    private func capabilityFailure(_ capability: ProviderCapabilityState) -> UsageProviderFetchResult {
+        UsageProviderFetchResult(
+            snapshot: stale(.transient("Claude CLI capability unavailable — will retry")),
+            capability: capability
+        )
+    }
+
+    private func accountResult(_ snapshot: UsageSnapshot) -> UsageProviderFetchResult {
+        UsageProviderFetchResult(snapshot: snapshot, capability: .available)
     }
 
     private func stale(_ reason: FailureReason) -> UsageSnapshot {

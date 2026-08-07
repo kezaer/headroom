@@ -1,3 +1,5 @@
+import Foundation
+
 /// The single seam the polling engine depends on (R13). Concrete providers
 /// (Claude, Codex, and any third later) implement this; the engine and shell
 /// never reference a concrete provider.
@@ -8,6 +10,37 @@
 public enum ProviderPollingLane: Sendable, Equatable, Hashable {
     case concurrent
     case serial(String)
+}
+
+/// Machine/provider capability is independent from any configured account's login,
+/// workspace trust, or usage result. Only `confirmedAbsent` proves installation is
+/// missing; discovery failures remain retryable and inconclusive.
+public enum ProviderCapabilityState: Sendable, Equatable {
+    case unknown
+    case discovering
+    case available
+    case inconclusive(CLIExecutableDiscoveryIssue)
+    case confirmedAbsent
+}
+
+public struct ProviderCapabilityStatus: Sendable, Equatable {
+    public let state: ProviderCapabilityState
+    public let observedAt: Date
+
+    public init(state: ProviderCapabilityState, observedAt: Date) {
+        self.state = state
+        self.observedAt = observedAt
+    }
+}
+
+public struct UsageProviderFetchResult: Sendable, Equatable {
+    public let snapshot: UsageSnapshot
+    public let capability: ProviderCapabilityState?
+
+    public init(snapshot: UsageSnapshot, capability: ProviderCapabilityState? = nil) {
+        self.snapshot = snapshot
+        self.capability = capability
+    }
 }
 
 public protocol UsageProvider: Sendable {
@@ -22,7 +55,9 @@ public protocol UsageProvider: Sendable {
     /// Maximum configured accounts this provider can isolate. Single-login providers
     /// override the registry-wide default with `1`.
     var accountCapacity: Int { get }
+    var reportsProviderCapability: Bool { get }
     func fetchSnapshot() async -> UsageSnapshot
+    func fetchResult() async -> UsageProviderFetchResult
 }
 
 public extension UsageProvider {
@@ -30,6 +65,10 @@ public extension UsageProvider {
     var accountKey: AccountKey { AccountKey(providerID: id, accountID: accountID) }
     var pollingLane: ProviderPollingLane { .concurrent }
     var accountCapacity: Int { AccountRegistry.maxPerProvider }
+    var reportsProviderCapability: Bool { false }
+    func fetchResult() async -> UsageProviderFetchResult {
+        UsageProviderFetchResult(snapshot: await fetchSnapshot())
+    }
 }
 
 /// Money-based API cost providers are intentionally separate from subscription quota

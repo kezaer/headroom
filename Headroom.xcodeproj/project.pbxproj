@@ -35,6 +35,7 @@
 		27C1E430A061869E4CE5B144 /* WidgetSnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF3C1CD6481D8BA530EFCA1 /* WidgetSnapshotModels.swift */; };
 		286DFC6129C0CB8BBC1D93DD /* StatusScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1516F991C6C196F0CDF676CC /* StatusScreen.swift */; };
 		2D14D10C880662C7787515B5 /* CodexConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CC53FEEE716121A11701F1 /* CodexConnection.swift */; };
+		2D2C110659ED2DABB204B574 /* CLIExecutableLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 657FEAE9B8D5F5CBF51EBDC4 /* CLIExecutableLocator.swift */; };
 		2E00B0AFCCC8BDE9CD1E612B /* iCloudSnapshotSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 286C18406A7E80D0E42D1592 /* iCloudSnapshotSync.swift */; };
 		2EC67C2CFB90C13FD3F88723 /* SetupSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 978F48660B10AF971A6E76E4 /* SetupSessions.swift */; };
 		2FF5F97796EE9B85A1379553 /* PopoverRenderHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48C63A7205115E3F08BEDE08 /* PopoverRenderHarness.swift */; };
@@ -325,6 +326,7 @@
 		6378187F940FD56B1A363971 /* UsageBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageBarView.swift; sourceTree = "<group>"; };
 		647B97436A2026E1B0F66065 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		65084FF4FFAFB83B11B7601E /* DemoFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoFixture.swift; sourceTree = "<group>"; };
+		657FEAE9B8D5F5CBF51EBDC4 /* CLIExecutableLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIExecutableLocator.swift; sourceTree = "<group>"; };
 		6BECE3EB6F9311F47B82E8D1 /* HeadroomMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomMotion.swift; sourceTree = "<group>"; };
 		6F2BA95A68FD38EC52A36418 /* HeadroomIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomIOSApp.swift; sourceTree = "<group>"; };
 		6F81B2B4E053B23EBFA0DBCD /* AccountRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountRegistry.swift; sourceTree = "<group>"; };
@@ -775,6 +777,7 @@
 				12CF08DF6A70B0CE97F1C590 /* ClaudeUsageCLIProbe.swift */,
 				A43C20FB297B9F64C76EAA8A /* ClaudeUsageParser.swift */,
 				C90C09F55109393B2A7C0AC1 /* ClaudeUsageWorkspace.swift */,
+				657FEAE9B8D5F5CBF51EBDC4 /* CLIExecutableLocator.swift */,
 				29EA356CD55A5493E55D8F86 /* CLIExecutableResolver.swift */,
 				87CC53FEEE716121A11701F1 /* CodexConnection.swift */,
 				F767701AEE449C92A62002E4 /* CodexProvider.swift */,
@@ -1090,6 +1093,7 @@
 				A113A612C726C4102627D24C /* AccountRegistry.swift in Sources */,
 				4B4C9CAB4F37C267CE7FAF7E /* AccountStorage.swift in Sources */,
 				E18DE57B1F934A2358BA65EE /* BrandColorValues.swift in Sources */,
+				2D2C110659ED2DABB204B574 /* CLIExecutableLocator.swift in Sources */,
 				5E944B81F4BF70C58EF00164 /* CLIExecutableResolver.swift in Sources */,
 				2310A2B62ACA0CAA20FDA2CE /* ClaudeAccountEmailReader.swift in Sources */,
 				B0DA4917ED09B86C95AB2A8E /* ClaudeProvider.swift in Sources */,

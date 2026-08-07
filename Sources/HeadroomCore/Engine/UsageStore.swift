@@ -100,6 +100,7 @@ public final class UsageStore {
     public private(set) var showCodexSparkCountersInApp: Bool
     public private(set) var showCodexSparkCountersInWidgets: Bool
     public private(set) var enabledSurfaces: Set<UsageSurface>
+    public private(set) var providerCapabilities: [ProviderID: ProviderCapabilityStatus]
     public private(set) var accountRemovalStates: [AccountKey: AccountRemovalState] = [:]
     public let displayNames: [ProviderID: String]
     public let apiSpendDisplayNames: [ProviderID: String]
@@ -128,6 +129,7 @@ public final class UsageStore {
     private var isStarting = false
     @ObservationIgnored private var pendingAccountRefreshes: Set<AccountKey> = []
     @ObservationIgnored private var removingAccounts: Set<AccountKey> = []
+    @ObservationIgnored private var capabilityGenerations: [ProviderID: UInt64] = [:]
     @ObservationIgnored private var setupCoordinator: SetupSessionCoordinator?
 
     public init(
@@ -170,6 +172,12 @@ public final class UsageStore {
                     after: restorationDate
                 )
                 return (provider.accountKey, snapshot)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        self.providerCapabilities = Dictionary(
+            providers.filter(\.reportsProviderCapability).map {
+                ($0.id, ProviderCapabilityStatus(state: .unknown, observedAt: restorationDate))
             },
             uniquingKeysWith: { first, _ in first }
         )
@@ -338,6 +346,7 @@ public final class UsageStore {
             return .setupActive
         }
         removingAccounts.insert(key)
+        capabilityGenerations[key.providerID, default: 0] &+= 1
         pendingAccountRefreshes.remove(key)
         accountRemovalStates[key] = .removing
         setupCoordinator?.markRemoving(key)
@@ -576,10 +585,12 @@ public final class UsageStore {
             guard let surface = UsageSurface.subscription(for: provider.id) else { return false }
             return enabledSurfaces.contains(surface) && !shouldSkipOnTimer(provider: provider, source: source)
         }
+        let capabilityCycle = beginCapabilityRefresh(for: candidates)
         let (stream, continuation) = AsyncStream.makeStream(
-            of: (AccountKey, UsageSnapshot).self,
+            of: (AccountKey, UsageProviderFetchResult).self,
             bufferingPolicy: .unbounded
         )
+        var capabilityResults: [ProviderID: ProviderCapabilityState] = [:]
         await withTaskGroup(of: Void.self) { group in
             // Partition once from the immutable provider declaration. Each process-heavy
             // CLI gets its own keyed serial lane, while network work and other CLI lanes
@@ -597,23 +608,33 @@ public final class UsageStore {
             for lane in serialLanes.values {
                 group.addTask {
                     for provider in lane {
-                        continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
+                        continuation.yield((provider.accountKey, await provider.fetchResult()))
                     }
                 }
             }
             for provider in concurrentProviders {
                 group.addTask {
-                    continuation.yield((provider.accountKey, await provider.fetchSnapshot()))
+                    continuation.yield((provider.accountKey, await provider.fetchResult()))
                 }
             }
             var iterator = stream.makeAsyncIterator()
             for _ in candidates {
-                guard let (key, fresh) = await iterator.next() else { break }
-                merge(key: key, fresh: fresh)
+                guard let (key, result) = await iterator.next() else { break }
+                let notifiesSetup = result.capability == nil || result.capability == .available
+                if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup),
+                   let capability = result.capability {
+                    capabilityResults[key.providerID] = mergedCapability(
+                        capabilityResults[key.providerID],
+                        with: capability
+                    )
+                }
             }
             await group.waitForAll()
         }
         continuation.finish()
+        for (providerID, capability) in capabilityResults {
+            applyCapability(capability, for: providerID, generation: capabilityCycle[providerID])
+        }
         if exportAfter {
             exportWidgetSnapshot()
             exportPhoneSyncSnapshot()
@@ -668,8 +689,13 @@ public final class UsageStore {
               let surface = UsageSurface.subscription(for: key.providerID),
               enabledSurfaces.contains(surface)
         else { return }
-        let fresh = await provider.fetchSnapshot()
-        merge(key: key, fresh: fresh)
+        let capabilityCycle = beginCapabilityRefresh(for: [provider])
+        let result = await provider.fetchResult()
+        let notifiesSetup = result.capability == nil || result.capability == .available
+        if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup),
+           let capability = result.capability {
+            applyCapability(capability, for: key.providerID, generation: capabilityCycle[key.providerID])
+        }
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
     }
@@ -687,12 +713,34 @@ public final class UsageStore {
 
     /// Continuity (KTD7): a failure with no fresh windows keeps the prior windows
     /// shown dimmed rather than blanking the card; it never touches another account.
-    private func merge(key: AccountKey, fresh: UsageSnapshot) {
+    private func mergeResult(
+        key: AccountKey,
+        result: UsageProviderFetchResult,
+        notifiesSetup: Bool
+    ) -> Bool {
+        let isCapabilityFailure = result.capability.map { $0 != .available } == true
+        if isCapabilityFailure, snapshots[key]?.windows.isEmpty != false {
+            // A provider-wide discovery failure says nothing about this account. Keep a
+            // pending row neutral and preserve any prior login/trust setup state.
+            return acceptsResult(for: key)
+        }
+        return merge(key: key, fresh: result.snapshot, notifiesSetup: notifiesSetup)
+    }
+
+    private func acceptsResult(for key: AccountKey) -> Bool {
+        accounts(for: key.providerID).contains(where: { $0.key == key })
+            && !removingAccounts.contains(key)
+    }
+
+    @discardableResult
+    private func merge(
+        key: AccountKey,
+        fresh: UsageSnapshot,
+        notifiesSetup: Bool = true
+    ) -> Bool {
         // The account may have been removed while its fetch was in flight — a late
         // result must not resurrect the row.
-        guard accounts(for: key.providerID).contains(where: { $0.key == key }),
-              !removingAccounts.contains(key)
-        else { return }
+        guard acceptsResult(for: key) else { return false }
         let next = UsageContinuityPolicy.mergedSnapshot(
             fresh,
             with: snapshots[key],
@@ -702,18 +750,59 @@ public final class UsageStore {
         // provider that stays logged-out) doesn't invalidate observers every cycle.
         if snapshots[key] != next { snapshots[key] = next }
         updateContinuityCache(next, for: key)
-        setupCoordinator?.receive(next, for: key)
+        if notifiesSetup { setupCoordinator?.receive(next, for: key) }
+        return true
     }
 
     private func updateContinuityCache(_ snapshot: UsageSnapshot, for key: AccountKey) {
-        if case .stale(let reason) = snapshot.freshness,
-           reason.isPermanent,
-           !(key.providerID == .claude && reason.providerSetupOutcome == .claudeCLIMissing) {
+        if case .stale(let reason) = snapshot.freshness, reason.isPermanent {
             continuityCache?.remove(for: key)
         } else if !snapshot.windows.isEmpty {
             continuityCache?.save(snapshot, for: key)
         } else {
             continuityCache?.remove(for: key)
+        }
+    }
+
+    private func beginCapabilityRefresh(
+        for providers: [any UsageProvider]
+    ) -> [ProviderID: UInt64] {
+        var cycle: [ProviderID: UInt64] = [:]
+        for providerID in providers.filter(\.reportsProviderCapability).map(\.id).uniqued() {
+            capabilityGenerations[providerID, default: 0] &+= 1
+            let generation = capabilityGenerations[providerID] ?? 0
+            cycle[providerID] = generation
+            providerCapabilities[providerID] = ProviderCapabilityStatus(
+                state: .discovering,
+                observedAt: now()
+            )
+        }
+        return cycle
+    }
+
+    private func applyCapability(
+        _ state: ProviderCapabilityState,
+        for providerID: ProviderID,
+        generation: UInt64?
+    ) {
+        guard let generation, capabilityGenerations[providerID] == generation else { return }
+        providerCapabilities[providerID] = ProviderCapabilityStatus(state: state, observedAt: now())
+    }
+
+    private func mergedCapability(
+        _ current: ProviderCapabilityState?,
+        with incoming: ProviderCapabilityState
+    ) -> ProviderCapabilityState {
+        guard let current else { return incoming }
+        return capabilityPriority(incoming) > capabilityPriority(current) ? incoming : current
+    }
+
+    private func capabilityPriority(_ state: ProviderCapabilityState) -> Int {
+        switch state {
+        case .unknown, .discovering: 0
+        case .available: 1
+        case .inconclusive: 2
+        case .confirmedAbsent: 3
         }
     }
 

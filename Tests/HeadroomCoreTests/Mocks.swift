@@ -106,6 +106,45 @@ struct StubProvider: UsageProvider {
     func fetchSnapshot() async -> UsageSnapshot { snapshot }
 }
 
+struct CapabilityStubProvider: UsageProvider {
+    let id: ProviderID
+    let accountID: AccountID
+    let displayName: String
+    let result: UsageProviderFetchResult
+    let reportsProviderCapability = true
+
+    func fetchSnapshot() async -> UsageSnapshot { result.snapshot }
+    func fetchResult() async -> UsageProviderFetchResult { result }
+}
+
+final class MutableCapabilityStubProvider: UsageProvider, @unchecked Sendable {
+    let id: ProviderID
+    let accountID: AccountID
+    let displayName: String
+    let reportsProviderCapability = true
+    private let lock = NSLock()
+    private var result: UsageProviderFetchResult
+
+    init(
+        id: ProviderID,
+        accountID: AccountID = .primary,
+        displayName: String,
+        result: UsageProviderFetchResult
+    ) {
+        self.id = id
+        self.accountID = accountID
+        self.displayName = displayName
+        self.result = result
+    }
+
+    func setResult(_ result: UsageProviderFetchResult) {
+        lock.withLock { self.result = result }
+    }
+
+    func fetchSnapshot() async -> UsageSnapshot { lock.withLock { result.snapshot } }
+    func fetchResult() async -> UsageProviderFetchResult { lock.withLock { result } }
+}
+
 /// Provider double whose returned snapshot can change between refreshes.
 final class MutableStubProvider: UsageProvider, @unchecked Sendable {
     let id: ProviderID

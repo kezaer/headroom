@@ -236,6 +236,46 @@ private final class SuspendedAccountProvider: UsageProvider, @unchecked Sendable
 
 @MainActor
 @Suite struct MultiAccountStoreTests {
+    @Test func sharedClaudeCapabilityKeepsAccountRecoveryIndependent() async {
+        let work = AccountID("work")
+        let store = UsageStore(
+            providers: [
+                CapabilityStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    result: UsageProviderFetchResult(
+                        snapshot: .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)),
+                        capability: .available
+                    )
+                ),
+                CapabilityStubProvider(
+                    id: .claude,
+                    accountID: work,
+                    displayName: "Claude",
+                    result: UsageProviderFetchResult(
+                        snapshot: .stale(for: .claude, reason: .providerSetup(.claudeTrustRequired)),
+                        capability: .available
+                    )
+                ),
+            ],
+            preferences: Preferences(defaults: freshDefaults())
+        )
+
+        await store.refreshAll()
+
+        #expect(store.providerCapabilities.count == 1)
+        #expect(store.providerCapabilities[.claude]?.state == .available)
+        #expect(
+            store.snapshot(for: AccountKey(providerID: .claude, accountID: .primary))
+                .freshness == .stale(.providerSetup(.claudeLoginRequired))
+        )
+        #expect(
+            store.snapshot(for: AccountKey(providerID: .claude, accountID: work))
+                .freshness == .stale(.providerSetup(.claudeTrustRequired))
+        )
+    }
+
     private let work = AccountID("work")
 
     private func twoAccountStore(

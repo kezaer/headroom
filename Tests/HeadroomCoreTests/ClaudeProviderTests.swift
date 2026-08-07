@@ -216,10 +216,26 @@ struct ClaudeProviderTests {
         #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"loggedIn":true}"#.utf8)) == nil)
     }
 
-    @Test func missingCLIDegradesToNotLoggedIn() async {
-        let snap = await provider(.cliNotFound).fetchSnapshot()
-        guard case .stale(let reason) = snap.freshness else { Issue.record("expected stale"); return }
-        #expect(reason.providerSetupOutcome == .claudeCLIMissing)
+    @Test func confirmedCLIMissIsProviderCapabilityRatherThanAccountSetup() async {
+        let result = await provider(.cliNotFound).fetchResult()
+        #expect(result.capability == .confirmedAbsent)
+        guard case .stale(let reason) = result.snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+        #expect(reason.providerSetupOutcome == nil)
+        #expect(!reason.isPermanent)
+    }
+
+    @Test func inconclusiveCLIDiscoveryRemainsRetryableProviderCapability() async {
+        let result = await provider(.cliInconclusive(.shellTimeout)).fetchResult()
+        #expect(result.capability == .inconclusive(.shellTimeout))
+        guard case .stale(let reason) = result.snapshot.freshness else {
+            Issue.record("expected stale")
+            return
+        }
+        #expect(reason.providerSetupOutcome == nil)
+        #expect(!reason.isPermanent)
     }
 
     @Test func captureFailureIsTransient() async {

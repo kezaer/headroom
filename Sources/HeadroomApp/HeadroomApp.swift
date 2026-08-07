@@ -75,6 +75,8 @@ enum Entry {
             ).capturePanel() {
             case .cliNotFound:
                 print("RESULT: CLI not found")
+            case .cliInconclusive(let issue):
+                print("RESULT: CLI discovery inconclusive (\(issue.rawValue))")
             case .transientCapture:
                 print("RESULT: capture failed (no panel text)")
             case .loginRequired:
@@ -347,7 +349,12 @@ struct HeadroomApp: App {
     init() {
         let preferences = Preferences()
         let store = AppComposition.store(preferences: preferences)
-        if !DemoFixture.isEnabled { SetupSessions.configure(store: store) }
+        if !DemoFixture.isEnabled {
+            SetupSessions.configure(
+                store: store,
+                claudeExecutableLocator: AppComposition.claudeExecutableLocator
+            )
+        }
         self.preferences = preferences
         _store = State(initialValue: store)
         _appearancePreference = State(initialValue: preferences.appearancePreference)
