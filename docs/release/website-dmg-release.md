@@ -118,6 +118,25 @@ complete the Track A signed-candidate matrix before publication:
 Record this state as **candidate tested**, not published or Sparkle accepted. If a required login
 or trust prompt appears, stop for the tester's explicit approval in the official Claude CLI.
 
+When the candidate changes reset evidence, countdown presentation, continuity migration, or the
+widget snapshot schema, complete the Track B signed-candidate matrix before publication:
+
+1. Verify scheduled, absent, elapsed, malformed, implausible, and invalid-zone fixtures in the
+   installed macOS popover, macOS widgets, iPhone companion, and iOS widgets.
+2. Confirm fresh exact-zero absent/elapsed rows say `Available`; nonzero or ambiguous unresolved
+   rows say `Reset info unavailable`; retained, migrated, stale, and unavailable zero rows never
+   become `Available` from a clock transition.
+3. Check `6d 4h`, `6d`, `13h 37m`, and `37m`, then cross a genuine deadline and a sleep/wake cycle.
+   `Resets now` may appear only inside the ±60-second boundary and must not remain stuck.
+4. Exercise continuity-v1/widget-v1-v2 migration and future-schema fixtures. A future payload must
+   remain untouched and visible as incompatible; equal-generation local data must win over sync.
+5. Run the installed binary's `--probe-claude` and record only allowlisted reset categories and
+   ages—never provider reset text, time-zone text, paths, identity, credentials, or raw output.
+
+Record Track B as **candidate tested** only after every changed surface passes. Downgrading to a
+pre-v3 publisher is not a reset-fidelity rollback: an older iCloud writer can overwrite v3 because
+iCloud KVS provides no writer fence.
+
 Check that the first appcast item names the new version and build, retains the current
 production item, and references only files present in `dist/headroom.zantos.co/`. Its full
 versioned DMG enclosure is the universal fallback for every older installed app; deltas only
@@ -242,6 +261,10 @@ does not replace a working development install. A separate user alone does not i
    discovery. Confirm continuity survives, **Check Again** recovers without setup rerun, and
    login/trust divergence stays account-scoped. This successful public-update observation is
    **Sparkle accepted**; publication remains the separately verified asset state from step 5.
+
+   For a Track B reset/schema release, repeat the installed cross-surface matrix above after the
+   Sparkle relaunch, including legacy migration and deadline crossing. Keep macOS, macOS widget,
+   iPhone, and iOS widget results separate; one passing surface does not stand in for another.
 
 7. Exercise the signed additional-account lifecycle: add, rename, refresh, and remove one
    account while a sibling remains live. Removal must stay visible while work is active, retain

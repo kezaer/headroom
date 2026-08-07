@@ -135,6 +135,47 @@ struct WidgetSnapshotProjectorTests {
         #expect(envelope.providers[0].weeklyWindow?.severity == .critical)
     }
 
+    @Test func unresolvedResetProjectionPreservesLiveAndStaleSemantics() {
+        let observedAt = now.addingTimeInterval(-300)
+        let liveWindow = UsageWindow(
+            kind: .fiveHour,
+            utilization: 0,
+            resetSchedule: .unresolved(.absent)
+        )
+        let staleWindow = UsageWindow(
+            kind: .fiveHour,
+            utilization: 0,
+            resetSchedule: .unresolved(.absent),
+            freshness: .stale(observedAt: observedAt)
+        )
+
+        let live = WidgetSnapshotProjector.project(
+            snapshots: [.claude: .live(.claude, windows: [liveWindow], at: now)],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        ).providers[0].windows[0]
+        let stale = WidgetSnapshotProjector.project(
+            snapshots: [.claude: .live(.claude, windows: [staleWindow], at: now)],
+            providerOrder: [.claude],
+            displayNames: [.claude: "Claude"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        ).providers[0].windows[0]
+
+        #expect(live.utilization == 0)
+        #expect(live.resetSchedule == .unresolved(.absent))
+        #expect(live.observedAt == now)
+        #expect(MirrorPresentation.resetText(for: live, now: now) == "Available")
+        #expect(stale.utilization == 0)
+        #expect(stale.resetSchedule == .unresolved(.absent))
+        #expect(stale.observedAt == observedAt)
+        #expect(MirrorPresentation.resetText(for: stale, now: now) == "Reset info unavailable")
+    }
+
     @Test func disabledExportContainsNoProviderData() {
         let envelope = WidgetSnapshotProjector.project(
             snapshots: [.claude: .live(.claude, windows: [UsageWindow(kind: .weekly, utilization: 5, resetsAt: reset)])],

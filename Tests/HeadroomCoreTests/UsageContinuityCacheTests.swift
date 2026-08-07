@@ -85,7 +85,7 @@ struct UsageContinuityCacheTests {
 
         #expect(restored.windows.first?.kind == kind)
         #expect(restored.windows.first?.freshness == .stale(observedAt: observedAt))
-        #expect(restored.windows.first?.resetsAt == resetsAt)
+        #expect(restored.windows.first?.resetSchedule == .scheduled(resetsAt))
     }
 
     @Test func corruptPersistenceFailsSafe() {
@@ -124,8 +124,169 @@ struct UsageContinuityCacheTests {
             for: AccountKey(providerID: .claude, accountID: .primary)
         )
 
-        let encoded = defaults.data(forKey: "usageContinuitySnapshots.v1") ?? Data()
+        let encoded = defaults.data(forKey: "usageContinuitySnapshots.v2") ?? Data()
         #expect(!String(decoding: encoded, as: UTF8.self).contains(secret))
+    }
+
+    @Test func unresolvedResetRoundTripsWithoutADeadline() throws {
+        let defaults = freshDefaults()
+        let cache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let observedAt = Date(timeIntervalSince1970: 2_000_000)
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(
+                    kind: .fiveHour,
+                    utilization: 0,
+                    resetSchedule: .unresolved(.absent),
+                    observedAt: observedAt
+                ),
+            ], at: observedAt),
+            for: key
+        )
+
+        let restored = try #require(cache.load()[key]?.windows.first)
+        let encoded = try #require(defaults.data(forKey: "usageContinuitySnapshots.v2"))
+
+        #expect(restored.resetSchedule == .unresolved(.absent))
+        #expect(restored.observedAt == observedAt)
+        #expect(!String(decoding: encoded, as: UTF8.self).contains("resetDeadline"))
+    }
+
+    @Test func everyUnresolvedReasonPreservesObservationAcrossLifecycle() throws {
+        let observedAt = Date(timeIntervalSince1970: 2_000_000)
+        let kind = WindowKind.other("Weekly (Fable)")
+
+        for reason in ResetUnresolvedReason.allCases {
+            let window = UsageWindow(
+                kind: kind,
+                utilization: 39,
+                resetSchedule: .unresolved(reason),
+                observedAt: observedAt
+            )
+            let source = UsageSnapshot.live(.claude, windows: [window], at: observedAt)
+
+            let stale = UsageContinuityPolicy.restoredSnapshot(
+                source,
+                for: .claude,
+                at: observedAt.addingTimeInterval(6 * 24 * 60 * 60)
+            )
+            let staleWindow = try #require(stale.windows.first)
+            #expect(staleWindow.resetSchedule == .unresolved(reason))
+            #expect(staleWindow.observedAt == observedAt)
+            #expect(staleWindow.freshness == .stale(observedAt: observedAt))
+
+            let unavailableAt = observedAt.addingTimeInterval(7 * 24 * 60 * 60)
+            let unavailable = UsageContinuityPolicy.restoredSnapshot(
+                stale,
+                for: .claude,
+                at: unavailableAt.addingTimeInterval(1)
+            )
+            let unavailableWindow = try #require(unavailable.windows.first)
+            #expect(unavailableWindow.resetSchedule == .unresolved(reason))
+            #expect(unavailableWindow.observedAt == observedAt)
+            #expect(unavailableWindow.freshness == .unavailable(since: unavailableAt))
+
+            let removed = UsageContinuityPolicy.restoredSnapshot(
+                unavailable,
+                for: .claude,
+                at: unavailableAt.addingTimeInterval(7 * 24 * 60 * 60)
+            )
+            #expect(removed.windows.isEmpty)
+        }
+    }
+
+    @Test func legacyFutureAndPastDeadlinesMigrateWithoutSentinels() throws {
+        let defaults = freshDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let capturedAt = Date(timeIntervalSince1970: 2_000_000)
+        let future = capturedAt.addingTimeInterval(3_600)
+        let past = capturedAt.addingTimeInterval(-3_600)
+        let legacy = [LegacySnapshotFixture(
+            key: key,
+            windows: [
+                LegacyWindowFixture(
+                    kind: "weekly",
+                    otherLabel: nil,
+                    billingPeriodDuration: nil,
+                    utilization: 30,
+                    resetsAt: future,
+                    resetLabel: nil,
+                    staleObservedAt: nil,
+                    unavailableSince: nil
+                ),
+                LegacyWindowFixture(
+                    kind: "other",
+                    otherLabel: "Weekly (Fable)",
+                    billingPeriodDuration: nil,
+                    utilization: 40,
+                    resetsAt: past,
+                    resetLabel: nil,
+                    staleObservedAt: nil,
+                    unavailableSince: nil
+                ),
+            ],
+            planLabel: nil,
+            accountEmail: nil,
+            capturedAt: capturedAt
+        )]
+        defaults.set(try JSONEncoder().encode(legacy), forKey: "usageContinuitySnapshots.v1")
+
+        let windows = try #require(UsageContinuityCache(defaults: defaults).load()[key]?.windows)
+
+        #expect(windows.first { $0.kind == .weekly }?.resetSchedule == .scheduled(future))
+        #expect(windows.first { $0.kind == .other("Weekly (Fable)") }?.resetSchedule == .unresolved(.elapsed))
+    }
+
+    @Test func legacySentinelMigratesReadOnlyToVersionedUnknownEvidence() throws {
+        let defaults = freshDefaults()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let capturedAt = Date(timeIntervalSince1970: 2_000_000)
+        let legacy = [LegacySnapshotFixture(
+            key: key,
+            windows: [LegacyWindowFixture(
+                kind: "fiveHour",
+                otherLabel: nil,
+                billingPeriodDuration: nil,
+                utilization: 0,
+                resetsAt: capturedAt,
+                resetLabel: nil,
+                staleObservedAt: nil,
+                unavailableSince: nil
+            )],
+            planLabel: "Max",
+            accountEmail: nil,
+            capturedAt: capturedAt
+        )]
+        defaults.set(try JSONEncoder().encode(legacy), forKey: "usageContinuitySnapshots.v1")
+
+        let restored = try #require(UsageContinuityCache(defaults: defaults).load()[key]?.windows.first)
+
+        #expect(restored.resetSchedule == .unresolved(.legacyUnknown))
+        #expect(restored.freshness == .stale(observedAt: capturedAt))
+        #expect(restored.observedAt == capturedAt)
+        #expect(defaults.data(forKey: "usageContinuitySnapshots.v2") != nil)
+        #expect(defaults.data(forKey: "usageContinuitySnapshots.v1") != nil)
+        #expect(Countdown.resetText(for: restored, now: capturedAt) == "Reset info unavailable")
+    }
+
+    @Test func futureVersionedPayloadIsNotOverwrittenBySaveOrRemove() throws {
+        let defaults = freshDefaults()
+        let future = Data(#"{"schemaVersion":999,"records":[]}"#.utf8)
+        defaults.set(future, forKey: "usageContinuitySnapshots.v2")
+        let cache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+
+        cache.save(
+            .live(.claude, windows: [
+                UsageWindow(kind: .weekly, utilization: 12, resetsAt: .distantFuture),
+            ]),
+            for: key
+        )
+        cache.remove(for: key)
+
+        #expect(defaults.data(forKey: "usageContinuitySnapshots.v2") == future)
+        #expect(cache.load().isEmpty)
     }
 
     private func freshDefaults() -> UserDefaults {
@@ -134,4 +295,23 @@ struct UsageContinuityCacheTests {
         defaults.removePersistentDomain(forName: suite)
         return defaults
     }
+}
+
+private struct LegacySnapshotFixture: Codable {
+    let key: AccountKey
+    let windows: [LegacyWindowFixture]
+    let planLabel: String?
+    let accountEmail: String?
+    let capturedAt: Date?
+}
+
+private struct LegacyWindowFixture: Codable {
+    let kind: String
+    let otherLabel: String?
+    let billingPeriodDuration: TimeInterval?
+    let utilization: Double
+    let resetsAt: Date
+    let resetLabel: String?
+    let staleObservedAt: Date?
+    let unavailableSince: Date?
 }

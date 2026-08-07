@@ -116,7 +116,9 @@ struct UsageStoreTests {
     @Test func staleWithoutDataKeepsPriorWindows() async {
         // Continuity (KTD7): a later failure keeps the prior windows shown, dimmed.
         let provider = MutableStubProvider(id: .claude, displayName: "Claude",
-            snapshot: .live(.claude, windows: [UsageWindow(kind: .fiveHour, utilization: 40, resetsAt: reset)]))
+            snapshot: .live(.claude, windows: [
+                UsageWindow(kind: .fiveHour, utilization: 40, resetsAt: .distantFuture),
+            ]))
         let store = makeStore(providers: [provider])
         await store.refreshAll()
         #expect(store.snapshot(for: .claude).windows.count == 1)
@@ -395,7 +397,8 @@ struct UsageStoreTests {
                 UsageWindow(
                     kind: .other("Weekly (Fable)"),
                     utilization: 39,
-                    resetsAt: initialCapture
+                    resetSchedule: .unresolved(.absent),
+                    observedAt: initialCapture
                 ),
             ], at: initialCapture),
             for: key
@@ -443,7 +446,8 @@ struct UsageStoreTests {
                 UsageWindow(
                     kind: .other("Weekly (Fable)"),
                     utilization: 39,
-                    resetsAt: initialCapture
+                    resetSchedule: .unresolved(.absent),
+                    observedAt: initialCapture
                 ),
             ], at: initialCapture),
             for: key
@@ -537,7 +541,8 @@ struct UsageStoreTests {
                 UsageWindow(
                     kind: .other("Weekly (Fable)"),
                     utilization: 39,
-                    resetsAt: initialCapture
+                    resetSchedule: .unresolved(.absent),
+                    observedAt: initialCapture
                 ),
             ], at: initialCapture),
             for: key

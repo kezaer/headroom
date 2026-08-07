@@ -161,6 +161,30 @@ struct CLIExecutableLocatorTests {
         #expect(await locator.recentDiagnosticEvents().map(\.category).contains(.launchRace))
     }
 
+    @Test func invalidationDuringDiscoveryRejectsTheStaleResult() async {
+        let shell = InvalidationRaceShellSearch()
+        let hints = TestExecutableHintStore()
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: hints,
+            shellSearch: { await shell.search() },
+            validate: { _ in .executable }
+        )
+
+        #expect(await locator.locate() == .available(path: "/old/claude", source: .loginShell))
+
+        let refresh = Task { await locator.locate(forceRefresh: true) }
+        while await shell.count < 2 { await Task.yield() }
+        await locator.invalidate(path: "/old/claude", reason: .launchNotFound)
+        await shell.resumeStaleSearch()
+
+        #expect(await refresh.value == .available(path: "/new/claude", source: .loginShell))
+        #expect(await shell.count == 3)
+        #expect(hints.hint(for: "claude") == "/new/claude")
+        #expect(await locator.locate() == .available(path: "/new/claude", source: .memoryHint))
+    }
+
     @Test func diagnosticsDistinguishValidHintTimeoutAndSupportedLocationMiss() async {
         let clock = Date(timeIntervalSince1970: 20_000)
         let hinted = CLIExecutableLocator(
@@ -241,6 +265,28 @@ private actor SuspendedShellSearch {
     func resume(with result: CLIExecutableShellResult) {
         continuation?.resume(returning: result)
         continuation = nil
+    }
+}
+
+private actor InvalidationRaceShellSearch {
+    private(set) var count = 0
+    private var staleContinuation: CheckedContinuation<CLIExecutableShellResult, Never>?
+
+    func search() async -> CLIExecutableShellResult {
+        count += 1
+        switch count {
+        case 1:
+            return .completed(candidates: ["/old/claude"])
+        case 2:
+            return await withCheckedContinuation { staleContinuation = $0 }
+        default:
+            return .completed(candidates: ["/new/claude"])
+        }
+    }
+
+    func resumeStaleSearch() {
+        staleContinuation?.resume(returning: .completed(candidates: ["/old/claude"]))
+        staleContinuation = nil
     }
 }
 

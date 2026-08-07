@@ -5,6 +5,7 @@ public struct ParsedUsageWindow: Sendable, Equatable {
     public let kind: WindowKind
     public let percentUsed: Double
     public let resetLabel: String?
+    public let resetTimeZoneIdentifier: String?
 }
 
 /// Extracts usage windows from the (ANSI-stripped) text of Claude Code's `/usage`
@@ -39,18 +40,23 @@ public enum ClaudeUsageParser {
             guard let kind = windowKind(for: lines[i]) else { i += 1; continue }
             // Scan the next few lines for this window's percent + reset text.
             var percent: Double?
-            var reset: String?
+            var reset: ResetMetadata?
             var j = i + 1
             let limit = min(lines.count, i + 5)
             while j < limit {
                 if percent == nil, let p = percentUsed(in: lines[j]) { percent = p }
-                if reset == nil, let r = resetText(in: lines[j]) { reset = r }
+                if reset == nil, let r = resetMetadata(in: lines[j]) { reset = r }
                 // Stop early if the next window label appears.
                 if windowKind(for: lines[j]) != nil { break }
                 j += 1
             }
             if let percent {
-                byKind[kind] = ParsedUsageWindow(kind: kind, percentUsed: percent, resetLabel: reset)
+                byKind[kind] = ParsedUsageWindow(
+                    kind: kind,
+                    percentUsed: percent,
+                    resetLabel: reset?.label,
+                    resetTimeZoneIdentifier: reset?.timeZoneIdentifier
+                )
             }
             i += 1
         }
@@ -82,7 +88,13 @@ public enum ClaudeUsageParser {
         else { return nil }
         let rest = String(line[line.index(after: colon)...])
         guard let percent = percentUsed(in: rest) else { return nil }
-        return ParsedUsageWindow(kind: kind, percentUsed: percent, resetLabel: resetText(in: rest))
+        let reset = resetMetadata(in: rest)
+        return ParsedUsageWindow(
+            kind: kind,
+            percentUsed: percent,
+            resetLabel: reset?.label,
+            resetTimeZoneIdentifier: reset?.timeZoneIdentifier
+        )
     }
 
     // MARK: line classifiers
@@ -111,15 +123,24 @@ public enum ClaudeUsageParser {
         return Double(m.1)
     }
 
-    /// Extracts the "Resets …" text, dropping a trailing timezone parenthetical.
-    static func resetText(in line: String) -> String? {
+    /// Extracts normalized source copy and preserves a trailing IANA zone separately.
+    private static func resetMetadata(in line: String) -> ResetMetadata? {
         guard let m = line.firstMatch(of: /[Rr]\s*e?sets?\s+(.+)/) else { return nil }
         var value = String(m.1).trimmingCharacters(in: .whitespaces)
-        // Drop a trailing "(America/Los_Angeles)" for brevity.
-        if let paren = value.range(of: " (") { value = String(value[..<paren.lowerBound]) }
+        var timeZoneIdentifier: String?
+        if value.hasSuffix(")"),
+           let open = value.lastIndex(of: "("),
+           open > value.startIndex {
+            let zoneStart = value.index(after: open)
+            let zoneEnd = value.index(before: value.endIndex)
+            let candidate = String(value[zoneStart..<zoneEnd])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            timeZoneIdentifier = candidate.isEmpty ? nil : candidate
+            value = String(value[..<open]).trimmingCharacters(in: .whitespaces)
+        }
         value = value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
         value = value.replacingOccurrences(of: #"\b([A-Za-z]{3,9}\s+\d{1,2})\s+t\s+(\d)"#, with: "$1 at $2", options: .regularExpression)
-        return "Resets \(value)"
+        return ResetMetadata(label: "Resets \(value)", timeZoneIdentifier: timeZoneIdentifier)
     }
 
     // MARK: helpers
@@ -138,4 +159,9 @@ public enum ClaudeUsageParser {
         case .other: return 2
         }
     }
+}
+
+private struct ResetMetadata {
+    let label: String
+    let timeZoneIdentifier: String?
 }

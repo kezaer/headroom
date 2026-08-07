@@ -17,10 +17,15 @@ struct HeadroomIOSTimelineProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<HeadroomIOSWidgetEntry>) -> Void) {
         let now = Date.now
         let state = resolvedState()
-        let entries = (0..<15).map { offset in
-            HeadroomIOSWidgetEntry(date: now.addingTimeInterval(Double(offset) * 60), state: state)
+        let envelope: WidgetSnapshotEnvelope?
+        switch state {
+        case .demo(let content), .content(let content): envelope = content
+        default: envelope = nil
         }
-        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(15 * 60))))
+        let entries = WidgetTimelineSchedule.entryDates(for: envelope, now: now).map { date in
+            HeadroomIOSWidgetEntry(date: date, state: state)
+        }
+        completion(Timeline(entries: entries, policy: .after(WidgetTimelineSchedule.refreshDate(after: now))))
     }
 
     private func entry(date: Date) -> HeadroomIOSWidgetEntry {
@@ -42,12 +47,11 @@ struct HeadroomIOSTimelineProvider: TimelineProvider {
            adoptable(remote: envelope.snapshot, into: cacheRead) {
             try? cache.write(envelope.snapshot)
         }
-        return .from(cacheRead: cache.read(), syncRead: syncRead)
+        return .from(cacheRead: cacheRead, syncRead: syncRead)
     }
 
     private func adoptable(remote: WidgetSnapshotEnvelope, into cacheRead: WidgetSnapshotCacheRead) -> Bool {
         guard let cached = cacheRead.envelope else { return true }
-        if remote.generatedAt > cached.generatedAt { return true }
-        return remote.generatedAt == cached.generatedAt && remote != cached
+        return remote.generatedAt > cached.generatedAt
     }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// A redaction-safe snapshot built for WidgetKit. It contains only display-ready usage
 /// values, never provider credentials, request metadata, raw CLI output, or paths.
 public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
     public static let oldestSupportedSchemaVersion = 1
 
     public let schemaVersion: Int
@@ -41,9 +41,22 @@ public struct WidgetSnapshotEnvelope: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        let decodedGeneratedAt = try container.decode(Date.self, forKey: .generatedAt)
+        generatedAt = decodedGeneratedAt
         status = try container.decode(WidgetExportStatus.self, forKey: .status)
-        providers = try container.decode([WidgetProviderSummary].self, forKey: .providers)
+        guard Self.supports(schemaVersion: schemaVersion) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .schemaVersion,
+                in: container,
+                debugDescription: "Unsupported widget snapshot schema"
+            )
+        }
+        if schemaVersion >= 3 {
+            providers = try container.decode([WidgetProviderSummary].self, forKey: .providers)
+        } else {
+            providers = try container.decode([LegacyWidgetProviderSummary].self, forKey: .providers)
+                .map { WidgetProviderSummary(legacy: $0, generatedAt: decodedGeneratedAt) }
+        }
         apiSpendProviders = try container.decodeIfPresent([WidgetAPISpendSummary].self, forKey: .apiSpendProviders) ?? []
         widgetProviderSelection = try container.decodeIfPresent([String].self, forKey: .widgetProviderSelection)
     }
@@ -249,13 +262,45 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
     public let kind: WidgetWindowKind
     public let label: String
     public let percentRemaining: Double
-    public let resetsAt: Date
+    /// Exact canonical utilization when written by v3. Nil for migrated v1/v2 rows,
+    /// which makes them ineligible for the live-zero “Available” inference.
+    public let utilization: Double?
+    public let resetSchedule: ResetSchedule
     public let resetLabel: String?
+    public let resetTimeZoneIdentifier: String?
+    public let observedAt: Date?
     public let severity: WidgetUsageSeverity
     public let freshness: WidgetWindowFreshness
     /// Additive v2 wire discriminator. Older readers ignore it and see an honest
     /// labeled `.other` window; current readers recover subscription semantics.
     public let billingPeriodDuration: TimeInterval?
+
+    public init(
+        kind: WidgetWindowKind,
+        label: String,
+        percentRemaining: Double,
+        utilization: Double? = nil,
+        resetSchedule: ResetSchedule,
+        resetLabel: String?,
+        resetTimeZoneIdentifier: String? = nil,
+        observedAt: Date? = nil,
+        severity: WidgetUsageSeverity,
+        freshness: WidgetWindowFreshness = .live,
+        billingPeriodDuration: TimeInterval? = nil
+    ) {
+        self.id = kind.id
+        self.kind = kind
+        self.label = label
+        self.percentRemaining = percentRemaining
+        self.utilization = utilization
+        self.resetSchedule = resetSchedule
+        self.resetLabel = resetLabel
+        self.resetTimeZoneIdentifier = resetTimeZoneIdentifier
+        self.observedAt = observedAt ?? freshness.observedAt
+        self.severity = severity
+        self.freshness = freshness
+        self.billingPeriodDuration = billingPeriodDuration
+    }
 
     public init(
         kind: WidgetWindowKind,
@@ -267,15 +312,17 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         freshness: WidgetWindowFreshness = .live,
         billingPeriodDuration: TimeInterval? = nil
     ) {
-        self.id = kind.id
-        self.kind = kind
-        self.label = label
-        self.percentRemaining = percentRemaining
-        self.resetsAt = resetsAt
-        self.resetLabel = resetLabel
-        self.severity = severity
-        self.freshness = freshness
-        self.billingPeriodDuration = billingPeriodDuration
+        self.init(
+            kind: kind,
+            label: label,
+            percentRemaining: percentRemaining,
+            utilization: nil,
+            resetSchedule: .scheduled(resetsAt),
+            resetLabel: resetLabel,
+            severity: severity,
+            freshness: freshness,
+            billingPeriodDuration: billingPeriodDuration
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -283,8 +330,13 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         case kind
         case label
         case percentRemaining
-        case resetsAt
+        case utilization
+        case resetKind
+        case resetDeadline
+        case resetReason
         case resetLabel
+        case resetTimeZoneIdentifier
+        case observedAt
         case severity
         case freshness
         case billingPeriodDuration
@@ -296,8 +348,36 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         id = try container.decodeIfPresent(String.self, forKey: .id) ?? kind.id
         label = try container.decode(String.self, forKey: .label)
         percentRemaining = try container.decode(Double.self, forKey: .percentRemaining)
-        resetsAt = try container.decode(Date.self, forKey: .resetsAt)
+        utilization = try container.decodeIfPresent(Double.self, forKey: .utilization)
+        let resetKind = try container.decode(ResetKind.self, forKey: .resetKind)
+        let resetDeadline = try container.decodeIfPresent(Date.self, forKey: .resetDeadline)
+        let resetReason = try container.decodeIfPresent(String.self, forKey: .resetReason)
+        switch resetKind {
+        case .scheduled:
+            guard let resetDeadline, resetReason == nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .resetKind,
+                    in: container,
+                    debugDescription: "Scheduled reset requires only a deadline"
+                )
+            }
+            resetSchedule = .scheduled(resetDeadline)
+        case .unresolved:
+            guard resetDeadline == nil,
+                  let resetReason,
+                  let reason = ResetUnresolvedReason(rawValue: resetReason)
+            else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .resetKind,
+                    in: container,
+                    debugDescription: "Unresolved reset requires only a known reason"
+                )
+            }
+            resetSchedule = .unresolved(reason)
+        }
         resetLabel = try container.decodeIfPresent(String.self, forKey: .resetLabel)
+        resetTimeZoneIdentifier = try container.decodeIfPresent(String.self, forKey: .resetTimeZoneIdentifier)
+        observedAt = try container.decodeIfPresent(Date.self, forKey: .observedAt)
         severity = try container.decode(WidgetUsageSeverity.self, forKey: .severity)
         freshness = try container.decodeIfPresent(WidgetWindowFreshness.self, forKey: .freshness) ?? .live
         billingPeriodDuration = try container.decodeIfPresent(TimeInterval.self, forKey: .billingPeriodDuration)
@@ -309,11 +389,26 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
         try container.encode(kind, forKey: .kind)
         try container.encode(label, forKey: .label)
         try container.encode(percentRemaining, forKey: .percentRemaining)
-        try container.encode(resetsAt, forKey: .resetsAt)
+        try container.encodeIfPresent(utilization, forKey: .utilization)
+        switch resetSchedule {
+        case .scheduled(let deadline):
+            try container.encode(ResetKind.scheduled, forKey: .resetKind)
+            try container.encode(deadline, forKey: .resetDeadline)
+        case .unresolved(let reason):
+            try container.encode(ResetKind.unresolved, forKey: .resetKind)
+            try container.encode(reason.rawValue, forKey: .resetReason)
+        }
         try container.encodeIfPresent(resetLabel, forKey: .resetLabel)
+        try container.encodeIfPresent(resetTimeZoneIdentifier, forKey: .resetTimeZoneIdentifier)
+        try container.encodeIfPresent(observedAt, forKey: .observedAt)
         try container.encode(severity, forKey: .severity)
         try container.encode(freshness, forKey: .freshness)
         try container.encodeIfPresent(billingPeriodDuration, forKey: .billingPeriodDuration)
+    }
+
+    private enum ResetKind: String, Codable {
+        case scheduled
+        case unresolved
     }
 
     public var roundedPercentRemaining: Int {
@@ -349,6 +444,56 @@ public struct WidgetWindowSummary: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+private struct LegacyWidgetProviderSummary: Codable {
+    let id: String
+    let displayName: String
+    let planLabel: String?
+    let freshness: WidgetProviderFreshness
+    let windows: [LegacyWidgetWindowSummary]
+    let renewalDate: Date?
+}
+
+private struct LegacyWidgetWindowSummary: Codable {
+    let kind: WidgetWindowKind
+    let label: String
+    let percentRemaining: Double
+    let resetsAt: Date
+    let resetLabel: String?
+    let severity: WidgetUsageSeverity
+    let freshness: WidgetWindowFreshness?
+    let billingPeriodDuration: TimeInterval?
+}
+
+private extension WidgetProviderSummary {
+    init(legacy: LegacyWidgetProviderSummary, generatedAt: Date) {
+        self.init(
+            id: legacy.id,
+            displayName: legacy.displayName,
+            planLabel: legacy.planLabel,
+            freshness: legacy.freshness,
+            windows: legacy.windows.map {
+                WidgetWindowSummary(
+                    kind: $0.kind,
+                    label: $0.label,
+                    percentRemaining: $0.percentRemaining,
+                    utilization: nil,
+                    resetSchedule: LegacyResetClassifier.schedule(
+                        providerID: ProviderID(legacy.id),
+                        resetsAt: $0.resetsAt,
+                        capturedAt: generatedAt
+                    ),
+                    resetLabel: $0.resetLabel,
+                    observedAt: $0.freshness?.observedAt ?? generatedAt,
+                    severity: $0.severity,
+                    freshness: $0.freshness ?? .live,
+                    billingPeriodDuration: $0.billingPeriodDuration
+                )
+            },
+            renewalDate: legacy.renewalDate
+        )
+    }
+}
+
 public enum WidgetWindowFreshness: Codable, Equatable, Sendable {
     case live
     case stale(observedAt: Date)
@@ -367,6 +512,11 @@ public enum WidgetWindowFreshness: Codable, Equatable, Sendable {
     public var isUnavailable: Bool {
         if case .unavailable = self { return true }
         return false
+    }
+
+    public var observedAt: Date? {
+        guard case .stale(let observedAt) = self else { return nil }
+        return observedAt
     }
 }
 
@@ -395,4 +545,39 @@ public enum WidgetUsageSeverity: String, Codable, Sendable {
     case healthy
     case low
     case critical
+}
+
+/// Builds the short WidgetKit timeline used to keep relative reset copy accurate between
+/// host-app exports. Minute cadence handles ordinary countdown changes; exact entries
+/// cover the approved immediate-reset boundary and the source deadline itself.
+public enum WidgetTimelineSchedule {
+    private static let cadence: TimeInterval = 60
+    private static let entryCount = 15
+
+    public static func entryDates(
+        for envelope: WidgetSnapshotEnvelope?,
+        now: Date
+    ) -> [Date] {
+        let horizon = now.addingTimeInterval(Double(entryCount) * cadence)
+        var dates = Set((0..<entryCount).map {
+            now.addingTimeInterval(Double($0) * cadence)
+        })
+
+        for deadline in envelope?.providers
+            .flatMap(\.windows)
+            .compactMap(\.resetSchedule.deadline) ?? [] {
+            for transition in [
+                deadline.addingTimeInterval(-60),
+                deadline,
+                deadline.addingTimeInterval(61),
+            ] where transition >= now && transition < horizon {
+                dates.insert(transition)
+            }
+        }
+        return dates.sorted()
+    }
+
+    public static func refreshDate(after now: Date) -> Date {
+        now.addingTimeInterval(Double(entryCount) * cadence)
+    }
 }

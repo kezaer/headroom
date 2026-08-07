@@ -25,7 +25,9 @@ struct GrokProviderTests {
         let window = try #require(snapshot.windows.first)
         #expect(window.utilization == 0)
         #expect(window.percentRemaining == 100)
-        #expect(window.resetsAt == DateParsing.iso8601("2026-08-04T10:27:26.251601+00:00"))
+        #expect(window.resetSchedule == .scheduled(
+            DateParsing.iso8601("2026-08-04T10:27:26.251601+00:00")!
+        ))
         #expect(window.kind == .billingPeriod(label: "Weekly", duration: 7 * 24 * 60 * 60))
     }
 

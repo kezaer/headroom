@@ -92,6 +92,17 @@ auth payloads, or raw errors. A passing local development build is source eviden
 candidate is **Candidate tested**; a successful public update is **Sparkle accepted**; neither
 state implies **macOS published** unless the public artifacts were separately verified.
 
+For a reset-accuracy or widget snapshot schema change, record Track B separately. Its signed
+installed-app evidence must cover the macOS popover, macOS widgets, iPhone companion, and iOS
+widgets with scheduled, absent, elapsed, malformed, implausible, and invalid-zone reset fixtures.
+Confirm `Available` appears only for a fresh exact-zero absent/elapsed row; all other unresolved
+rows say `Reset info unavailable`. Cross genuine deadlines and sleep/wake boundaries, checking
+the `6d 4h`, `6d`, `13h 37m`, and `37m` precision cases and the ±60-second `Resets now` boundary.
+Migrate v1/v2 local and synced fixtures, surface future schemas as incompatible without rewriting
+them, and confirm equal-generation local data wins. Record only reset categories and ages. A
+downgrade to a pre-v3 publisher is unsupported for reset fidelity because iCloud KVS cannot fence
+an older writer; do not treat downgrade behavior as a safe rollback path.
+
 - Use Computer Use only when the target app exposes a stable accessibility surface. If a menu-bar
   popover or transient system surface is not available after one fresh state query, stop. Ask the
   tester for the exact click and continue from the resulting window. Never brute-force menu-bar

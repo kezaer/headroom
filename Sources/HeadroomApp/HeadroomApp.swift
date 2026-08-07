@@ -103,11 +103,18 @@ enum Entry {
             case .unknownUI:
                 print("RESULT: unrecognized Claude surface (no input sent)")
             case .panel(let text, let planHint):
+                let capturedAt = Date()
                 let windows = ClaudeUsageParser.parse(text)
                 let plan = ClaudeUsageParser.plan(in: text) ?? planHint
                 print("RESULT: parsed \(windows.count) window(s) plan=\(plan == nil ? "absent" : "present")")
                 for w in windows {
-                    print("  • category=\(diagnosticWindowCategory(w.kind))  \(Int(w.percentUsed))% used  reset=\(w.resetLabel == nil ? "absent" : "present")")
+                    let schedule = ClaudeResetNormalizer.schedule(
+                        label: w.resetLabel,
+                        timeZoneIdentifier: w.resetTimeZoneIdentifier,
+                        kind: w.kind,
+                        now: capturedAt
+                    )
+                    print("  • category=\(diagnosticWindowCategory(w.kind))  \(Int(w.percentUsed))% used  \(ResetDiagnostic.line(for: schedule, observedAt: capturedAt, now: capturedAt))")
                 }
             }
             semaphore.signal()
@@ -159,7 +166,7 @@ enum Entry {
                     print("  plan: \(plan)")
                 }
                 for window in snapshot.windows {
-                    print("  • \(window.kind)  \(Int(window.utilization.rounded()))% used  →  \(window.resetsAt)  (remaining \(Int(window.percentRemaining.rounded()))%)")
+                    print("  • \(window.kind)  \(Int(window.utilization.rounded()))% used  \(ResetDiagnostic.line(for: window.resetSchedule, observedAt: window.observedAt ?? snapshot.capturedAt, now: Date()))  (remaining \(Int(window.percentRemaining.rounded()))%)")
                 }
             case .stale(let reason):
                 print("RESULT: stale Codex snapshot: \(reason.message)")
@@ -207,7 +214,7 @@ enum Entry {
                 print("RESULT: live Grok snapshot via \(transport.rawValue), parsed \(snapshot.windows.count) window(s):")
                 if let plan = snapshot.planLabel { print("  plan: \(plan)") }
                 for window in snapshot.windows {
-                    print("  • \(window.kind.shortLabel)  \(Int(window.percentUsed.rounded()))% used  →  \(window.resetsAt)")
+                    print("  • \(window.kind.shortLabel)  \(Int(window.percentUsed.rounded()))% used  \(ResetDiagnostic.line(for: window.resetSchedule, observedAt: window.observedAt ?? snapshot.capturedAt, now: Date()))")
                 }
             case .methodUnavailable:
                 print("RESULT: Grok billing method unavailable and fallback was not attempted")
@@ -240,7 +247,7 @@ enum Entry {
                 }
                 print("RESULT: live Cursor snapshot via official /usage panel")
                 print("  plan: \(parsed.planName)")
-                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset=\(parsed.resetLabel)")
+                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset-evidence=scheduled")
                 print("  on-demand: \(parsed.onDemand.isEnabled ? "enabled" : "disabled")")
             case .loginRequired:
                 print("RESULT: login required")

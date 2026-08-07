@@ -17,10 +17,12 @@ struct HeadroomTimelineProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<HeadroomWidgetEntry>) -> Void) {
         let now = Date.now
         let state = resolvedState()
-        let entries = (0..<15).map { offset in
-            HeadroomWidgetEntry(date: now.addingTimeInterval(Double(offset) * 60), state: state)
+        let envelope: WidgetSnapshotEnvelope?
+        if case .content(let content) = state { envelope = content } else { envelope = nil }
+        let entries = WidgetTimelineSchedule.entryDates(for: envelope, now: now).map { date in
+            HeadroomWidgetEntry(date: date, state: state)
         }
-        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(15 * 60))))
+        completion(Timeline(entries: entries, policy: .after(WidgetTimelineSchedule.refreshDate(after: now))))
     }
 
     private func entry(date: Date) -> HeadroomWidgetEntry {
@@ -41,6 +43,8 @@ struct HeadroomTimelineProvider: TimelineProvider {
             widgetTimelineLogger.info("Widget cache read empty")
         case .corrupt:
             widgetTimelineLogger.info("Widget cache read corrupt")
+        case .incompatibleSchema:
+            widgetTimelineLogger.info("Widget cache schema incompatible")
         case .snapshot(let envelope):
             widgetTimelineLogger.info(
                 "Widget cache read snapshot status=\(envelope.status.rawValue, privacy: .public) providers=\(envelope.providers.count, privacy: .public)"

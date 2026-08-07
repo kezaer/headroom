@@ -13,8 +13,9 @@ public protocol UsageContinuityCaching: Sendable {
 /// UserDefaults-backed continuity across app launches. `UsageStore` still owns freshness
 /// and expiry decisions; this type only round-trips bounded, non-secret snapshot data.
 public struct UsageContinuityCache: UsageContinuityCaching, @unchecked Sendable {
-    private static let storageKey = "usageContinuitySnapshots.v1"
-    private static let maximumRecords = AccountRegistry.maxPerProvider * 2
+    private static let storageKey = "usageContinuitySnapshots.v2"
+    private static let legacyStorageKey = "usageContinuitySnapshots.v1"
+    private static let maximumRecords = 64
 
     private let defaults: UserDefaults
 
@@ -23,8 +24,18 @@ public struct UsageContinuityCache: UsageContinuityCaching, @unchecked Sendable 
     }
 
     public func load() -> [AccountKey: UsageSnapshot] {
-        Dictionary(
-            records().compactMap { record in
+        let stored: [StoredSnapshot]
+        switch recordState() {
+        case .records(let records):
+            stored = records
+        case .legacy(let records):
+            stored = records.map(StoredSnapshot.init)
+            write(stored)
+        case .missing, .blocked:
+            stored = []
+        }
+        return Dictionary(
+            stored.compactMap { record in
                 guard let snapshot = record.snapshot else { return nil }
                 return (record.key, snapshot)
             },
@@ -34,7 +45,8 @@ public struct UsageContinuityCache: UsageContinuityCaching, @unchecked Sendable 
 
     public func save(_ snapshot: UsageSnapshot, for key: AccountKey) {
         guard snapshot.providerID == key.providerID else { return }
-        var stored = records().filter { $0.key != key }
+        guard var stored = writableRecords() else { return }
+        stored.removeAll { $0.key == key }
         if !snapshot.windows.isEmpty {
             stored.append(StoredSnapshot(key: key, snapshot: snapshot))
         }
@@ -42,19 +54,65 @@ public struct UsageContinuityCache: UsageContinuityCaching, @unchecked Sendable 
     }
 
     public func remove(for key: AccountKey) {
-        write(records().filter { $0.key != key })
+        guard let stored = writableRecords() else { return }
+        write(stored.filter { $0.key != key })
     }
 
-    private func records() -> [StoredSnapshot] {
-        guard let data = defaults.data(forKey: Self.storageKey),
-              let records = try? JSONDecoder().decode([StoredSnapshot].self, from: data)
-        else { return [] }
-        return records
+    private func writableRecords() -> [StoredSnapshot]? {
+        switch recordState() {
+        case .records(let records):
+            return records
+        case .legacy(let records):
+            return records.map(StoredSnapshot.init)
+        case .missing:
+            return []
+        case .blocked:
+            return nil
+        }
+    }
+
+    private func recordState() -> StoredRecordState {
+        if let data = defaults.data(forKey: Self.storageKey) {
+            guard let header = try? JSONDecoder().decode(StoredEnvelopeHeader.self, from: data),
+                  header.schemaVersion == StoredEnvelope.currentSchemaVersion,
+                  let envelope = try? JSONDecoder().decode(StoredEnvelope.self, from: data)
+            else { return .blocked }
+            return .records(envelope.records)
+        }
+        guard let data = defaults.data(forKey: Self.legacyStorageKey),
+              let records = try? JSONDecoder().decode([LegacyStoredSnapshot].self, from: data)
+        else {
+            return defaults.data(forKey: Self.legacyStorageKey) == nil ? .missing : .blocked
+        }
+        return .legacy(records)
     }
 
     private func write(_ records: [StoredSnapshot]) {
-        guard let data = try? JSONEncoder().encode(records) else { return }
+        guard let data = try? JSONEncoder().encode(StoredEnvelope(records: records)) else { return }
         defaults.set(data, forKey: Self.storageKey)
+    }
+}
+
+private enum StoredRecordState {
+    case missing
+    case blocked
+    case records([StoredSnapshot])
+    case legacy([LegacyStoredSnapshot])
+}
+
+private struct StoredEnvelopeHeader: Decodable {
+    let schemaVersion: Int
+}
+
+private struct StoredEnvelope: Codable {
+    static let currentSchemaVersion = 2
+
+    let schemaVersion: Int
+    let records: [StoredSnapshot]
+
+    init(records: [StoredSnapshot]) {
+        self.schemaVersion = Self.currentSchemaVersion
+        self.records = records
     }
 }
 
@@ -75,9 +133,19 @@ private struct StoredSnapshot: Codable {
         self.capturedAt = snapshot.capturedAt
     }
 
+    init(_ legacy: LegacyStoredSnapshot) {
+        self.key = legacy.key
+        self.windows = legacy.windows.map {
+            StoredWindow($0, providerID: legacy.key.providerID, capturedAt: legacy.capturedAt)
+        }
+        self.planLabel = legacy.planLabel
+        self.accountEmail = legacy.accountEmail
+        self.capturedAt = legacy.capturedAt
+    }
+
     var snapshot: UsageSnapshot? {
         let restoredWindows = windows.compactMap(\.usageWindow)
-        guard !restoredWindows.isEmpty else { return nil }
+        guard !restoredWindows.isEmpty, restoredWindows.count == windows.count else { return nil }
         return UsageSnapshot(
             providerID: key.providerID,
             windows: restoredWindows,
@@ -89,20 +157,22 @@ private struct StoredSnapshot: Codable {
     }
 }
 
-private struct StoredWindow: Codable {
-    private enum Kind: String, Codable {
-        case fiveHour
-        case weekly
-        case billingPeriod
-        case other
-    }
+private enum StoredWindowKind: String, Codable {
+    case fiveHour
+    case weekly
+    case billingPeriod
+    case other
+}
 
-    private let kind: Kind
+private struct StoredWindow: Codable {
+    private let kind: StoredWindowKind
     let otherLabel: String?
     let billingPeriodDuration: TimeInterval?
     let utilization: Double
-    let resetsAt: Date
+    let reset: StoredResetEvidence
     let resetLabel: String?
+    let resetTimeZoneIdentifier: String?
+    let observedAt: Date?
     let staleObservedAt: Date?
     let unavailableSince: Date?
 
@@ -126,8 +196,10 @@ private struct StoredWindow: Codable {
             self.billingPeriodDuration = nil
         }
         self.utilization = window.utilization
-        self.resetsAt = window.resetsAt
+        self.reset = StoredResetEvidence(window.resetSchedule)
         self.resetLabel = window.resetLabel
+        self.resetTimeZoneIdentifier = window.resetTimeZoneIdentifier
+        self.observedAt = window.observedAt ?? window.freshness.observedAt
         switch window.freshness {
         case .live:
             self.staleObservedAt = nil
@@ -139,6 +211,27 @@ private struct StoredWindow: Codable {
             self.staleObservedAt = nil
             self.unavailableSince = since
         }
+    }
+
+    init(_ legacy: LegacyStoredWindow, providerID: ProviderID, capturedAt: Date?) {
+        self.kind = legacy.kind
+        self.otherLabel = legacy.otherLabel
+        self.billingPeriodDuration = legacy.billingPeriodDuration
+        self.utilization = legacy.utilization
+        self.reset = StoredResetEvidence(
+            LegacyResetClassifier.schedule(
+                providerID: providerID,
+                resetsAt: legacy.resetsAt,
+                capturedAt: capturedAt
+            )
+        )
+        self.resetLabel = legacy.resetLabel
+        self.resetTimeZoneIdentifier = nil
+        self.observedAt = legacy.staleObservedAt
+        self.staleObservedAt = legacy.unavailableSince == nil
+            ? (legacy.staleObservedAt ?? capturedAt)
+            : nil
+        self.unavailableSince = legacy.unavailableSince
     }
 
     var usageWindow: UsageWindow? {
@@ -160,16 +253,76 @@ private struct StoredWindow: Codable {
             guard let otherLabel, !otherLabel.isEmpty else { return nil }
             restoredKind = .other(otherLabel)
         }
+        guard let resetSchedule = reset.schedule else { return nil }
         return UsageWindow(
             kind: restoredKind,
             utilization: utilization,
-            resetsAt: resetsAt,
+            resetSchedule: resetSchedule,
             resetLabel: resetLabel,
+            resetTimeZoneIdentifier: resetTimeZoneIdentifier,
             freshness: unavailableSince.map(UsageWindowFreshness.unavailable(since:))
                 ?? staleObservedAt.map(UsageWindowFreshness.stale(observedAt:))
-                ?? .live
+                ?? .live,
+            observedAt: observedAt
         )
     }
+}
+
+private struct StoredResetEvidence: Codable {
+    private enum Kind: String, Codable {
+        case scheduled
+        case unresolved
+    }
+
+    private let kind: Kind
+    private let deadline: Date?
+    private let reason: String?
+
+    init(_ schedule: ResetSchedule) {
+        switch schedule {
+        case .scheduled(let deadline):
+            self.kind = .scheduled
+            self.deadline = deadline
+            self.reason = nil
+        case .unresolved(let reason):
+            self.kind = .unresolved
+            self.deadline = nil
+            self.reason = reason.rawValue
+        }
+    }
+
+    var schedule: ResetSchedule? {
+        switch kind {
+        case .scheduled:
+            guard let deadline, reason == nil else { return nil }
+            return .scheduled(deadline)
+        case .unresolved:
+            guard deadline == nil,
+                  let reason,
+                  let decodedReason = ResetUnresolvedReason(rawValue: reason)
+            else { return nil }
+            return .unresolved(decodedReason)
+        }
+    }
+}
+
+private struct LegacyStoredSnapshot: Codable {
+    let key: AccountKey
+    let windows: [LegacyStoredWindow]
+    let planLabel: String?
+    let accountEmail: String?
+    let capturedAt: Date?
+}
+
+private struct LegacyStoredWindow: Codable {
+    let kind: StoredWindowKind
+    let otherLabel: String?
+    let billingPeriodDuration: TimeInterval?
+    let utilization: Double
+    let resetsAt: Date
+    let resetLabel: String?
+    let staleObservedAt: Date?
+    let unavailableSince: Date?
 }
 
 /// Pure freshness and expiry policy shared by launch restoration and live merges.
@@ -228,19 +381,13 @@ enum UsageContinuityPolicy {
         reason: FailureReason,
         at mergeDate: Date
     ) -> UsageSnapshot {
-        let windows = prior.windows.compactMap { window -> UsageWindow? in
-            if isClaudeWeeklySubLimit(window, providerID: prior.providerID) || window.kind.isBillingPeriod {
-                return restoredWindow(
-                    window,
-                    providerID: prior.providerID,
-                    capturedAt: prior.capturedAt,
-                    at: mergeDate
-                )
-            }
-            guard let observedAt = window.freshness.observedAt ?? prior.capturedAt else {
-                return nil
-            }
-            return window.withFreshness(.stale(observedAt: observedAt))
+        let windows = prior.windows.compactMap { window in
+            restoredWindow(
+                window,
+                providerID: prior.providerID,
+                capturedAt: prior.capturedAt,
+                at: mergeDate
+            )
         }
         return UsageSnapshot(
             providerID: prior.providerID,
@@ -252,19 +399,16 @@ enum UsageContinuityPolicy {
         )
     }
 
-    /// Claude uses `capturedAt` as a reset sentinel when a repaint omits the reset line.
-    /// The sentinel gets one window-kind lifetime; a real reset timestamp expires as-is.
     private static func continuityExpiryDate(
         for window: UsageWindow,
-        providerID: ProviderID,
         capturedAt: Date
     ) -> Date {
-        guard providerID == .claude,
-              abs(window.resetsAt.timeIntervalSince(capturedAt)) < 1
-        else {
-            return window.resetsAt
+        switch window.resetSchedule {
+        case .scheduled(let deadline):
+            return deadline
+        case .unresolved:
+            return capturedAt.addingTimeInterval(ResetSchedulePolicy.fallbackLifetime(for: window.kind))
         }
-        return window.resetsAt.addingTimeInterval(fallbackLifetime(for: window.kind))
     }
 
     private static func restoredWindow(
@@ -274,24 +418,23 @@ enum UsageContinuityPolicy {
         at restorationDate: Date
     ) -> UsageWindow? {
         if case .unavailable(let since) = window.freshness {
-            return restorationDate.timeIntervalSince(since) < fallbackLifetime(for: window.kind)
+            return restorationDate.timeIntervalSince(since) < ResetSchedulePolicy.fallbackLifetime(for: window.kind)
                 ? window
                 : nil
         }
 
-        guard let observedAt = window.freshness.observedAt ?? capturedAt else {
+        guard let observedAt = window.observedAt ?? window.freshness.observedAt ?? capturedAt else {
             return nil
         }
         let expiredAt = continuityExpiryDate(
             for: window,
-            providerID: providerID,
             capturedAt: observedAt
         )
         if expiredAt > restorationDate {
             return window.withFreshness(.stale(observedAt: observedAt))
         }
         guard (isClaudeWeeklySubLimit(window, providerID: providerID) || window.kind.isBillingPeriod),
-              restorationDate.timeIntervalSince(expiredAt) < fallbackLifetime(for: window.kind)
+              restorationDate.timeIntervalSince(expiredAt) < ResetSchedulePolicy.fallbackLifetime(for: window.kind)
         else {
             return nil
         }
@@ -318,22 +461,21 @@ enum UsageContinuityPolicy {
                 return nil
             }
             if case .unavailable(let since) = window.freshness {
-                return capturedAt.timeIntervalSince(since) < fallbackLifetime(for: window.kind)
+                return capturedAt.timeIntervalSince(since) < ResetSchedulePolicy.fallbackLifetime(for: window.kind)
                     ? window
                     : nil
             }
-            guard let observedAt = window.freshness.observedAt ?? prior.capturedAt else {
+            guard let observedAt = window.observedAt ?? window.freshness.observedAt ?? prior.capturedAt else {
                 return nil
             }
             let expiredAt = continuityExpiryDate(
                 for: window,
-                providerID: fresh.providerID,
                 capturedAt: observedAt
             )
             if expiredAt > capturedAt {
                 return window.withFreshness(.stale(observedAt: observedAt))
             }
-            return capturedAt.timeIntervalSince(expiredAt) < fallbackLifetime(for: window.kind)
+            return capturedAt.timeIntervalSince(expiredAt) < ResetSchedulePolicy.fallbackLifetime(for: window.kind)
                 ? window.withFreshness(.unavailable(since: expiredAt))
                 : nil
         }
@@ -360,22 +502,6 @@ enum UsageContinuityPolicy {
         return label.localizedCaseInsensitiveContains("weekly")
     }
 
-    private static func fallbackLifetime(for kind: WindowKind) -> TimeInterval {
-        switch kind {
-        case .fiveHour:
-            return 5 * 60 * 60
-        case .weekly:
-            return 7 * 24 * 60 * 60
-        case .billingPeriod(_, let duration):
-            return duration.isFinite && duration > 0
-                ? max(24 * 60 * 60, duration)
-                : 24 * 60 * 60
-        case .other(let label):
-            return label.localizedCaseInsensitiveContains("weekly")
-                ? 7 * 24 * 60 * 60
-                : 24 * 60 * 60
-        }
-    }
 }
 
 private extension WindowKind {

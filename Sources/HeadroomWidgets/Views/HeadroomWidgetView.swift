@@ -48,6 +48,8 @@ struct HeadroomWidgetView: View {
         switch entry.state {
         case .setupNeeded:
             WidgetStatusView(title: "Widget Data Unavailable", message: "Open Headroom to refresh the widget cache.")
+        case .incompatibleSchema:
+            WidgetStatusView(title: "Update Required", message: "Update Headroom to read newer widget data.")
         case .disabled:
             WidgetStatusView(title: "Widgets Paused", message: "Enable widget data in Headroom Settings.")
         case .pending:
