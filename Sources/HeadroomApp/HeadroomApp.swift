@@ -55,28 +55,45 @@ enum Entry {
     private static func runClaudeProbe() {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            let location = await AppComposition.claudeExecutableLocator.locate()
-            print("claude CLI: \(location.path == nil ? "unavailable" : "available")")
             // `--claude-config <dir>`: probe an alternate account home (multi-account
             // diagnostic) — exercises the same CLAUDE_CONFIG_DIR override the extra
             // accounts use in production.
             var overrides: [String: String] = [:]
+            let accountCategory: ClaudeCapabilityDiagnosticAccount
             if let flagIndex = CommandLine.arguments.firstIndex(of: "--claude-config"),
                CommandLine.arguments.indices.contains(flagIndex + 1) {
                 overrides["CLAUDE_CONFIG_DIR"] = CommandLine.arguments[flagIndex + 1]
-                print("account home: isolated")
+                accountCategory = .extra
             } else {
-                print("account home: built-in")
+                accountCategory = .builtIn
             }
-            switch await ClaudeUsageCLIProbe(
+            let location = await AppComposition.claudeExecutableLocator.locate()
+            let versionBand = if let path = location.path {
+                await ClaudeUsageCLIProbe.versionBand(
+                    executablePath: path,
+                    environmentOverrides: overrides
+                )
+            } else {
+                ClaudeCLIVersionBand.unknown
+            }
+            let result = await ClaudeUsageCLIProbe(
                 locator: AppComposition.claudeExecutableLocator,
                 workingDirectory: claudeWorkingDirectory(),
                 environmentOverrides: overrides
-            ).capturePanel() {
+            ).capturePanel()
+            let events = await AppComposition.claudeExecutableLocator.recentDiagnosticEvents()
+            ClaudeCapabilityDiagnostic.lines(
+                account: accountCategory,
+                versionBand: versionBand,
+                outcome: diagnosticOutcome(for: result),
+                events: events
+            ).forEach { print($0) }
+
+            switch result {
             case .cliNotFound:
                 print("RESULT: CLI not found")
-            case .cliInconclusive(let issue):
-                print("RESULT: CLI discovery inconclusive (\(issue.rawValue))")
+            case .cliInconclusive:
+                print("RESULT: CLI discovery inconclusive")
             case .transientCapture:
                 print("RESULT: capture failed (no panel text)")
             case .loginRequired:
@@ -88,14 +105,37 @@ enum Entry {
             case .panel(let text, let planHint):
                 let windows = ClaudeUsageParser.parse(text)
                 let plan = ClaudeUsageParser.plan(in: text) ?? planHint
-                print("RESULT: parsed \(windows.count) window(s)\(plan.map { " · plan \($0)" } ?? "")")
+                print("RESULT: parsed \(windows.count) window(s) plan=\(plan == nil ? "absent" : "present")")
                 for w in windows {
-                    print("  • \(w.kind)  \(Int(w.percentUsed))% used  reset=\(w.resetLabel == nil ? "absent" : "present")")
+                    print("  • category=\(diagnosticWindowCategory(w.kind))  \(Int(w.percentUsed))% used  reset=\(w.resetLabel == nil ? "absent" : "present")")
                 }
             }
             semaphore.signal()
         }
         semaphore.wait()
+    }
+
+    private static func diagnosticOutcome(
+        for result: ClaudePanelResult
+    ) -> ClaudeCapabilityDiagnosticOutcome {
+        switch result {
+        case .panel: .available
+        case .loginRequired: .loginRequired
+        case .workspaceTrustRequired: .trustRequired
+        case .cliNotFound: .confirmedAbsent
+        case .cliInconclusive: .discoveryInconclusive
+        case .transientCapture: .captureFailed
+        case .unknownUI: .unknownSurface
+        }
+    }
+
+    private static func diagnosticWindowCategory(_ kind: WindowKind) -> String {
+        switch kind {
+        case .fiveHour: "five-hour"
+        case .weekly: "weekly"
+        case .billingPeriod: "billing-period"
+        case .other: "other"
+        }
     }
 
     fileprivate static func claudeWorkingDirectory() -> String {

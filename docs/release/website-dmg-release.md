@@ -100,6 +100,24 @@ spctl -a -vvv -t open --context context:primary-signature \
 shasum -a 256 dist/Headroom-<version>-<build>.dmg
 ```
 
+When the candidate changes Claude executable discovery, provider capability, or account setup,
+complete the Track A signed-candidate matrix before publication:
+
+1. Install the Developer ID candidate in an isolated user-local application folder and launch it
+   from Finder with two previously configured Claude accounts.
+2. Confirm both accounts retain their last eligible usage during an injected/transient discovery
+   failure. **Check Again** must recover after discovery returns without repeating login or trust.
+3. Move or update the CLI between supported native, Homebrew, or version-manager locations that
+   are available in the test environment. Confirm Headroom rediscovers it without relaunching.
+4. Make one account login-required or workspace-trust-required through the official CLI. Confirm
+   its sibling stays live and only the affected account offers that account-scoped recovery.
+5. Run the installed binary's `--probe-claude` once for built-in and once with
+   `--claude-config <test-home>`. Record only the allowlisted category output; never record the
+   argument, resolved path, identity, panel text, credential, auth payload, or raw error.
+
+Record this state as **candidate tested**, not published or Sparkle accepted. If a required login
+or trust prompt appears, stop for the tester's explicit approval in the official Claude CLI.
+
 Check that the first appcast item names the new version and build, retains the current
 production item, and references only files present in `dist/headroom.zantos.co/`. Its full
 versioned DMG enclosure is the universal fallback for every older installed app; deltas only
@@ -218,6 +236,12 @@ does not replace a working development install. A separate user alone does not i
      Cancel an incomplete callback and confirm the UI offers standard retry plus device code.
    - Start one Codex login, request another, and confirm the second requires a fresh
      **Continue setup** action only after the first Terminal handoff ends.
+
+   For a Track A Claude capability release, repeat the two-account candidate matrix from step 3
+   after the Sparkle relaunch. Include executable path churn and one transient inconclusive
+   discovery. Confirm continuity survives, **Check Again** recovers without setup rerun, and
+   login/trust divergence stays account-scoped. This successful public-update observation is
+   **Sparkle accepted**; publication remains the separately verified asset state from step 5.
 
 7. Exercise the signed additional-account lifecycle: add, rename, refresh, and remove one
    account while a sibling remains live. Removal must stay visible while work is active, retain

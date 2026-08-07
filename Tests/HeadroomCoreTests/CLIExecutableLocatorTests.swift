@@ -39,6 +39,11 @@ struct CLIExecutableLocatorTests {
         #expect(await locator.locate() == .available(path: "/new/claude", source: .memoryHint))
         #expect(await shell.count == 1)
         #expect(hints.hint(for: "claude") == "/new/claude")
+        #expect(await locator.recentDiagnosticEvents().map(\.category) == [
+            .hintInvalidated,
+            .loginShellResolved,
+            .memoryHintValidated,
+        ])
     }
 
     @Test func onlyCompletedSearchWithoutCandidatesConfirmsAbsence() async {
@@ -81,6 +86,7 @@ struct CLIExecutableLocatorTests {
         )
 
         #expect(await locator.locate() == .available(path: "/opt/homebrew/bin/claude", source: .fallback))
+        #expect(await locator.recentDiagnosticEvents().last?.category == .fallbackResolved)
     }
 
     @Test func concurrentCallersShareDiscoveryAndCancelledWaiterDoesNotCancelIt() async {
@@ -123,6 +129,31 @@ struct CLIExecutableLocatorTests {
 
         #expect(await locator.locate() == .available(path: "/new/claude", source: .loginShell))
         #expect(await shell.count == 2)
+        #expect(await locator.recentDiagnosticEvents().map(\.category).contains(.launchRace))
+    }
+
+    @Test func diagnosticsDistinguishValidHintTimeoutAndSupportedLocationMiss() async {
+        let clock = Date(timeIntervalSince1970: 20_000)
+        let hinted = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: TestExecutableHintStore(["claude": "/hint/claude"]),
+            shellSearch: { .completed(candidates: []) },
+            validate: { $0 == "/hint/claude" ? .executable : .missing },
+            now: { clock }
+        )
+        _ = await hinted.locate()
+        #expect(await hinted.recentDiagnosticEvents() == [
+            CLIExecutableDiagnosticEvent(category: .persistedHintValidated, observedAt: clock),
+        ])
+
+        let timedOut = makeLocator(shellResult: .timedOut)
+        _ = await timedOut.locate()
+        #expect(await timedOut.recentDiagnosticEvents().last?.category == .shellTimeout)
+
+        let absent = makeLocator(shellResult: .completed(candidates: []))
+        _ = await absent.locate()
+        #expect(await absent.recentDiagnosticEvents().last?.category == .supportedLocationMiss)
     }
 
     private func makeLocator(

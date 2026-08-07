@@ -254,10 +254,41 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     /// model as a prompt — spending real usage every poll — so anything below the
     /// floor (or unparseable) stays on the PTY path.
     static func printUsageSupported(versionOutput: String) -> Bool {
-        guard let m = versionOutput.firstMatch(of: /(\d+)\.(\d+)\.(\d+)/),
-              let major = Int(m.1), let minor = Int(m.2), let patch = Int(m.3)
-        else { return false }
-        return (major, minor, patch) >= (2, 1, 217)
+        guard let version = parsedVersion(versionOutput) else { return false }
+        return version >= (2, 1, 217)
+    }
+
+    public static func versionBand(
+        executablePath: String,
+        environmentOverrides: [String: String] = [:]
+    ) async -> ClaudeCLIVersionBand {
+        await Task.detached(priority: .utility) {
+            switch runForOutput(
+                claudePath: executablePath,
+                arguments: ["--version"],
+                environmentOverrides: environmentOverrides,
+                deadline: 5
+            ) {
+            case .launchNotFound, .failed:
+                return .unknown
+            case .data(let data):
+                return classifyVersionBand(String(decoding: data, as: UTF8.self))
+            }
+        }.value
+    }
+
+    static func classifyVersionBand(_ versionOutput: String) -> ClaudeCLIVersionBand {
+        guard let version = parsedVersion(versionOutput) else { return .unknown }
+        return version >= (2, 1, 217) ? .printSupported : .ptyFallback
+    }
+
+    private static func parsedVersion(_ output: String) -> (Int, Int, Int)? {
+        guard let match = output.firstMatch(of: /(\d+)\.(\d+)\.(\d+)/),
+              let major = Int(match.1),
+              let minor = Int(match.2),
+              let patch = Int(match.3)
+        else { return nil }
+        return (major, minor, patch)
     }
 
     /// One-shot non-interactive capture: `claude -p "/usage"` prints the full settled
