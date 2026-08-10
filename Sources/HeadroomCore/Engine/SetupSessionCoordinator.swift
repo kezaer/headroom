@@ -30,6 +30,7 @@ public enum SetupSessionState: Sendable, Equatable {
     case preparing
     case waiting(attempt: Int)
     case verifying
+    case blockedByOpenHandoff
     case blockedByProviderLogin(providerID: ProviderID, active: AccountKey)
     case connected
     case failed(SetupSessionFailure)
@@ -113,13 +114,16 @@ public final class SetupSessionCoordinator {
     private var generations: [AccountKey: Int] = [:]
     @ObservationIgnored private var preparationTasks: [AccountKey: Task<Void, Never>] = [:]
     @ObservationIgnored private var retryTasks: [AccountKey: any SetupRetryCancellation] = [:]
+    @ObservationIgnored private var verificationStopLossTasks: [AccountKey: any SetupRetryCancellation] = [:]
     @ObservationIgnored private var activeLogins: [ProviderID: AccountKey] = [:]
     @ObservationIgnored private var activeHandoffs: Set<AccountKey> = []
     @ObservationIgnored private var handoffsAwaitingFinalRefresh: [AccountKey: SetupHandoffCompletion] = [:]
+    @ObservationIgnored private var verificationCapabilityFailures: [AccountKey: ProviderCapabilityState] = [:]
     @ObservationIgnored private var sessionModes: [AccountKey: SetupHandoffMode] = [:]
 
     @ObservationIgnored private let scheduler: any SetupRetryScheduling
     @ObservationIgnored private let retryDelays: [Duration]
+    @ObservationIgnored private let verificationStopLoss: Duration
     @ObservationIgnored private let prepare: Prepare
     @ObservationIgnored private let open: Open
     @ObservationIgnored private let discard: Discard
@@ -129,6 +133,9 @@ public final class SetupSessionCoordinator {
     public init(
         scheduler: any SetupRetryScheduling = TaskSetupRetryScheduler(),
         retryDelays: [Duration] = [.seconds(3), .seconds(7), .seconds(15), .seconds(30)],
+        // Five serial Claude probes at the 40-second worst-case path, plus one probe
+        // of margin. This intentionally exceeds the short retry ladder.
+        verificationStopLoss: Duration = .seconds(240),
         prepare: @escaping Prepare,
         open: @escaping Open,
         discard: @escaping Discard = { _ in },
@@ -137,6 +144,7 @@ public final class SetupSessionCoordinator {
     ) {
         self.scheduler = scheduler
         self.retryDelays = retryDelays
+        self.verificationStopLoss = verificationStopLoss
         self.prepare = prepare
         self.open = open
         self.discard = discard
@@ -152,6 +160,10 @@ public final class SetupSessionCoordinator {
         sessionModes[key]
     }
 
+    public func hasActiveHandoff(for key: AccountKey) -> Bool {
+        activeHandoffs.contains(key)
+    }
+
     public func begin(for account: ProviderAccount, mode: SetupHandoffMode = .standard) {
         start(account, mode: mode, allowBlocked: false)
     }
@@ -164,6 +176,14 @@ public final class SetupSessionCoordinator {
 
     private func start(_ account: ProviderAccount, mode: SetupHandoffMode, allowBlocked: Bool) {
         let key = account.key
+        // The Terminal wrapper can outlive the retry ladder. Make a second start
+        // observable instead of silently ignoring it, while preserving the original
+        // handoff and completion marker until the wrapper exits.
+        if activeHandoffs.contains(key) {
+            retryTasks.removeValue(forKey: key)?.cancel()
+            states[key] = .blockedByOpenHandoff
+            return
+        }
         switch state(for: key) {
         case .preparing, .waiting, .verifying, .connected, .removing, .removed:
             return
@@ -172,11 +192,6 @@ public final class SetupSessionCoordinator {
         default:
             break
         }
-        // A wrapper can outlive the bounded verification window. Do not stage a
-        // second command over its completion marker or start a competing callback;
-        // the user can check again until the first handoff exits.
-        guard !activeHandoffs.contains(key) else { return }
-
         if Self.requiresExclusiveLoginSlot(account.providerID),
            let activeLogin = activeLogins[account.providerID],
            activeLogin != key {
@@ -273,9 +288,11 @@ public final class SetupSessionCoordinator {
         activeHandoffs.remove(key)
         if activeLogins[key.providerID] == key { activeLogins.removeValue(forKey: key.providerID) }
         switch state(for: key) {
-        case .idle, .waiting, .failed(.retryExhausted):
+        case .idle, .waiting, .blockedByOpenHandoff, .failed(.retryExhausted):
+            invalidateWork(for: key, finalState: nil, releaseLoginSlot: false)
             handoffsAwaitingFinalRefresh[key] = completion
             states[key] = .verifying
+            scheduleVerificationStopLoss(for: key, generation: generations[key] ?? 0)
             requestRefresh(key)
         default:
             break
@@ -347,6 +364,31 @@ public final class SetupSessionCoordinator {
         }
     }
 
+    /// Provider capability is shared installation state, not an account snapshot.
+    /// Only sessions already awaiting their final refresh are affected.
+    public func receiveCapabilityFailure(
+        _ state: ProviderCapabilityState,
+        for providerID: ProviderID
+    ) {
+        let keys = handoffsAwaitingFinalRefresh.keys.filter { $0.providerID == providerID }
+        switch state {
+        case .confirmedAbsent:
+            for key in keys {
+                invalidateWork(
+                    for: key,
+                    finalState: .failed(.providerCapability(.confirmedAbsent)),
+                    releaseLoginSlot: true
+                )
+            }
+        case .inconclusive:
+            for key in keys where self.state(for: key) == .verifying {
+                verificationCapabilityFailures[key] = state
+            }
+        case .unknown, .discovering, .available:
+            break
+        }
+    }
+
     private func scheduleRetry(for key: AccountKey, generation: Int, index: Int) {
         retryTasks[key]?.cancel()
         guard index < retryDelays.count else {
@@ -364,6 +406,22 @@ public final class SetupSessionCoordinator {
             guard self.isCurrent(key, generation: generation) else { return }
             self.states[key] = .waiting(attempt: index + 1)
             self.scheduleRetry(for: key, generation: generation, index: index + 1)
+        }
+    }
+
+    private func scheduleVerificationStopLoss(for key: AccountKey, generation: Int) {
+        verificationStopLossTasks[key]?.cancel()
+        verificationStopLossTasks[key] = scheduler.schedule(after: verificationStopLoss) { [weak self] in
+            guard let self,
+                  self.isCurrent(key, generation: generation),
+                  self.accountExists(key),
+                  self.state(for: key) == .verifying,
+                  self.handoffsAwaitingFinalRefresh[key] != nil
+            else { return }
+            let failure = self.verificationCapabilityFailures[key]
+                .map(SetupSessionFailure.providerCapability)
+                ?? .retryExhausted
+            self.fail(key, failure: failure, generation: generation)
         }
     }
 
@@ -389,7 +447,9 @@ public final class SetupSessionCoordinator {
         generations[key, default: 0] += 1
         preparationTasks.removeValue(forKey: key)?.cancel()
         retryTasks.removeValue(forKey: key)?.cancel()
+        verificationStopLossTasks.removeValue(forKey: key)?.cancel()
         handoffsAwaitingFinalRefresh.removeValue(forKey: key)
+        verificationCapabilityFailures.removeValue(forKey: key)
         if let finalState {
             switch finalState {
             case .connected, .cancelled, .removing, .removed:

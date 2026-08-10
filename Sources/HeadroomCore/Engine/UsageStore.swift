@@ -585,6 +585,7 @@ public final class UsageStore {
             return enabledSurfaces.contains(surface) && !shouldSkipOnTimer(provider: provider, source: source)
         }
         let capabilityCycle = beginCapabilityRefresh(for: candidates)
+        let executableRefreshGeneration = UUID()
         let (stream, continuation) = AsyncStream.makeStream(
             of: (AccountKey, UsageProviderFetchResult).self,
             bufferingPolicy: .unbounded
@@ -606,8 +607,10 @@ public final class UsageStore {
             }
             for lane in serialLanes.values {
                 group.addTask {
-                    for provider in lane {
-                        continuation.yield((provider.accountKey, await provider.fetchResult()))
+                    await CLIExecutableRefreshContext.$generation.withValue(executableRefreshGeneration) {
+                        for provider in lane {
+                            continuation.yield((provider.accountKey, await provider.fetchResult()))
+                        }
                     }
                 }
             }
@@ -689,7 +692,10 @@ public final class UsageStore {
               enabledSurfaces.contains(surface)
         else { return }
         let capabilityCycle = beginCapabilityRefresh(for: [provider])
-        let result = await provider.fetchResult()
+        let executableRefreshGeneration = CLIExecutableRefreshContext.generation ?? UUID()
+        let result = await CLIExecutableRefreshContext.$generation.withValue(executableRefreshGeneration) {
+            await provider.fetchResult()
+        }
         let notifiesSetup = result.capability == nil || result.capability == .available
         if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup),
            let capability = result.capability {
@@ -718,9 +724,9 @@ public final class UsageStore {
         notifiesSetup: Bool
     ) -> Bool {
         let isCapabilityFailure = result.capability.map { $0 != .available } == true
-        if isCapabilityFailure, snapshots[key]?.windows.isEmpty != false {
+        if isCapabilityFailure {
             // A provider-wide discovery failure says nothing about this account. Keep a
-            // pending row neutral and preserve any prior login/trust setup state.
+            // pending row neutral and preserve any prior usage or login/trust setup state.
             return acceptsResult(for: key)
         }
         return merge(key: key, fresh: result.snapshot, notifiesSetup: notifiesSetup)
@@ -791,6 +797,12 @@ public final class UsageStore {
     ) {
         guard let generation, capabilityGenerations[providerID] == generation else { return }
         providerCapabilities[providerID] = ProviderCapabilityStatus(state: state, observedAt: now())
+        switch state {
+        case .inconclusive, .confirmedAbsent:
+            setupCoordinator?.receiveCapabilityFailure(state, for: providerID)
+        case .unknown, .discovering, .available:
+            break
+        }
     }
 
     private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {

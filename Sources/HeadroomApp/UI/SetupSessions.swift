@@ -43,7 +43,9 @@ enum SetupSessions {
     private static var coordinator: SetupSessionCoordinator?
     private static var preparedScripts: [AccountKey: PreparedScript] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
+    private static var checkNowTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
+    private static var capabilityAnnouncementDedupe = CapabilityAnnouncementDedupe()
     private static var claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
 
     static func configure(
@@ -126,7 +128,16 @@ enum SetupSessions {
         case .copyManualCommand(let mode):
             Task { _ = await copyManualCommand(for: account.key, mode: mode) }
         case .checkNow:
-            onRetry()
+            guard checkNowTasks[account.key] == nil else { return }
+            checkNowTasks[account.key] = Task {
+                defer { checkNowTasks[account.key] = nil }
+                await CLIExecutableRefreshContext.$generation.withValue(UUID()) {
+                    if account.providerID == .claude {
+                        _ = await claudeExecutableLocator.locate(forceRefresh: true)
+                    }
+                    onRetry()
+                }
+            }
         }
     }
 
@@ -143,7 +154,7 @@ enum SetupSessions {
             .setup(.standard)
         case .installCodexCLI:
             .documentation(URL(string: "https://developers.openai.com/codex/cli/")!)
-        case .connectCodexDeviceCode:
+        case .connectCodexDeviceCode, .connectGrokDeviceCode:
             .setup(.deviceCode)
         case .installGrokCLI:
             .documentation(URL(string: "https://x.ai/news/grok-build")!)
@@ -168,6 +179,11 @@ enum SetupSessions {
             }
         }
         return SetupSessionActivity.shared.openedAt(for: account.key) != nil
+    }
+
+    static func hasActiveHandoff(for account: ProviderAccount) -> Bool {
+        coordinator?.hasActiveHandoff(for: account.key)
+            ?? (SetupSessionActivity.shared.openedAt(for: account.key) != nil)
     }
 
     static func state(for account: ProviderAccount) -> SetupSessionState {
@@ -227,6 +243,24 @@ enum SetupSessions {
             notification: .announcementRequested,
             userInfo: [
                 .announcement: "Setup failed. \(message)",
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
+    }
+
+    static func announceCapabilityIfNeeded(
+        _ state: ProviderCapabilityState?,
+        for providerID: ProviderID
+    ) {
+        guard let message = capabilityAnnouncementDedupe.announcement(
+            for: providerID,
+            state: state
+        ) else { return }
+        NSAccessibility.post(
+            element: NSApplication.shared,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ]
         )
@@ -292,7 +326,7 @@ enum SetupSessions {
                 let manualCommand: String
                 switch account.providerID {
                 case .claude:
-                    let location = await claudeExecutableLocator.locate()
+                    let location = await claudeExecutableLocator.locate(forceRefresh: true)
                     guard let executable = location.path else {
                         switch location {
                         case .confirmedAbsent:
