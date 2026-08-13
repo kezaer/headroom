@@ -195,7 +195,7 @@ struct AccountsSettingsInteractionTests {
 
     @Test func everyRecoveryActionHasOneAppBoundaryRoute() {
         let expected: [(SetupRecoveryAction, SetupSessions.RecoveryRoute)] = [
-            (.installClaudeCLI, .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!)),
+            (.installClaudeCLI, .documentation(URL(string: "https://code.claude.com/docs/en/installation")!)),
             (.openClaudeSetup, .setup(.standard)),
             (.installCodexCLI, .documentation(URL(string: "https://developers.openai.com/codex/cli/")!)),
             (.connectCodex, .setup(.standard)),
@@ -736,7 +736,7 @@ private final class GrokDeviceCodeSetupHarness {
         #expect(recovery?.primaryAction == .installClaudeCLI)
         #expect(recovery?.secondaryAction == .checkNow)
         #expect(SetupSessions.recoveryRoute(for: recovery!.primaryAction)
-            == .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!))
+            == .documentation(URL(string: "https://code.claude.com/docs/en/installation")!))
         #expect(SetupSessions.recoveryRoute(for: recovery!.secondaryAction!) == .checkNow)
         #expect(actions.primaryAccessibilityLabel == "Install Claude Code for Personal")
         #expect(actions.secondaryAccessibilityLabel == "Check Again for Personal")

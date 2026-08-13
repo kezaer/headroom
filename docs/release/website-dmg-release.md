@@ -111,9 +111,18 @@ complete the Track A signed-candidate matrix before publication:
    are available in the test environment. Confirm Headroom rediscovers it without relaunching.
 4. Make one account login-required or workspace-trust-required through the official CLI. Confirm
    its sibling stays live and only the affected account offers that account-scoped recovery.
-5. Run the installed binary's `--probe-claude` once for built-in and once with
+5. Install a `claude` launcher under a custom npm global prefix (for example
+   `~/.npm-global/bin/claude`) that is deliberately absent from the Finder-launched app's
+   inherited `PATH`. Confirm the signed candidate discovers it and shows live Claude usage
+   instead of **Install Claude Code** (AE1).
+6. Move that launcher from the npm prefix to the native `~/.local/bin/claude` location. Confirm
+   **Check Again** rediscovers it and usage recovers without relaunching Headroom, signing in
+   again, or re-approving workspace trust (AE4).
+7. Run the installed binary's `--probe-claude` once for built-in and once with
    `--claude-config <test-home>`. Record only the allowlisted category output; never record the
-   argument, resolved path, identity, panel text, credential, auth payload, or raw error.
+   argument, resolved path, identity, panel text, credential, auth payload, or raw error. The
+   same allowlisted, path-free recording rule applies to steps 5 and 6: never record the npm
+   prefix, the derived launcher path, or npm's raw output.
 
 Record this state as **candidate tested**, not published or Sparkle accepted. If a required login
 or trust prompt appears, stop for the tester's explicit approval in the official Claude CLI.

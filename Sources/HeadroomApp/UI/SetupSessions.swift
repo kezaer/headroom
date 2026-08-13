@@ -155,7 +155,8 @@ enum SetupSessions {
     static func recoveryRoute(for action: SetupRecoveryAction) -> RecoveryRoute {
         switch action {
         case .installClaudeCLI:
-            .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!)
+            // R8: Anthropic's current official installation guide.
+            .documentation(URL(string: "https://code.claude.com/docs/en/installation")!)
         case .openClaudeSetup, .connectCodex, .reconnectCodex, .resolveCodexStorage,
              .connectGrok, .reconnectGrok, .connectCursor:
             .setup(.standard)
