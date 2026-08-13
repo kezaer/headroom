@@ -195,8 +195,7 @@ struct AccountsSettingsInteractionTests {
 
     @Test func everyRecoveryActionHasOneAppBoundaryRoute() {
         let expected: [(SetupRecoveryAction, SetupSessions.RecoveryRoute)] = [
-            (.installClaudeCLI, .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!)),
-            (.copyManualCommand, .copyManualCommand(.standard)),
+            (.installClaudeCLI, .documentation(URL(string: "https://code.claude.com/docs/en/installation")!)),
             (.openClaudeSetup, .setup(.standard)),
             (.installCodexCLI, .documentation(URL(string: "https://developers.openai.com/codex/cli/")!)),
             (.connectCodex, .setup(.standard)),
@@ -434,7 +433,8 @@ struct AccountsSettingsInteractionTests {
     }
 }
 
-private struct FixedExecutableLocator: CLIExecutableLocating {
+/// Shared by `ClaudeExecutableDiscoveryInteractionTests`, so file-internal rather than private.
+struct FixedExecutableLocator: CLIExecutableLocating {
     let location: CLIExecutableLocation
 
     init(path: String) {
@@ -718,7 +718,7 @@ private final class GrokDeviceCodeSetupHarness {
         )
 
         #expect(active?.state(for: .installClaudeCLI) == .enabled)
-        #expect(active?.state(for: .copyManualCommand) == .enabled)
+        #expect(active?.state(for: .checkNow) == .refused("Close setup, then retry"))
     }
 }
 

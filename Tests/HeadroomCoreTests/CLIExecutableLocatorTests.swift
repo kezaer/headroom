@@ -379,6 +379,227 @@ struct CLIExecutableLocatorTests {
         #expect(await absent.recentDiagnosticEvents().last?.category == .supportedLocationMiss)
     }
 
+    @Test func npmPrefixCandidateResolvesPersistsHintAndRecordsCategoryOnly() async {
+        let hints = TestExecutableHintStore()
+        let clock = Date(timeIntervalSince1970: 30_000)
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: ["/opt/homebrew/bin/claude"],
+            hintStore: hints,
+            shellSearch: {
+                .completed(
+                    candidates: [],
+                    supplemental: .candidate("/Users/Neil/.npm-global/bin/claude")
+                )
+            },
+            validate: { $0 == "/Users/Neil/.npm-global/bin/claude" ? .executable : .missing },
+            now: { clock }
+        )
+
+        #expect(await locator.locate() == .available(
+            path: "/Users/Neil/.npm-global/bin/claude",
+            source: .npmGlobalPrefix
+        ))
+        #expect(hints.hint(for: "claude") == "/Users/Neil/.npm-global/bin/claude")
+        #expect(await locator.recentDiagnosticEvents() == [
+            CLIExecutableDiagnosticEvent(category: .npmPrefixResolved, observedAt: clock),
+        ])
+        #expect(await locator.locate() == .available(
+            path: "/Users/Neil/.npm-global/bin/claude",
+            source: .memoryHint
+        ))
+    }
+
+    @Test func validatedHintAndDirectCandidateBothOutrankTheNpmCandidate() async {
+        let shell = ShellSearchRecorder(result: .completed(
+            candidates: ["/shell/claude"],
+            supplemental: .candidate("/Users/Neil/.npm-global/bin/claude")
+        ))
+        let hinted = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: TestExecutableHintStore(["claude": "/persisted/claude"]),
+            shellSearch: { await shell.search() },
+            validate: { _ in .executable }
+        )
+        #expect(await hinted.locate() == .available(path: "/persisted/claude", source: .persistedHint))
+        #expect(await shell.count == 0)
+
+        let direct = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [],
+            hintStore: TestExecutableHintStore(),
+            shellSearch: { await shell.search() },
+            validate: { _ in .executable }
+        )
+        #expect(await direct.locate() == .available(path: "/shell/claude", source: .loginShell))
+    }
+
+    @Test func validFixedFallbackBeatsSimultaneouslyValidNpmLauncher() async {
+        let validation = CandidateValidationRecorder(statuses: [
+            "\(NSHomeDirectory())/.local/bin/claude": .executable,
+            "/Users/Neil/.npm-global/bin/claude": .executable,
+        ])
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths,
+            hintStore: TestExecutableHintStore(),
+            shellSearch: {
+                .completed(
+                    candidates: [],
+                    supplemental: .candidate("/Users/Neil/.npm-global/bin/claude")
+                )
+            },
+            validate: { validation.status(for: $0) }
+        )
+
+        #expect(await locator.locate() == .available(
+            path: "\(NSHomeDirectory())/.local/bin/claude",
+            source: .fallback
+        ))
+        #expect(!validation.paths.contains("/Users/Neil/.npm-global/bin/claude"))
+    }
+
+    @Test func aliasDefinitionIsRejectedWhileLegacyMigrateInstallerFallbackResolves() async {
+        let legacyPath = "\(NSHomeDirectory())/.claude/local/claude"
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths,
+            hintStore: TestExecutableHintStore(),
+            shellSearch: {
+                .completed(
+                    candidates: ["claude: aliased to \(legacyPath)"],
+                    supplemental: .notAttempted
+                )
+            },
+            validate: { $0 == legacyPath ? .executable : .missing }
+        )
+
+        #expect(await locator.locate() == .available(path: legacyPath, source: .fallback))
+        #expect(CLIExecutableLocator.claudeFixedFallbackPaths == [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            "\(NSHomeDirectory())/.local/bin/claude",
+            legacyPath,
+        ])
+    }
+
+    @Test func aliasTextSkippingTheNpmQueryNeverHardensIntoConfirmedAbsence() async {
+        // A broken alias makes `command -v` print text, which makes the shell skip the npm
+        // query. npm was therefore never read, so absence cannot be confirmed (R3).
+        let aliasText = "claude: aliased to /Users/Neil/.claude/local/claude"
+        let unread = makeLocator(
+            shellResult: .completed(candidates: [aliasText], supplemental: .unresolved),
+            fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths
+        )
+        #expect(await unread.locate() == .inconclusive(.npmPrefixUnresolved))
+
+        let legacyPath = "\(NSHomeDirectory())/.claude/local/claude"
+        let fallbackWins = makeLocator(
+            shellResult: .completed(candidates: [aliasText], supplemental: .unresolved),
+            fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths,
+            validation: [legacyPath: .executable]
+        )
+        #expect(await fallbackWins.locate() == .available(path: legacyPath, source: .fallback))
+    }
+
+    @Test func unavailableNpmConfirmsAbsenceOnlyAfterFixedFallbacksMiss() async {
+        let fallbackWins = makeLocator(
+            shellResult: .completed(candidates: [], supplemental: .sourceUnavailable),
+            fallbackPaths: ["/opt/homebrew/bin/claude"],
+            validation: ["/opt/homebrew/bin/claude": .executable]
+        )
+        #expect(await fallbackWins.locate() == .available(
+            path: "/opt/homebrew/bin/claude",
+            source: .fallback
+        ))
+
+        let absent = makeLocator(
+            shellResult: .completed(candidates: [], supplemental: .sourceUnavailable),
+            fallbackPaths: ["/opt/homebrew/bin/claude"]
+        )
+        #expect(await absent.locate() == .confirmedAbsent)
+    }
+
+    @Test func unresolvedNpmPrefixIsInconclusiveUnlessAFixedFallbackWins() async {
+        let inconclusive = makeLocator(
+            shellResult: .completed(candidates: [], supplemental: .unresolved),
+            fallbackPaths: ["/opt/homebrew/bin/claude"]
+        )
+        #expect(await inconclusive.locate() == .inconclusive(.npmPrefixUnresolved))
+        #expect(await inconclusive.recentDiagnosticEvents().last?.category == .npmPrefixUnresolved)
+
+        let fallbackWins = makeLocator(
+            shellResult: .completed(candidates: [], supplemental: .unresolved),
+            fallbackPaths: ["/opt/homebrew/bin/claude"],
+            validation: ["/opt/homebrew/bin/claude": .executable]
+        )
+        #expect(await fallbackWins.locate() == .available(
+            path: "/opt/homebrew/bin/claude",
+            source: .fallback
+        ))
+    }
+
+    @Test func missingNpmLauncherConfirmsAbsenceWhileInaccessibleStaysInconclusive() async {
+        let missing = makeLocator(
+            shellResult: .completed(
+                candidates: [],
+                supplemental: .candidate("/Users/Neil/.npm-global/bin/claude")
+            )
+        )
+        #expect(await missing.locate() == .confirmedAbsent)
+
+        let inaccessible = makeLocator(
+            shellResult: .completed(
+                candidates: [],
+                supplemental: .candidate("/Users/Neil/.npm-global/bin/claude")
+            ),
+            validation: ["/Users/Neil/.npm-global/bin/claude": .inaccessible]
+        )
+        #expect(await inaccessible.locate() == .inconclusive(.inaccessibleCandidate))
+    }
+
+    @Test func boundedShellFailuresStayInconclusiveRegardlessOfSupplementalStrategy() async {
+        for result in [CLIExecutableShellResult.timedOut, .spawnFailed, .invalidOutput] {
+            let locator = makeLocator(
+                shellResult: result,
+                fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths
+            )
+            guard case .inconclusive(let issue) = await locator.locate() else {
+                Issue.record("Expected \(result) to remain inconclusive")
+                continue
+            }
+            #expect(issue != .npmPrefixUnresolved)
+        }
+    }
+
+    @Test func invalidatedNpmHintYieldsToALaterNativeCandidate() async {
+        let npmPath = "/Users/Neil/.npm-global/bin/claude"
+        let nativePath = "\(NSHomeDirectory())/.local/bin/claude"
+        let shell = ShellSearchRecorder(result: .completed(
+            candidates: [],
+            supplemental: .candidate(npmPath)
+        ))
+        let hints = TestExecutableHintStore()
+        let validation = MutableCandidateValidation([npmPath: .executable])
+        let locator = CLIExecutableLocator(
+            executableName: "claude",
+            fallbackPaths: [nativePath],
+            hintStore: hints,
+            shellSearch: { await shell.search() },
+            validate: { validation.status(for: $0) }
+        )
+        #expect(await locator.locate() == .available(path: npmPath, source: .npmGlobalPrefix))
+
+        await locator.invalidate(path: npmPath, reason: .launchNotFound)
+        validation.set([nativePath: .executable])
+        await shell.setResult(.completed(candidates: [], supplemental: .sourceUnavailable))
+
+        #expect(await locator.locate() == .available(path: nativePath, source: .fallback))
+        #expect(hints.hint(for: "claude") == nativePath)
+        #expect(await locator.recentDiagnosticEvents().map(\.category).contains(.launchRace))
+    }
+
     private func makeLocator(
         shellResult: CLIExecutableShellResult,
         fallbackPaths: [String] = [],
@@ -526,6 +747,21 @@ private final class MutableLocatorClock: @unchecked Sendable {
 
     func advance(by interval: TimeInterval) {
         lock.withLock { value = value.addingTimeInterval(interval) }
+    }
+}
+
+private final class MutableCandidateValidation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var statuses: [String: CLIExecutableCandidateStatus]
+
+    init(_ statuses: [String: CLIExecutableCandidateStatus]) { self.statuses = statuses }
+
+    func set(_ statuses: [String: CLIExecutableCandidateStatus]) {
+        lock.withLock { self.statuses = statuses }
+    }
+
+    func status(for path: String) -> CLIExecutableCandidateStatus {
+        lock.withLock { statuses[path] ?? .missing }
     }
 }
 

@@ -86,8 +86,10 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
     public var recoveryPresentation: ProviderRecoveryPresentation {
         switch self {
         case .claudeCLIMissing:
+            // R7: mirrors the capability presentation — install guidance plus a fresh
+            // discovery check, never a copied bare-name command.
             .init(status: message, primaryLabel: "Install Claude Code", primaryAction: .installClaudeCLI,
-                  secondaryLabel: "Copy Manual Command", secondaryAction: .copyManualCommand)
+                  secondaryLabel: "Check Again", secondaryAction: .checkNow)
         case .claudeLoginRequired:
             .init(status: message, primaryLabel: "Open Claude Setup", primaryAction: .openClaudeSetup,
                   secondaryLabel: "Check Now", secondaryAction: .checkNow,
@@ -150,7 +152,6 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
 
 public enum SetupRecoveryAction: Sendable, Equatable, Hashable {
     case installClaudeCLI
-    case copyManualCommand
     case openClaudeSetup
     case installCodexCLI
     case connectCodex

@@ -27,13 +27,16 @@ public struct ClaudeSetupDescriptor: Sendable, Equatable {
 /// clipboard fallback. Runtime values are limited to resolved executable/PATH and
 /// Headroom-owned workspace/config paths.
 public enum ClaudeSetupCommand {
-    public static func manualCommand(for descriptor: ClaudeSetupDescriptor) -> String {
+    /// KTD5: no resolved executable means there is no valid manual command. Substituting
+    /// bare `claude` handed the user the same bare-name lookup Headroom had already failed
+    /// (`env: claude: No such file or directory`).
+    public static func manualCommand(for descriptor: ClaudeSetupDescriptor) -> String? {
+        guard let executablePath = descriptor.executablePath else { return nil }
         let home = descriptor.configDirectory.map {
             "CLAUDE_CONFIG_DIR=\(shellQuoted($0)) "
         } ?? "env -u CLAUDE_CONFIG_DIR "
-        let executable = descriptor.executablePath.map(shellQuoted) ?? "claude"
         let workspace = shellQuoted(descriptor.workspaceDirectory)
-        return "umask 077 && mkdir -p \(workspace) && cd \(workspace) && \(home)\(executable)"
+        return "umask 077 && mkdir -p \(workspace) && cd \(workspace) && \(home)\(shellQuoted(executablePath))"
     }
 
     public static func script(for descriptor: ClaudeSetupDescriptor) -> String {

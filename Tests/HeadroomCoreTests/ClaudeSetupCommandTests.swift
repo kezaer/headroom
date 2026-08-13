@@ -67,7 +67,9 @@ import Testing
         #expect(!script.contains("exec claude"))
     }
 
-    @Test func manualCommandRetainsAUsableClaudeFallbackWhenResolutionFails() {
+    // KTD5: an unresolved executable has no valid manual launch command — substituting
+    // bare `claude` would hand the user the lookup Headroom already failed.
+    @Test func manualCommandIsUnavailableWithoutAResolvedExecutable() {
         let command = ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
             accountKey: account,
             executablePath: nil,
@@ -76,8 +78,67 @@ import Testing
             configDirectory: "/tmp/config space"
         ))
 
-        #expect(command == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && CLAUDE_CONFIG_DIR='/tmp/config space' claude")
-        #expect(!command.contains(account.accountID.raw))
+        #expect(command == nil)
+    }
+
+    @Test func manualCommandQuotesResolvedPathsAndPreservesAccountRouting() throws {
+        let extra = try #require(ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
+            accountKey: account,
+            executablePath: "/Users/Test User/.npm-global/o'brien/bin/claude",
+            loginPath: "",
+            workspaceDirectory: "/tmp/work space",
+            configDirectory: "/tmp/config space"
+        )))
+        let builtIn = try #require(ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
+            accountKey: AccountKey(providerID: .claude, accountID: .primary),
+            executablePath: "/Users/Test User/.npm-global/bin/claude",
+            loginPath: "",
+            workspaceDirectory: "/tmp/work space",
+            configDirectory: nil
+        )))
+
+        #expect(extra == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && CLAUDE_CONFIG_DIR='/tmp/config space' '/Users/Test User/.npm-global/o'\\''brien/bin/claude'")
+        #expect(builtIn == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && env -u CLAUDE_CONFIG_DIR '/Users/Test User/.npm-global/bin/claude'")
+        for command in [extra, builtIn] {
+            #expect(!command.hasSuffix(" claude"))
+            #expect(!command.contains(account.accountID.raw))
+        }
+    }
+
+    // AE6: an npm-derived launcher reaches the staged handoff with the account's
+    // isolated config home, workspace, completion marker, and one-token quoting.
+    @Test func npmDerivedLauncherKeepsExtraAccountIsolationInTheStagedScript() throws {
+        let marker = SetupCompletionMarker(
+            pendingPath: "/tmp/setup pending",
+            completedPath: "/tmp/setup complete"
+        )
+        let descriptor = ClaudeSetupDescriptor(
+            accountKey: account,
+            executablePath: "/Users/Test User/.npm-global/bin/claude",
+            loginPath: "/Users/Test User/.npm-global/bin:/usr/bin:/bin",
+            workspaceDirectory: "/tmp/work space",
+            configDirectory: "/tmp/config space",
+            completionMarker: marker
+        )
+        let script = ClaudeSetupCommand.script(for: descriptor)
+
+        #expect(script.contains("export CLAUDE_CONFIG_DIR='/tmp/config space'"))
+        #expect(script.contains("cd '/tmp/work space'"))
+        #expect(script.contains("'/Users/Test User/.npm-global/bin/claude'"))
+        #expect(script.contains("'/tmp/setup complete'"))
+        #expect(!script.contains("exec claude"))
+
+        let process = Process()
+        let input = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-n"]
+        process.standardInput = input
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        input.fileHandleForWriting.write(Data(script.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
     }
 
     @Test func generatedScriptContainsNoProviderPayloadOrIdentity() {

@@ -155,18 +155,6 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         }
     }
 
-    /// Resolve `claude` via the user's login shell so a Finder-launched app (bare PATH)
-    /// still finds an nvm/homebrew install. Falls back to common locations.
-    public static func resolveClaudePath() -> String? {
-        CLIExecutableResolver.resolve(
-            named: "claude",
-            fallbackPaths: [
-                "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
-                "\(NSHomeDirectory())/.local/bin/claude",
-            ]
-        )
-    }
-
     /// The user's real PATH via a login shell, so a Finder-launched app (bare PATH)
     /// still resolves node/nvm the way the terminal does. Falls back to a sane default.
     private static func loginPath() -> String {

@@ -66,10 +66,20 @@ isolated home; running a plain command yourself targets the built-in account.
 
 | Provider | Official CLI and login | Extra-account isolation | Diagnostic |
 |---|---|---|---|
-| Claude | [Install Claude Code](https://docs.anthropic.com/en/docs/claude-code/getting-started). Run `claude`, then `/login` when needed. There is no device-code flow. | `CLAUDE_CONFIG_DIR` | `swift run Headroom --probe-claude` |
+| Claude | [Install Claude Code](https://code.claude.com/docs/en/installation). Run `claude`, then `/login` when needed. There is no device-code flow. | `CLAUDE_CONFIG_DIR` | `swift run Headroom --probe-claude` |
 | Codex | [Install Codex CLI](https://developers.openai.com/codex/cli/). Standard: `codex login`. Device code: `codex -c cli_auth_credentials_store=file login --device-auth` (Headroom also uses file-backed CLI auth for standard sign-in). | `CODEX_HOME` | `swift run Headroom --probe-codex` |
 | Grok | [Install Grok Build](https://x.ai/news/grok-build). Standard: `grok login`. Device code: `grok login --device-auth`. | `GROK_HOME` | `swift run Headroom --probe-grok` |
 | Cursor | [Install Cursor Agent](https://docs.cursor.com/en/cli/installation). Run `cursor-agent login`. Device-code and additional-account flows are unavailable. | None; one account only | `swift run Headroom --probe-cursor` |
+
+### Where Headroom looks for the Claude CLI
+
+Headroom finds `claude` through your login shell first, then the fixed native and Homebrew
+locations — including the legacy `~/.claude/local` install. If none of those match, it asks
+npm for the active global prefix (`npm prefix -g`) and checks for a launcher there, so a
+custom `.npmrc` prefix that never reaches Headroom's inherited `PATH` now works. Anthropic
+recommends the native or Homebrew installer for new installs; an existing usable npm-global
+launcher stays supported. After moving or reinstalling the CLI, choose **Check Again** —
+Headroom rediscovers it without a relaunch or a new sign-in.
 
 The setup and recovery messages map to these actions:
 

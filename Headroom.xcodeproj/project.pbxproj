@@ -142,6 +142,7 @@
 		B2E74D2787539CB61B9DCA79 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = FBD1B51EA4877966201E1485 /* PrivacyInfo.xcprivacy */; };
 		B380BB2769B4B2CE662D2B6E /* HeadroomIOSWidgetConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C99BCBDD4738D8F88877765E /* HeadroomIOSWidgetConfiguration.swift */; };
 		B779B019A3EDF4D4AF443B69 /* SyncedWidgetSnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8164B96DDA8CF8840FA46958 /* SyncedWidgetSnapshotModels.swift */; };
+		B818994597D1E269FF8EBB4E /* ClaudeExecutableDiscoveryInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4427B82F14B989841CD982C6 /* ClaudeExecutableDiscoveryInteractionTests.swift */; };
 		B92EA7C9D22387D7A4A9D88F /* VesselMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9574D232CF05C00E2B526408 /* VesselMark.swift */; };
 		BAA0B4FCCEB2537768033FC5 /* BrandIcons.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 32391FD1576132EBDE6FD4D3 /* BrandIcons.xcassets */; };
 		BDA68D06C64C691567AD5B71 /* HeadroomIOSWidgetConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C99BCBDD4738D8F88877765E /* HeadroomIOSWidgetConfiguration.swift */; };
@@ -319,6 +320,7 @@
 		3D2DD5C8BCCC8BADC9508D07 /* GrokDTOs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokDTOs.swift; sourceTree = "<group>"; };
 		42F9263C0DCBF001A272FE49 /* LaunchAtLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAtLogin.swift; sourceTree = "<group>"; };
 		432AF864130D5870A2FC78CF /* PollingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollingEngine.swift; sourceTree = "<group>"; };
+		4427B82F14B989841CD982C6 /* ClaudeExecutableDiscoveryInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeExecutableDiscoveryInteractionTests.swift; sourceTree = "<group>"; };
 		48C63A7205115E3F08BEDE08 /* PopoverRenderHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopoverRenderHarness.swift; sourceTree = "<group>"; };
 		4B371EDE73E7D7D689ADFED6 /* GrokAccountEmailReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GrokAccountEmailReader.swift; sourceTree = "<group>"; };
 		4BE9F956D9F249904E8CE412 /* DemoModeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoModeUITests.swift; sourceTree = "<group>"; };
@@ -446,6 +448,7 @@
 			isa = PBXGroup;
 			children = (
 				BB8F7D28425B1FFC3629ABFA /* AccountsSettingsInteractionTests.swift */,
+				4427B82F14B989841CD982C6 /* ClaudeExecutableDiscoveryInteractionTests.swift */,
 			);
 			path = HeadroomAppTests;
 			sourceTree = "<group>";
@@ -1091,6 +1094,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CF1F4D93349410C996B0498B /* AccountsSettingsInteractionTests.swift in Sources */,
+				B818994597D1E269FF8EBB4E /* ClaudeExecutableDiscoveryInteractionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
