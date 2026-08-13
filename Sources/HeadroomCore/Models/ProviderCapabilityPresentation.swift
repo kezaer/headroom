@@ -16,8 +16,10 @@ public extension ProviderCapabilityState {
                 status: "Install Claude Code to show usage",
                 primaryLabel: "Install Claude Code",
                 primaryAction: .installClaudeCLI,
-                secondaryLabel: "Copy Manual Command",
-                secondaryAction: .copyManualCommand
+                // R7: a confirmed-absent CLI has no manual command to copy; the only
+                // useful second action is a fresh forced discovery search.
+                secondaryLabel: "Check Again",
+                secondaryAction: .checkNow
             )
         }
     }

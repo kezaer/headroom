@@ -38,18 +38,31 @@ enum ClaudeSetupSession {
             : AccountStorage.claudeWorkspaceDirectoryURL(for: account)
     }
 
-    static func command(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
+    /// KTD5: only a validated absolute executable yields a manual command. The old
+    /// nil-path form produced bare `claude` — the very lookup that already failed.
+    static func command(
+        for account: ProviderAccount = .builtIn(for: .claude),
+        executablePath: String
+    ) -> String? {
         let configuration = ProviderAccountConfiguration.make(for: account)
         return ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
             accountKey: account.key,
-            executablePath: nil,
+            executablePath: executablePath,
             loginPath: "",
             workspaceDirectory: configuration.claudeWorkspaceDirectory?.path ?? workspaceURL(for: account).path,
             configDirectory: configuration.claudeConfigDirectory?.path
         ))
     }
 
-    static var command: String { command() }
+    /// Resolves through the shared locator so every displayed/copied command names the
+    /// same validated executable the probe launches (R6). No resolution, no command.
+    static func resolvedCommand(
+        for account: ProviderAccount = .builtIn(for: .claude),
+        locator: any CLIExecutableLocating = SetupSessions.claudeLocator
+    ) async -> String? {
+        guard let executablePath = await locator.locate().path else { return nil }
+        return command(for: account, executablePath: executablePath)
+    }
 
     private static func ensureWorkspace(for account: ProviderAccount) throws -> URL {
         if account.isBuiltIn {
@@ -59,29 +72,104 @@ enum ClaudeSetupSession {
         return workspaceURL(for: account)
     }
 
-    /// Tilde-abbreviated command for display; `command` (absolute) is what's copied.
-    static func displayCommand(for account: ProviderAccount = .builtIn(for: .claude)) -> String {
-        command(for: account).replacingOccurrences(of: NSHomeDirectory(), with: "~")
+    /// Tilde-abbreviated form of a resolved command for display; the absolute command is
+    /// what's copied.
+    static func displayForm(of command: String) -> String {
+        command.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
-    static var displayCommand: String { displayCommand() }
-
-    static func copyCommand(for account: ProviderAccount = .builtIn(for: .claude)) {
+    /// Copies an already-resolved absolute command. Callers hold the resolved value, so
+    /// there is no path where an unresolved lookup reaches the pasteboard.
+    @discardableResult
+    static func copy(_ command: String, for account: ProviderAccount = .builtIn(for: .claude)) -> Bool {
         // Terminal may have filesystem permission the app lacks, and the manual command
         // provisions its own workspace. Never leave an older account command on the pasteboard.
         _ = try? ensureWorkspace(for: account)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command(for: account), forType: .string)
+        return NSPasteboard.general.setString(command, forType: .string)
     }
 
-    static func copyCommand() { copyCommand(for: .builtIn(for: .claude)) }
+    /// Pure staged-script builder for the legacy handoff, extracted so the launch line can
+    /// be proven without opening Terminal.
+    static func script(
+        for account: ProviderAccount,
+        workspacePath: String,
+        executablePath: String?
+    ) -> String {
+        let configExport = account.isBuiltIn
+            ? ""
+            : "export CLAUDE_CONFIG_DIR=\(shellQuoted(AccountStorage.claudeConfigDirectoryURL(for: account).path))\n"
+        let intro = account.isBuiltIn
+            ? """
+            echo "Headroom needs Claude Code to trust this empty folder before it can read /usage."
+            echo
+            echo "When Claude asks, choose: Yes, I trust this folder"
+            echo "After approving, return to Headroom. It will retry automatically."
+            """
+            : """
+            echo "Adding another Claude account to Headroom."
+            echo
+            echo "1. Log in when Claude asks — use the account you want to add."
+            echo "   (This login is kept separate from your main Claude Code account.)"
+            echo "2. If Claude asks about this folder, choose: Yes, I trust this folder"
+            echo "3. Return to Headroom. It will pick the account up automatically."
+            """
+        // R1a: the legacy migrate-installer location joins the fallback PATH so this
+        // script's environment matches what discovery searches.
+        let introduction = """
+        #!/bin/zsh
+        clear
+        export PATH="$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+        \(configExport)cd \(shellQuoted(workspacePath)) || exit 1
+        \(intro)
+        echo
+        """
+
+        // R7/KTD5: without a validated absolute executable there is no launch to stage —
+        // a bare `claude` here repeats the lookup Headroom already failed.
+        guard let executablePath else {
+            return introduction + "\n" + """
+            echo "Claude Code CLI was not found. Install Claude Code, then reopen Headroom."
+            echo
+            echo "Press any key to close this window."
+            read -k 1
+            exit 127
+            """
+        }
+
+        let executable = shellQuoted(executablePath)
+        return introduction + "\n" + """
+        if [[ ! -x \(executable) ]]; then
+          echo "The Claude CLI moved or is no longer executable. Reopen Headroom and try again."
+          echo
+          echo "Press any key to close this window."
+          read -k 1
+          exit 127
+        fi
+        exec \(executable)
+        """
+    }
 
     /// Writes and opens the guided `.command` script (same mechanism as before the
     /// redesign), marks the session as waiting, and schedules the auto-retries.
     /// Extra accounts additionally export their `CLAUDE_CONFIG_DIR` and walk the user
-    /// through signing in with the account being added.
+    /// through signing in with the account being added. R6: discovery runs before
+    /// staging so the script launches the same validated absolute executable the probe
+    /// uses. The waiting flag flips first — resolution can take up to the locator's
+    /// bounded search — and the call stays sync for UI callers.
     static func openSetup(for account: ProviderAccount = .builtIn(for: .claude), onRetry: @escaping () -> Void) {
         setOpenedSetupAt(Date(), for: account.id)
+        Task { @MainActor in
+            let executablePath = await SetupSessions.claudeLocator.locate().path
+            stageAndOpen(for: account, executablePath: executablePath, onRetry: onRetry)
+        }
+    }
+
+    private static func stageAndOpen(
+        for account: ProviderAccount,
+        executablePath: String?,
+        onRetry: @escaping () -> Void
+    ) {
         do {
             let workspace = try ensureWorkspace(for: account)
             // Script filename is per-account: a shared name let a second account's
@@ -91,46 +179,17 @@ enum ClaudeSetupSession {
                 .appendingPathComponent(account.isBuiltIn
                     ? "Open Claude Setup.command"
                     : "Add Claude Account \(account.id.raw.prefix(8)).command")
-            let configExport = account.isBuiltIn
-                ? ""
-                : "export CLAUDE_CONFIG_DIR=\(shellQuoted(AccountStorage.claudeConfigDirectoryURL(for: account).path))\n"
-            let intro = account.isBuiltIn
-                ? """
-                echo "Headroom needs Claude Code to trust this empty folder before it can read /usage."
-                echo
-                echo "When Claude asks, choose: Yes, I trust this folder"
-                echo "After approving, return to Headroom. It will retry automatically."
-                """
-                : """
-                echo "Adding another Claude account to Headroom."
-                echo
-                echo "1. Log in when Claude asks — use the account you want to add."
-                echo "   (This login is kept separate from your main Claude Code account.)"
-                echo "2. If Claude asks about this folder, choose: Yes, I trust this folder"
-                echo "3. Return to Headroom. It will pick the account up automatically."
-                """
-            let script = """
-            #!/bin/zsh
-            clear
-            export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-            \(configExport)cd \(shellQuoted(workspace.path)) || exit 1
-            \(intro)
-            echo
-            if ! command -v claude >/dev/null 2>&1; then
-              echo "Claude Code CLI was not found. Install Claude Code, then reopen Headroom."
-              echo
-              echo "Press any key to close this window."
-              read -k 1
-              exit 127
-            fi
-            exec claude
-            """
+            let script = script(
+                for: account,
+                workspacePath: workspace.path,
+                executablePath: executablePath
+            )
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
             guard NSWorkspace.shared.open(scriptURL) else {
                 setOpenedSetupAt(nil, for: account.id)
                 cancelRetries(for: account.id)
-                copyCommand(for: account)
+                copyResolvedCommand(for: account, executablePath: executablePath)
                 return
             }
             scheduleRetries(for: account.id, onRetry)
@@ -140,8 +199,17 @@ enum ClaudeSetupSession {
             // back to the copyable command.
             setOpenedSetupAt(nil, for: account.id)
             cancelRetries(for: account.id)
-            copyCommand(for: account)
+            copyResolvedCommand(for: account, executablePath: executablePath)
         }
+    }
+
+    /// Clipboard fallback for the legacy handoff. It reuses the executable resolved for
+    /// this attempt, so it copies nothing when discovery found no validated launcher.
+    private static func copyResolvedCommand(for account: ProviderAccount, executablePath: String?) {
+        guard let executablePath,
+              let command = command(for: account, executablePath: executablePath)
+        else { return }
+        copy(command, for: account)
     }
 
     /// Stop pending auto-retries. Called once the connection goes live — otherwise the
@@ -354,13 +422,31 @@ struct ClaudeWaitingCard: View {
 /// "Rather run it yourself?" — the manual command, demoted behind a disclosure so the
 /// shell never dominates the first-run card. Shown tilde-abbreviated, wraps fully.
 struct ClaudeManualCommandDisclosure: View {
+    var account: ProviderAccount = .builtIn(for: .claude)
+
     @State private var open = false
+    /// KTD5: the disclosure appears only once discovery produced a validated absolute
+    /// executable — there is no command to show or copy without one.
+    @State private var resolvedCommand: String?
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        content
+            .task {
+                resolvedCommand = await ClaudeSetupSession.resolvedCommand(for: account)
+            }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let resolvedCommand {
+            disclosure(for: resolvedCommand)
+        }
+    }
+
+    private func disclosure(for command: String) -> some View {
         let dark = scheme == .dark
-        VStack(alignment: .leading, spacing: 9) {
+        return VStack(alignment: .leading, spacing: 9) {
             Button {
                 withAnimation(reduceMotion ? nil : HeadroomMotion.settle) { open.toggle() }
             } label: {
@@ -376,13 +462,15 @@ struct ClaudeManualCommandDisclosure: View {
             .buttonStyle(HoverButtonStyle(horizontalPadding: 5, verticalPadding: 3))
             if open {
                 HStack(alignment: .top, spacing: 8) {
-                    Text(ClaudeSetupSession.displayCommand)
+                    Text(ClaudeSetupSession.displayForm(of: command))
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
-                    Button(action: ClaudeSetupSession.copyCommand) {
+                    Button {
+                        ClaudeSetupSession.copy(command, for: account)
+                    } label: {
                         Image(systemName: "doc.on.doc")
                             .frame(width: 22, height: 22)
                     }

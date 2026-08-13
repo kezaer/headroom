@@ -30,11 +30,13 @@ enum SetupSessions {
         case documentation(URL)
         case setup(SetupHandoffMode)
         case privacyGuidance(URL)
-        case copyManualCommand(SetupHandoffMode)
         case checkNow
     }
 
-    private struct PreparedScript: Sendable {
+    /// R6/KTD5: `manualCommand` exists only because preparation already captured a
+    /// validated absolute executable, so the Terminal-rejected clipboard fallback can
+    /// never hand back an unresolved bare-name command.
+    struct PreparedScript: Sendable {
         let scriptURL: URL
         let completionMarker: SetupCompletionMarker
         let manualCommand: String
@@ -47,6 +49,15 @@ enum SetupSessions {
     private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
     private static var capabilityAnnouncementDedupe = CapabilityAnnouncementDedupe()
     private static var claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
+
+    /// The one shared Claude locator, so manual-command surfaces resolve the same
+    /// validated absolute executable the probe and setup handoff use (R6).
+    static var claudeLocator: any CLIExecutableLocating { claudeExecutableLocator }
+
+    /// Test seam: production reads a staged handoff only through `openPreparedHandoff`.
+    static func stagedHandoff(for key: AccountKey) -> PreparedScript? {
+        preparedScripts[key]
+    }
 
     static func configure(
         store: UsageStore,
@@ -125,8 +136,6 @@ enum SetupSessions {
             } else {
                 CodexSetupSession.openSetup(for: account, onRetry: onRetry)
             }
-        case .copyManualCommand(let mode):
-            Task { _ = await copyManualCommand(for: account.key, mode: mode) }
         case .checkNow:
             guard checkNowTasks[account.key] == nil else { return }
             checkNowTasks[account.key] = Task {
@@ -147,8 +156,6 @@ enum SetupSessions {
         switch action {
         case .installClaudeCLI:
             .documentation(URL(string: "https://docs.anthropic.com/en/docs/claude-code/getting-started")!)
-        case .copyManualCommand:
-            .copyManualCommand(.standard)
         case .openClaudeSetup, .connectCodex, .reconnectCodex, .resolveCodexStorage,
              .connectGrok, .reconnectGrok, .connectCursor:
             .setup(.standard)
@@ -355,7 +362,12 @@ enum SetupSessions {
                         completionMarker: completionMarker
                     )
                     script = ClaudeSetupCommand.script(for: descriptor)
-                    manualCommand = ClaudeSetupCommand.manualCommand(for: descriptor)
+                    // KTD5: the descriptor carries the validated executable resolved
+                    // above, so a nil command here would mean staging is inconsistent.
+                    guard let resolved = ClaudeSetupCommand.manualCommand(for: descriptor) else {
+                        return .failure(.stagingFailed)
+                    }
+                    manualCommand = resolved
                 case .codex:
                     let executable = CodexCLI.resolveExecutable()
                     guard executable != nil else { return .failure(.executableMissing) }
@@ -476,50 +488,7 @@ enum SetupSessions {
         }
     }
 
-    @discardableResult
-    private static func copyManualCommand(
-        for key: AccountKey,
-        mode: SetupHandoffMode
-    ) async -> Bool {
-        let account = ProviderAccount(
-            id: key.accountID,
-            providerID: key.providerID,
-            label: "Account",
-            isBuiltIn: key.accountID == .primary
-        )
-        let command: String
-        switch key.providerID {
-        case .claude:
-            let configuration = ProviderAccountConfiguration.make(for: account)
-            guard let workspace = configuration.claudeWorkspaceDirectory else { return false }
-            _ = try? ClaudeUsageWorkspace.ensureDirectory(at: workspace)
-            let executable = await claudeExecutableLocator.locate().path
-            command = ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
-                accountKey: key,
-                executablePath: executable,
-                loginPath: "",
-                workspaceDirectory: workspace.path,
-                configDirectory: configuration.claudeConfigDirectory?.path
-            ))
-        case .codex:
-            command = CodexCLI.accountLoginCommand(
-                codexHome: ProviderAccountConfiguration.make(for: account).codexHomeDirectory?.path,
-                mode: mode
-            )
-        case .grok:
-            command = GrokCLI.accountLoginCommand(
-                grokHome: ProviderAccountConfiguration.make(for: account).grokHomeDirectory?.path,
-                mode: mode
-            )
-        case .cursor:
-            command = CursorCLI.loginCommand
-        default:
-            return false
-        }
-        return copyCommand(command)
-    }
-
-    private static func copyCommand(_ command: String) -> Bool {
+    static func copyCommand(_ command: String) -> Bool {
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(command, forType: .string)
     }

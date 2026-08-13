@@ -8,9 +8,36 @@ import Testing
         #expect(ProviderCapabilityState.available.recoveryPresentation == nil)
     }
 
+    // AE5/R7: confirmed absence offers installation plus a fresh discovery check —
+    // never a copied command that repeats the failed bare-name lookup.
+    @Test func confirmedAbsenceOffersInstallationAndAFreshCheckOnly() {
+        let presentation = ProviderCapabilityState.confirmedAbsent.recoveryPresentation
+        #expect(presentation?.primaryAction == .installClaudeCLI)
+        #expect(presentation?.secondaryAction == .checkNow)
+        #expect(presentation?.secondaryLabel == "Check Again")
+
+        let outcome = ProviderSetupOutcome.claudeCLIMissing.recoveryPresentation
+        #expect(outcome.primaryAction == .installClaudeCLI)
+        #expect(outcome.secondaryAction == .checkNow)
+        #expect(outcome.secondaryLabel == "Check Again")
+    }
+
+    // AE7/R7: incomplete discovery keeps the retry-oriented message and never claims
+    // the CLI is absent.
+    @Test func inconclusiveDiscoveryKeepsRetryRecoveryWithoutClaimingAbsence() {
+        for issue in [CLIExecutableDiscoveryIssue.shellTimeout, .npmPrefixUnresolved] {
+            let presentation = ProviderCapabilityState.inconclusive(issue).recoveryPresentation
+            #expect(presentation?.primaryAction == .checkNow)
+            #expect(presentation?.primaryLabel == "Check Again")
+            #expect(presentation?.secondaryAction == .openClaudeSetup)
+            #expect(presentation?.status != ProviderCapabilityState.confirmedAbsent.recoveryPresentation?.status)
+            #expect(presentation?.status.localizedCaseInsensitiveContains("install") == false)
+        }
+    }
+
     @Test func everyProviderOutcomeHasOneTypedRecoveryPresentation() {
         let expectations: [(ProviderSetupOutcome, SetupRecoveryAction, SetupRecoveryAction?, SetupAutomaticPolicy)] = [
-            (.claudeCLIMissing, .installClaudeCLI, .copyManualCommand, .none),
+            (.claudeCLIMissing, .installClaudeCLI, .checkNow, .none),
             (.claudeLoginRequired, .openClaudeSetup, .checkNow, .boundedChecksAfterHandoff),
             (.claudeTrustRequired, .openClaudeSetup, .checkNow, .boundedChecksAfterHandoff),
             (.claudeUnknownUI, .checkNow, .openClaudeSetup, .none),
