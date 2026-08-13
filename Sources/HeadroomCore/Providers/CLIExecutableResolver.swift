@@ -21,11 +21,29 @@ public enum CLIExecutableSupplementalResult: Sendable, Equatable {
     case unresolved
 }
 
+/// Which syntax the login shell running our command understands. fish is not POSIX —
+/// `var=$(…)` and `if …; then …; fi` are syntax errors there, which would abort the whole
+/// command before the marker is ever printed and turn every search into `.invalidOutput`.
+enum CLIShellDialect: Sendable, Equatable {
+    case posix
+    case fish
+
+    static func forShell(atPath shellPath: String) -> CLIShellDialect {
+        (shellPath as NSString).lastPathComponent == "fish" ? .fish : .posix
+    }
+}
+
 public enum CLIExecutableResolver {
     private static let executableMarker = "__HEADROOM_EXECUTABLE__"
     private static let pathMarker = "__HEADROOM_PATH__"
     private static let npmPrefixMarker = "__HEADROOM_NPM_PREFIX__"
     private static let npmAbsentMarker = "__HEADROOM_NPM_ABSENT__"
+
+    /// The one shell every part of a search agrees on: the command dialect and the process
+    /// that runs it must never be chosen independently.
+    static var loginShellPath: String {
+        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+    }
 
     /// Shell startup files and npm are both user-controlled; the whole search — direct
     /// lookup plus any supplemental query — shares this one deadline (R3, AE7).
@@ -39,8 +57,12 @@ public enum CLIExecutableResolver {
 
         // Interactive login mode loads version-manager initialization commonly kept in
         // .zshrc (NVM/asdf/mise). Login-only mode can instead select an older global shim.
+        let shell = loginShellPath
         let output: String?
-        switch runLoginShell(command: searchCommand(named: executableName, supplemental: .none)) {
+        switch runLoginShell(
+            command: searchCommand(named: executableName, supplemental: .none, shellPath: shell),
+            shell: shell
+        ) {
         case .completed(let value): output = value
         case .timedOut, .spawnFailed: output = nil
         }
@@ -97,8 +119,14 @@ public enum CLIExecutableResolver {
     ) async -> CLIExecutableShellResult {
         guard isValidExecutableName(executableName) else { return .invalidOutput }
         return await Task.detached(priority: .utility) {
+            let shell = loginShellPath
             switch runLoginShell(
-                command: searchCommand(named: executableName, supplemental: supplemental)
+                command: searchCommand(
+                    named: executableName,
+                    supplemental: supplemental,
+                    shellPath: shell
+                ),
+                shell: shell
             ) {
             case .timedOut:
                 return .timedOut
@@ -119,8 +147,10 @@ public enum CLIExecutableResolver {
     /// direct `command -v` miss only; selection priority is the locator's job (KTD1a).
     static func searchCommand(
         named executableName: String,
-        supplemental: CLIExecutableSupplementalStrategy
+        supplemental: CLIExecutableSupplementalStrategy,
+        shellPath: String = loginShellPath
     ) -> String {
+        // The direct-only form is already dialect-neutral, so every shell gets it verbatim.
         let direct = "printf '\\n\(executableMarker)\\n'; command -v -- \(executableName)"
         switch supplemental {
         case .none:
@@ -128,15 +158,30 @@ public enum CLIExecutableResolver {
         case .npmGlobalPrefix:
             // Prefix output is printed as data and never sourced, evaluated, or
             // concatenated into shell syntax (KTD2).
-            return """
-            printf '\\n\(executableMarker)\\n'; \
-            __headroom_found=$(command -v -- \(executableName) || true); \
-            printf '%s\\n' "$__headroom_found"; \
-            if [ -z "$__headroom_found" ]; then \
-            if command -v npm >/dev/null 2>&1; then \
-            printf '\\n\(npmPrefixMarker)\\n'; npm prefix -g 2>/dev/null; \
-            else printf '\\n\(npmAbsentMarker)\\n'; fi; fi
-            """
+            switch CLIShellDialect.forShell(atPath: shellPath) {
+            case .posix:
+                return """
+                printf '\\n\(executableMarker)\\n'; \
+                __headroom_found=$(command -v -- \(executableName) || true); \
+                printf '%s\\n' "$__headroom_found"; \
+                if [ -z "$__headroom_found" ]; then \
+                if command -v npm >/dev/null 2>&1; then \
+                printf '\\n\(npmPrefixMarker)\\n'; npm prefix -g 2>/dev/null; \
+                else printf '\\n\(npmAbsentMarker)\\n'; fi; fi
+                """
+            case .fish:
+                // Same markers and same gating, expressed in fish syntax: `set var (cmd)`
+                // for assignment and `if …; …; else; …; end` for branching.
+                return """
+                printf '\\n\(executableMarker)\\n'; \
+                set __headroom_found (command -v -- \(executableName)); \
+                printf '%s\\n' "$__headroom_found"; \
+                if test -z "$__headroom_found"; \
+                if command -v npm >/dev/null 2>&1; \
+                printf '\\n\(npmPrefixMarker)\\n'; npm prefix -g 2>/dev/null; \
+                else; printf '\\n\(npmAbsentMarker)\\n'; end; end
+                """
+            }
         }
     }
 
@@ -145,19 +190,22 @@ public enum CLIExecutableResolver {
         executableName: String,
         supplemental: CLIExecutableSupplementalStrategy
     ) -> CLIExecutableShellResult {
-        guard let marker = output.range(of: executableMarker, options: .backwards) else {
+        // Markers are protocol records, matched as whole lines: a path or noise line that
+        // merely *contains* the marker text is data and must not resection the output (R2).
+        let lines = output.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline })
+        guard let markerIndex = lines.lastIndex(where: { isMarkerLine($0, executableMarker) }) else {
             return .invalidOutput
         }
-        let tail = output[marker.upperBound...]
+        let tail = lines[lines.index(after: markerIndex)...]
 
         var directSection = tail
-        var prefixSection: Substring?
+        var prefixSection: ArraySlice<Substring>?
         var npmAbsent = false
-        if let prefixMarker = tail.range(of: npmPrefixMarker) {
-            directSection = tail[..<prefixMarker.lowerBound]
-            prefixSection = tail[prefixMarker.upperBound...]
-        } else if let absentMarker = tail.range(of: npmAbsentMarker) {
-            directSection = tail[..<absentMarker.lowerBound]
+        if let prefixMarker = tail.firstIndex(where: { isMarkerLine($0, npmPrefixMarker) }) {
+            directSection = tail[..<prefixMarker]
+            prefixSection = tail[tail.index(after: prefixMarker)...]
+        } else if let absentMarker = tail.firstIndex(where: { isMarkerLine($0, npmAbsentMarker) }) {
+            directSection = tail[..<absentMarker]
             npmAbsent = true
         }
 
@@ -166,7 +214,6 @@ public enum CLIExecutableResolver {
             candidates: candidates,
             supplemental: supplementalResult(
                 strategy: supplemental,
-                directCandidates: candidates,
                 prefixSection: prefixSection,
                 npmAbsent: npmAbsent,
                 executableName: executableName
@@ -176,25 +223,27 @@ public enum CLIExecutableResolver {
 
     private static func supplementalResult(
         strategy: CLIExecutableSupplementalStrategy,
-        directCandidates: [String],
-        prefixSection: Substring?,
+        prefixSection: ArraySlice<Substring>?,
         npmAbsent: Bool,
         executableName: String
     ) -> CLIExecutableSupplementalResult {
+        // R5: only the Claude-only npm strategy has a supplemental source to report on.
         guard strategy == .npmGlobalPrefix else { return .notAttempted }
         if npmAbsent { return .sourceUnavailable }
         if let prefixSection {
             return derivedNpmCandidate(from: prefixSection, executableName: executableName)
         }
-        // The shell emits one npm marker whenever the direct lookup misses, so a missing
-        // marker after a miss means the protocol broke — never confirmed absence (R3).
-        return directCandidates.isEmpty ? .unresolved : .notAttempted
+        // No npm marker means npm was never consulted — either the protocol broke, or the
+        // shell skipped the query because `command -v` printed something (an alias
+        // definition is printed but is not a launcher). Either way npm remains unread, so
+        // this can never harden into confirmed absence (R3).
+        return .unresolved
     }
 
     /// npm documents `{prefix}/bin` as the Unix global executable directory (KTD1). Only
     /// one structurally valid, absolute, control-character-free record is accepted (R2).
     private static func derivedNpmCandidate(
-        from prefixSection: Substring,
+        from prefixSection: ArraySlice<Substring>,
         executableName: String
     ) -> CLIExecutableSupplementalResult {
         let prefixes = records(in: prefixSection)
@@ -211,11 +260,14 @@ public enum CLIExecutableResolver {
         return .candidate(candidate)
     }
 
-    private static func records(in section: some StringProtocol) -> [String] {
+    private static func records(in section: ArraySlice<Substring>) -> [String] {
         section
-            .split(whereSeparator: { $0.isNewline })
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private static func isMarkerLine(_ line: Substring, _ marker: String) -> Bool {
+        line.trimmingCharacters(in: .whitespacesAndNewlines) == marker
     }
 
     private enum LoginShellResult {
@@ -234,9 +286,9 @@ public enum CLIExecutableResolver {
     /// profile cannot freeze app launch or a setup action indefinitely.
     private static func runLoginShell(
         command: String,
+        shell: String = loginShellPath,
         timeout: TimeInterval = loginShellTimeout
     ) -> LoginShellResult {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let probe = Process()
         probe.executableURL = URL(fileURLWithPath: shell)
         probe.arguments = ["-lic", command]

@@ -484,6 +484,25 @@ struct CLIExecutableLocatorTests {
         ])
     }
 
+    @Test func aliasTextSkippingTheNpmQueryNeverHardensIntoConfirmedAbsence() async {
+        // A broken alias makes `command -v` print text, which makes the shell skip the npm
+        // query. npm was therefore never read, so absence cannot be confirmed (R3).
+        let aliasText = "claude: aliased to /Users/Neil/.claude/local/claude"
+        let unread = makeLocator(
+            shellResult: .completed(candidates: [aliasText], supplemental: .unresolved),
+            fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths
+        )
+        #expect(await unread.locate() == .inconclusive(.npmPrefixUnresolved))
+
+        let legacyPath = "\(NSHomeDirectory())/.claude/local/claude"
+        let fallbackWins = makeLocator(
+            shellResult: .completed(candidates: [aliasText], supplemental: .unresolved),
+            fallbackPaths: CLIExecutableLocator.claudeFixedFallbackPaths,
+            validation: [legacyPath: .executable]
+        )
+        #expect(await fallbackWins.locate() == .available(path: legacyPath, source: .fallback))
+    }
+
     @Test func unavailableNpmConfirmsAbsenceOnlyAfterFixedFallbacksMiss() async {
         let fallbackWins = makeLocator(
             shellResult: .completed(candidates: [], supplemental: .sourceUnavailable),

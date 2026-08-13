@@ -165,3 +165,15 @@ official `claude` CLI's `/usage` panel instead.
   extra Claude account. Likely leftovers from repeated add/remove or demo/test runs that
   didn't clean up. Investigate why removal/cleanup missed them and whether the app should
   garbage-collect config homes not present in `providerAccounts.v1`.
+
+- **Orphaned npm grandchild on discovery timeout (review finding #7, 2026-08-12).**
+  `CLIExecutableResolver.runLoginShell` signals only the shell PID on the 5s deadline
+  (`terminate()` then `SIGKILL`), and the npm-prefix search is the first time the timed
+  script runs a real external command (`npm prefix -g`). A hung npm survives as an orphan.
+  Nuance from review validation: the shell runs interactively with job control, so npm
+  gets its *own* process group — mirroring the PTY probe's process-group kill would still
+  miss it; a full fix needs descendant enumeration (or disabling job control with
+  `--no-monitor`-style flags per shell). Mitigating: an orphan writing to the closed pipe
+  dies on SIGPIPE, so only a fully-hung, non-writing npm lingers; bounded to one process
+  per user-triggered Check Again / uncached discovery. Deferred as low-impact vs. the risk
+  of destabilizing the load-bearing shell probe.

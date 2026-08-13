@@ -13,7 +13,9 @@ struct CLIExecutableResolverSupplementalTests {
         #expect(parse("some startup noise") == .invalidOutput)
     }
 
-    @Test func directHitLeavesNpmUnattempted() {
+    @Test func directHitLeavesNpmUnreadRatherThanConfirmedAbsent() {
+        // A non-empty direct section means the shell skipped the npm query, so npm was
+        // never consulted — unresolved, not a negative answer from npm (R3).
         let output = """
         startup noise
         \(executableMarker)
@@ -21,7 +23,7 @@ struct CLIExecutableResolverSupplementalTests {
         """
         #expect(parse(output) == .completed(
             candidates: ["/opt/homebrew/bin/claude"],
-            supplemental: .notAttempted
+            supplemental: .unresolved
         ))
     }
 
@@ -98,13 +100,26 @@ struct CLIExecutableResolverSupplementalTests {
         ))
     }
 
-    @Test func nonEmptyDirectSectionMeansTheShellDeliberatelySkippedNpm() {
+    @Test func nonEmptyDirectSectionLeavesTheSkippedNpmQueryUnresolved() {
         let output = """
         \(executableMarker)
         claude not found but printed anyway
         """
         #expect(parse(output) == .completed(
             candidates: ["claude not found but printed anyway"],
+            supplemental: .unresolved
+        ))
+    }
+
+    @Test func noneStrategyKeepsNotAttemptedForANonEmptyDirectSection() {
+        // R5: Codex/Grok/Cursor never query npm, so their supplemental provenance is
+        // "not attempted" regardless of what the direct section printed.
+        let output = """
+        \(executableMarker)
+        codex: aliased to /Users/Neil/bin/codex
+        """
+        #expect(parse(output, supplemental: .none) == .completed(
+            candidates: ["codex: aliased to /Users/Neil/bin/codex"],
             supplemental: .notAttempted
         ))
     }
@@ -116,14 +131,40 @@ struct CLIExecutableResolverSupplementalTests {
         """
         #expect(parse(output) == .completed(
             candidates: ["claude: aliased to /Users/Neil/.claude/local/claude"],
-            supplemental: .notAttempted
+            supplemental: .unresolved
+        ))
+    }
+
+    @Test func markerTextEmbeddedInAPrefixDoesNotResectionTheOutput() {
+        let output = """
+        \(executableMarker)
+
+        \(npmPrefixMarker)
+        /Users/test/\(executableMarker)/.npm-global
+        """
+        #expect(parse(output) == .completed(
+            candidates: [],
+            supplemental: .candidate("/Users/test/\(executableMarker)/.npm-global/bin/claude")
+        ))
+    }
+
+    @Test func noiseLinesContainingMarkerTextAreDataNotProtocol() {
+        let output = """
+        npm warn ignoring \(npmPrefixMarker) in config
+        \(executableMarker)
+        /opt/homebrew/bin/claude \(npmAbsentMarker) leftover
+        """
+        #expect(parse(output) == .completed(
+            candidates: ["/opt/homebrew/bin/claude \(npmAbsentMarker) leftover"],
+            supplemental: .unresolved
         ))
     }
 
     @Test func npmQueryRunsInsideTheSameBoundedShellOperationAfterADirectMiss() {
         let command = CLIExecutableResolver.searchCommand(
             named: "claude",
-            supplemental: .npmGlobalPrefix
+            supplemental: .npmGlobalPrefix,
+            shellPath: "/bin/zsh"
         )
         #expect(command.contains(executableMarker))
         #expect(command.contains(npmPrefixMarker))
@@ -134,8 +175,69 @@ struct CLIExecutableResolverSupplementalTests {
         #expect(command.contains("if [ -z \"$__headroom_found\" ]"))
         #expect(CLIExecutableResolver.loginShellTimeout == 5)
 
-        let direct = CLIExecutableResolver.searchCommand(named: "codex", supplemental: .none)
+        let direct = CLIExecutableResolver.searchCommand(
+            named: "codex",
+            supplemental: .none,
+            shellPath: "/bin/zsh"
+        )
         #expect(!direct.contains("npm"))
+    }
+
+    @Test func fishLoginShellsGetFishSyntaxWithTheSameMarkerProtocol() {
+        let fish = CLIExecutableResolver.searchCommand(
+            named: "claude",
+            supplemental: .npmGlobalPrefix,
+            shellPath: "/opt/homebrew/bin/fish"
+        )
+        #expect(fish.contains("set __headroom_found (command -v -- claude)"))
+        #expect(fish.contains("if test -z \"$__headroom_found\""))
+        #expect(fish.contains("else; printf"))
+        #expect(fish.hasSuffix("end; end"))
+        #expect(fish.contains("npm prefix -g"))
+        // POSIX-only syntax aborts fish before any marker is printed.
+        #expect(!fish.contains("__headroom_found=$("))
+        #expect(!fish.contains("; then "))
+        #expect(!fish.contains("; fi"))
+        for marker in [executableMarker, npmPrefixMarker, npmAbsentMarker] {
+            #expect(fish.contains(marker))
+        }
+
+        // The direct-only command is dialect-neutral and stays byte-identical.
+        #expect(
+            CLIExecutableResolver.searchCommand(
+                named: "codex",
+                supplemental: .none,
+                shellPath: "/opt/homebrew/bin/fish"
+            ) == CLIExecutableResolver.searchCommand(
+                named: "codex",
+                supplemental: .none,
+                shellPath: "/bin/zsh"
+            )
+        )
+    }
+
+    @Test func parsingIsDialectAgnostic() {
+        // Both dialects print the same marker records, so one parser reads both.
+        let output = """
+        \(executableMarker)
+
+        \(npmPrefixMarker)
+        /Users/Neil/.npm-global
+        """
+        #expect(parse(output) == .completed(
+            candidates: [],
+            supplemental: .candidate("/Users/Neil/.npm-global/bin/claude")
+        ))
+        for shellPath in ["/bin/zsh", "/opt/homebrew/bin/fish"] {
+            let command = CLIExecutableResolver.searchCommand(
+                named: "claude",
+                supplemental: .npmGlobalPrefix,
+                shellPath: shellPath
+            )
+            for marker in [executableMarker, npmPrefixMarker, npmAbsentMarker] {
+                #expect(command.contains("printf '\\n\(marker)\\n'"))
+            }
+        }
     }
 
     private func parse(
