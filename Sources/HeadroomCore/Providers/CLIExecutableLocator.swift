@@ -5,6 +5,7 @@ public enum CLIExecutableLocationSource: String, Sendable, Equatable {
     case persistedHint
     case loginShell
     case fallback
+    case npmGlobalPrefix
 }
 
 public enum CLIExecutableDiscoveryIssue: String, Sendable, Equatable {
@@ -14,6 +15,7 @@ public enum CLIExecutableDiscoveryIssue: String, Sendable, Equatable {
     case inaccessibleCandidate
     case invalidatedHint
     case launchRace
+    case npmPrefixUnresolved
 }
 
 public enum CLIExecutableLocation: Sendable, Equatable {
@@ -28,10 +30,14 @@ public enum CLIExecutableLocation: Sendable, Equatable {
 }
 
 public enum CLIExecutableShellResult: Sendable, Equatable {
-    case completed(candidates: [String])
+    case completed(candidates: [String], supplemental: CLIExecutableSupplementalResult)
     case timedOut
     case spawnFailed
     case invalidOutput
+
+    public static func completed(candidates: [String]) -> CLIExecutableShellResult {
+        .completed(candidates: candidates, supplemental: .notAttempted)
+    }
 }
 
 public enum CLIExecutableCandidateStatus: Sendable, Equatable {
@@ -52,6 +58,8 @@ public enum CLIExecutableDiagnosticCategory: String, Sendable, Equatable, CaseIt
     case launchRace
     case loginShellResolved
     case fallbackResolved
+    case npmPrefixResolved
+    case npmPrefixUnresolved
     case supportedLocationMiss
     case shellTimeout
     case shellSpawnFailure
@@ -160,6 +168,7 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
         executableName: String,
         fallbackPaths: [String],
         hintStore: any CLIExecutableHintStoring = UserDefaultsCLIExecutableHintStore(),
+        supplemental: CLIExecutableSupplementalStrategy = .none,
         shellSearch: ShellSearch? = nil,
         validate: Validate? = nil,
         now: @escaping Now = Date.init
@@ -167,7 +176,12 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
         self.executableName = executableName
         self.fallbackPaths = fallbackPaths
         self.hintStore = hintStore
-        self.shellSearch = shellSearch ?? { await CLIExecutableResolver.searchExecutable(named: executableName) }
+        self.shellSearch = shellSearch ?? {
+            await CLIExecutableResolver.searchExecutable(
+                named: executableName,
+                supplemental: supplemental
+            )
+        }
         self.validate = validate ?? { path in
             if FileManager.default.isExecutableFile(atPath: path) { return .executable }
             return FileManager.default.fileExists(atPath: path) ? .inaccessible : .missing
@@ -344,15 +358,17 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
         validate: Validate,
         priorInvalidation: CLIExecutableDiscoveryIssue?
     ) -> CLIExecutableLocation {
-        var shellHadInaccessibleCandidate = false
+        var hadInaccessibleCandidate = false
+        var supplemental = CLIExecutableSupplementalResult.notAttempted
         switch shell {
-        case .completed(let candidates):
+        case .completed(let candidates, let shellSupplemental):
+            supplemental = shellSupplemental
             for path in candidates.reversed() {
                 switch validate(path) {
                 case .executable:
                     return .available(path: path, source: .loginShell)
                 case .inaccessible:
-                    shellHadInaccessibleCandidate = true
+                    hadInaccessibleCandidate = true
                 case .missing:
                     break
                 }
@@ -361,19 +377,31 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
             break
         }
 
-        var fallbackHadInaccessibleCandidate = false
         for path in fallbackPaths {
             switch validate(path) {
             case .executable:
                 return .available(path: path, source: .fallback)
             case .inaccessible:
-                fallbackHadInaccessibleCandidate = true
+                hadInaccessibleCandidate = true
             case .missing:
                 break
             }
         }
 
-        if shellHadInaccessibleCandidate || fallbackHadInaccessibleCandidate {
+        // KTD1a: the npm derivation is selected last, so a fresh native or Homebrew
+        // install always beats a stale npm shim left behind by a migration.
+        if case .candidate(let path) = supplemental {
+            switch validate(path) {
+            case .executable:
+                return .available(path: path, source: .npmGlobalPrefix)
+            case .inaccessible:
+                hadInaccessibleCandidate = true
+            case .missing:
+                break
+            }
+        }
+
+        if hadInaccessibleCandidate {
             return .inconclusive(.inaccessibleCandidate)
         }
         switch shell {
@@ -381,7 +409,11 @@ public actor CLIExecutableLocator: CLIExecutableLocating {
         case .spawnFailed: return .inconclusive(.shellSpawnFailure)
         case .invalidOutput: return .inconclusive(.invalidShellOutput)
         case .completed:
-            return priorInvalidation.map(CLIExecutableLocation.inconclusive) ?? .confirmedAbsent
+            if let priorInvalidation { return .inconclusive(priorInvalidation) }
+            // A supported source Headroom could not finish reading is not evidence of
+            // absence (R3), so it stays inconclusive instead of confirming a miss.
+            if supplemental == .unresolved { return .inconclusive(.npmPrefixUnresolved) }
+            return .confirmedAbsent
         }
     }
 }
@@ -395,6 +427,7 @@ private extension CLIExecutableLocation {
             case .persistedHint: .persistedHintValidated
             case .loginShell: .loginShellResolved
             case .fallback: .fallbackResolved
+            case .npmGlobalPrefix: .npmPrefixResolved
             }
         case .confirmedAbsent:
             .supportedLocationMiss
@@ -406,23 +439,34 @@ private extension CLIExecutableLocation {
             case .inaccessibleCandidate: .inaccessibleCandidate
             case .invalidatedHint: .hintInvalidated
             case .launchRace: .launchRace
+            case .npmPrefixUnresolved: .npmPrefixUnresolved
             }
         }
     }
 }
 
 public extension CLIExecutableLocator {
+    /// R1a: `~/.claude/local/claude` is the legacy `claude migrate-installer` layout,
+    /// whose alias-based shell integration is invisible to `command -v` path resolution,
+    /// so only a fixed path recovers it.
+    static var claudeFixedFallbackPaths: [String] {
+        [
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+            "\(NSHomeDirectory())/.local/bin/claude",
+            "\(NSHomeDirectory())/.claude/local/claude",
+        ]
+    }
+
     static func claude(
         hintStore: any CLIExecutableHintStoring = UserDefaultsCLIExecutableHintStore()
     ) -> CLIExecutableLocator {
         CLIExecutableLocator(
             executableName: "claude",
-            fallbackPaths: [
-                "/opt/homebrew/bin/claude",
-                "/usr/local/bin/claude",
-                "\(NSHomeDirectory())/.local/bin/claude",
-            ],
-            hintStore: hintStore
+            fallbackPaths: claudeFixedFallbackPaths,
+            hintStore: hintStore,
+            // KTD4: npm-prefix discovery is Claude-only; Codex/Grok/Cursor are unchanged.
+            supplemental: .npmGlobalPrefix
         )
     }
 }
