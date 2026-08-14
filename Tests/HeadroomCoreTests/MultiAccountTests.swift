@@ -273,6 +273,71 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(accounts[1].label == "Work")
     }
 
+    @Test func stopTrackingHidesBuiltInAcrossReload() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.canStopTrackingBuiltIn(for: .claude))
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id])
+        // The tombstone is persisted state, not an in-memory flag — a fresh registry
+        // (relaunch / registry reconstruction) must not resurrect the built-in row.
+        #expect(AccountRegistry(defaults: defaults).accounts(for: .claude).map(\.id) == [extra.id])
+    }
+
+    @Test func stopTrackingRefusedWhenBuiltInIsOnlyAccount() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        #expect(!registry.canStopTrackingBuiltIn(for: .claude))
+        #expect(!registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary])
+    }
+
+    @Test func resumeTrackingRestoresBuiltInFirstWithItsLabel() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        registry.renameAccount(AccountKey(providerID: .claude, accountID: .primary), to: "Personal")
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.resumeTrackingBuiltIn(for: .claude))
+        let accounts = AccountRegistry(defaults: defaults).accounts(for: .claude)
+        #expect(accounts.map(\.id) == [.primary, extra.id])
+        #expect(accounts.first?.label == "Personal")
+    }
+
+    @Test func removingLastExtraClearsTombstone() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        registry.removeAccount(extra.key)
+        // The built-in is the only possible row again, and the cleared tombstone means
+        // a future extra must not silently re-hide it.
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary])
+        #expect(!registry.isBuiltInHidden(for: .claude))
+        let second = registry.addAccount(for: .claude)!
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary, second.id])
+    }
+
+    @Test func hiddenBuiltInStillCountsTowardCap() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        for _ in 0..<4 { #expect(registry.addAccount(for: .claude) != nil) }
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        // The hidden built-in keeps its slot so resuming can never overflow the cap.
+        #expect(!registry.canAddAccount(for: .claude))
+        #expect(registry.addAccount(for: .claude) == nil)
+        #expect(registry.resumeTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).count == 5)
+    }
+
+    @Test func tombstoneIsPerProvider() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        _ = registry.addAccount(for: .claude)
+        _ = registry.addAccount(for: .codex)
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.isBuiltInHidden(for: .claude))
+        #expect(!registry.isBuiltInHidden(for: .codex))
+        #expect(registry.accounts(for: .codex).first?.id == .primary)
+    }
+
     @Test func storageComponentsCannotTraverseOutOfAccountRoot() {
         #expect(AccountStorage.safePathComponent("../victim") == "%2E%2E%2Fvictim")
         #expect(AccountStorage.safePathComponent("normal-id_1") == "normal-id_1")
