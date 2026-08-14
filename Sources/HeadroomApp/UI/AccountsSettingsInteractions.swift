@@ -117,11 +117,27 @@ enum AccountsSettingsInteractions {
         return true
     }
 
+    /// Built-in rows route to the non-destructive stop-tracking path — their config
+    /// home is the user's own CLI login, which Headroom never deletes. Extras keep the
+    /// destructive removal that deletes their Headroom-owned config home.
     static func removeAccount(
         _ account: ProviderAccount,
         from store: UsageStore
     ) async -> AccountRemovalResult {
-        await store.removeAccount(account.key)
+        account.isBuiltIn
+            ? await store.stopTrackingBuiltInAccount(for: account.providerID)
+            : await store.removeAccount(account.key)
+    }
+
+    /// Undo for stop-tracking: resurface the CLI's own login and fetch it right away.
+    @discardableResult
+    static func resumeTrackingBuiltIn(
+        for providerID: ProviderID,
+        in store: UsageStore
+    ) -> ProviderAccount? {
+        guard let account = store.resumeTrackingBuiltInAccount(for: providerID) else { return nil }
+        store.refreshAccountNow(account.key)
+        return account
     }
 
     /// Provider capability belongs to the shared executable, so the notice always binds

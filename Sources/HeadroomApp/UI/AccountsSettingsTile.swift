@@ -20,10 +20,13 @@ func settingsRecoveryActions(
 /// and an Add button, then one row per account: an editable label, a plain-language
 /// status, and the account's actions (Sign in for a pending login, Remove for extras).
 ///
-/// The built-in account is pinned and unremovable — it *is* the user's own CLI login —
-/// so its row shows a quiet "CLI login" tag where extras get the trash affordance.
-/// All sign-ins run through the official CLI in Terminal (compliance boundary
-/// unchanged); this tile only opens that handoff and reflects the result.
+/// The built-in account *is* the user's own CLI login, so it can never be deleted —
+/// its row shows a quiet "CLI login" tag, and once another account exists it offers a
+/// non-destructive "stop tracking" instead of the extras' trash affordance (which
+/// deletes that account's Headroom-owned config home). A stop-tracked built-in can be
+/// resurfaced from the provider header. All sign-ins run through the official CLI in
+/// Terminal (compliance boundary unchanged); this tile only opens that handoff and
+/// reflects the result.
 struct AccountsSettingsTile: View {
     let store: UsageStore
 
@@ -58,12 +61,19 @@ struct AccountsSettingsTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .raisedTile(cornerRadius: 10, surface: .opaque)
         .confirmationDialog(
-            "Remove this account?",
+            removalCandidate?.isBuiltIn == true
+                ? "Stop tracking this account?"
+                : "Remove this account?",
             isPresented: removalDialogPresented,
             titleVisibility: .visible,
             presenting: removalCandidate
         ) { account in
-            Button("Remove \(account.label)", role: .destructive) {
+            // Stop-tracking is deliberately not `.destructive` — it hides the row and
+            // deletes nothing, unlike extra-account removal.
+            Button(
+                account.isBuiltIn ? "Stop Tracking \(account.label)" : "Remove \(account.label)",
+                role: account.isBuiltIn ? nil : .destructive
+            ) {
                 removalInProgress = account.key
                 Task { @MainActor in
                     let result = await AccountsSettingsInteractions.removeAccount(account, from: store)
@@ -80,7 +90,9 @@ struct AccountsSettingsTile: View {
             }
             Button("Cancel", role: .cancel) { restoreRemovalFocus() }
         } message: { account in
-            Text("Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
+            Text(account.isBuiltIn
+                 ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
+                 : "Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
         }
         // Commit a pending rename when the field loses focus — Enter-only commit
         // silently discarded renames while still displaying the draft (code-review
@@ -152,6 +164,24 @@ struct AccountsSettingsTile: View {
             }
             ForEach(accounts) { account in
                 accountRow(account, capability: capability)
+            }
+            if store.isBuiltInTrackingStopped(for: providerID) {
+                // The way back from stop-tracking: resurface the CLI's own login and
+                // fetch it right away. Quiet on purpose — it's an undo, not a feature.
+                Button("Show CLI Account") {
+                    _ = withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+                        AccountsSettingsInteractions.resumeTrackingBuiltIn(
+                            for: providerID,
+                            in: store
+                        )
+                    }
+                }
+                .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
+                .controlSize(.small)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .help("Track the account your CLI is signed into again")
+                .padding(.leading, 16)
             }
             if let surface = UsageSurface.subscription(for: providerID),
                !store.isSurfaceEnabled(surface) {
@@ -398,21 +428,29 @@ struct AccountsSettingsTile: View {
                     .controlSize(.small)
                     .accessibilityLabel("Cancel removal of \(account.label)")
             } else {
+                // Built-ins can be stop-tracked (hidden, nothing deleted) once another
+                // account exists; a lone built-in keeps the slot laid out but inert so
+                // a provider can never reach zero rows.
+                let canAct = account.isBuiltIn
+                    ? store.canStopTrackingBuiltInAccount(for: account.providerID)
+                    : true
                 Button {
                     removalOrigin = account.key
                     removalCandidate = account
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: account.isBuiltIn ? "minus.circle" : "trash")
                         .font(.system(size: 11))
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
                 .foregroundStyle(.secondary)
-                .help("Remove this account")
-                .accessibilityLabel("Remove \(account.label)")
-                .opacity(account.isBuiltIn ? 0 : 1)
-                .disabled(account.isBuiltIn || removalState == .removing)
-                .accessibilityHidden(account.isBuiltIn)
+                .help(account.isBuiltIn ? "Stop tracking this account" : "Remove this account")
+                .accessibilityLabel(account.isBuiltIn
+                                    ? "Stop tracking \(account.label)"
+                                    : "Remove \(account.label)")
+                .opacity(canAct ? 1 : 0)
+                .disabled(!canAct || removalState == .removing)
+                .accessibilityHidden(!canAct)
                 .focused($focusedRemovalAction, equals: account.key)
             }
     }
