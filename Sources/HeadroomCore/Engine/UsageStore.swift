@@ -366,12 +366,80 @@ public final class UsageStore {
         snapshots.removeValue(forKey: key)
         continuityCache?.remove(for: key)
         accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+        reinstateBuiltInIfResurfaced(for: key.providerID)
         removingAccounts.remove(key)
         accountRemovalStates.removeValue(forKey: key)
         setupCoordinator?.markRemoved(key)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
         return .removed
+    }
+
+    // MARK: - Built-in tracking (stop/resume)
+
+    public func isBuiltInTrackingStopped(for providerID: ProviderID) -> Bool {
+        accountRegistry?.isBuiltInHidden(for: providerID) ?? false
+    }
+
+    public func canStopTrackingBuiltInAccount(for providerID: ProviderID) -> Bool {
+        guard providerFactory != nil else { return false } // resume needs the factory
+        return accountRegistry?.canStopTrackingBuiltIn(for: providerID) ?? false
+    }
+
+    /// Stop showing the provider's built-in account: registry tombstone plus in-memory
+    /// detach only. Unlike `removeAccount`, nothing on disk is touched — the built-in's
+    /// config home *is* the user's own CLI login (`~/.claude`, `~/.codex`, …), which
+    /// Headroom must never delete or sign out.
+    @discardableResult
+    public func stopTrackingBuiltInAccount(for providerID: ProviderID) async -> AccountRemovalResult {
+        let key = AccountKey(providerID: providerID, accountID: .primary)
+        guard canStopTrackingBuiltInAccount(for: providerID),
+              let accountRegistry,
+              let account = accounts(for: providerID).first(where: { $0.key == key })
+        else { return .notAllowed }
+        if await accountStorage.setupHandoffIsActive(for: account) {
+            accountRemovalStates[key] = .setupActive
+            return .setupActive
+        }
+        guard accountRegistry.stopTrackingBuiltIn(for: providerID) else { return .notAllowed }
+        pendingAccountRefreshes.remove(key)
+        providers.removeAll { $0.accountKey == key }
+        snapshots.removeValue(forKey: key)
+        continuityCache?.remove(for: key)
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.markRemoved(key)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+        return .removed
+    }
+
+    /// Bring a stop-tracked built-in back into the tracked list. Leaves the follow-up
+    /// refresh to the caller (mirrors `addAccount`), so the pending row is deterministic.
+    @discardableResult
+    public func resumeTrackingBuiltInAccount(for providerID: ProviderID) -> ProviderAccount? {
+        guard let accountRegistry, let providerFactory,
+              accountRegistry.resumeTrackingBuiltIn(for: providerID),
+              let account = accountRegistry.accounts(for: providerID).first(where: { $0.isBuiltIn })
+        else { return nil }
+        providers.append(providerFactory(account))
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        snapshots[account.key] = .pending(for: providerID)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+        return account
+    }
+
+    /// Removing the last extra clears the provider's tombstone in the registry; the
+    /// store must then recreate the built-in's provider instance so the resurfaced
+    /// row actually polls again.
+    private func reinstateBuiltInIfResurfaced(for providerID: ProviderID) {
+        guard let providerFactory,
+              let builtIn = accounts(for: providerID).first(where: { $0.isBuiltIn }),
+              !providers.contains(where: { $0.accountKey == builtIn.key })
+        else { return }
+        providers.append(providerFactory(builtIn))
+        snapshots[builtIn.key] = .pending(for: providerID)
     }
 
     public func cancelAccountRemoval(_ key: AccountKey) {
