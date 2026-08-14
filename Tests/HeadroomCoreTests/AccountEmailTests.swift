@@ -124,6 +124,79 @@ struct ClaudeAccountEmailTests {
     }
 }
 
+struct ClaudeDuplicateLoginTests {
+    @Test func decodesOAuthAccountUUID() {
+        #expect(
+            ClaudeAccountBlob.accountUUID(in: Data(claudeAccountFileFixture.utf8))
+                == "00000000-0000-0000-0000-000000000000"
+        )
+    }
+
+    @Test func missingOrBlankUUIDYieldsNil() {
+        for json in [
+            "{}",
+            #"{ "oauthAccount": {} }"#,
+            #"{ "oauthAccount": { "accountUuid": "  " } }"#,
+            #"{ "oauthAccount": { "accountUuid": 42 } }"#,
+            "not json at all",
+        ] {
+            #expect(ClaudeAccountBlob.accountUUID(in: Data(json.utf8)) == nil)
+        }
+    }
+
+    @Test func sameUpstreamLoginBadgesTheLaterRow() {
+        let main = ProviderAccount.builtIn(for: .claude)
+        let extra = ProviderAccount(id: AccountID("extra-1"), providerID: .claude, label: "New")
+        let detector = ClaudeDuplicateLoginDetector(readAccountUUID: { _ in "same-uuid" })
+        // Registry order decides the original: the earlier row keeps its plain
+        // identity, the later duplicate carries the badge.
+        #expect(detector.duplicateLabels(for: [main, extra]) == [extra.key: "Main"])
+    }
+
+    @Test func distinctLoginsProduceNoBadges() {
+        let main = ProviderAccount.builtIn(for: .claude)
+        let extra = ProviderAccount(id: AccountID("extra-1"), providerID: .claude, label: "New")
+        let detector = ClaudeDuplicateLoginDetector(
+            readAccountUUID: { $0 == .primary ? "uuid-a" : "uuid-b" }
+        )
+        #expect(detector.duplicateLabels(for: [main, extra]).isEmpty)
+    }
+
+    @Test func unreadableIdentityNeverBadges() {
+        let main = ProviderAccount.builtIn(for: .claude)
+        let extra = ProviderAccount(id: AccountID("extra-1"), providerID: .claude, label: "New")
+        // A missing/unreadable `.claude.json` (signed out, fresh config home) must fail
+        // safe to "no claim", never to "same account".
+        let detector = ClaudeDuplicateLoginDetector(readAccountUUID: { _ in nil })
+        #expect(detector.duplicateLabels(for: [main, extra]).isEmpty)
+    }
+
+    @Test func uuidComparisonIsCaseInsensitive() {
+        let main = ProviderAccount.builtIn(for: .claude)
+        let extra = ProviderAccount(id: AccountID("extra-1"), providerID: .claude, label: "New")
+        let detector = ClaudeDuplicateLoginDetector(
+            readAccountUUID: { $0 == .primary ? "ABC-123" : "abc-123" }
+        )
+        #expect(detector.duplicateLabels(for: [main, extra]) == [extra.key: "Main"])
+    }
+
+    @Test func nonClaudeAccountsAreIgnored() {
+        let codexMain = ProviderAccount.builtIn(for: .codex)
+        let codexExtra = ProviderAccount(id: AccountID("extra-1"), providerID: .codex, label: "Work")
+        let detector = ClaudeDuplicateLoginDetector(readAccountUUID: { _ in "same-uuid" })
+        #expect(detector.duplicateLabels(for: [codexMain, codexExtra]).isEmpty)
+    }
+
+    @Test func threeWayDuplicatesAllPointAtTheFirstRow() {
+        let main = ProviderAccount.builtIn(for: .claude)
+        let second = ProviderAccount(id: AccountID("extra-1"), providerID: .claude, label: "New")
+        let third = ProviderAccount(id: AccountID("extra-2"), providerID: .claude, label: "Newer")
+        let detector = ClaudeDuplicateLoginDetector(readAccountUUID: { _ in "same-uuid" })
+        #expect(detector.duplicateLabels(for: [main, second, third])
+                == [second.key: "Main", third.key: "Main"])
+    }
+}
+
 struct CodexAccountEmailTests {
     @Test func decodesEmailClaimFromIDToken() throws {
         let json = """

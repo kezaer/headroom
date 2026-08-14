@@ -9,24 +9,37 @@ public protocol ClaudeAccountEmailReading: Sendable {
     func readAccountEmail() -> String?
 }
 
-/// Decodes **only** `oauthAccount.emailAddress` out of `.claude.json`. The decoder
-/// declares that single field, so the rest of that file (project history, session state,
-/// tips, MCP config) can never be read into Headroom by accident.
+/// Decodes **only** `oauthAccount.emailAddress` and `oauthAccount.accountUuid` out of
+/// `.claude.json`. The decoder declares those two fields, so the rest of that file
+/// (project history, session state, tips, MCP config — and every credential) can never
+/// be read into Headroom by accident.
 public enum ClaudeAccountBlob {
     private struct Root: Decodable {
         struct OAuthAccount: Decodable {
             let emailAddress: String?
+            let accountUuid: String?
         }
         let oauthAccount: OAuthAccount?
     }
 
     public static func email(in data: Data) -> String? {
-        guard let root = try? JSONDecoder().decode(Root.self, from: data),
-              let email = root.oauthAccount?.emailAddress?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !email.isEmpty
-        else { return nil }
-        return email
+        nonEmpty(decode(data)?.oauthAccount?.emailAddress)
+    }
+
+    /// The stable upstream account identity — the safe deduplication key (emails can
+    /// be reused across logins; the UUID cannot).
+    public static func accountUUID(in data: Data) -> String? {
+        nonEmpty(decode(data)?.oauthAccount?.accountUuid)
+    }
+
+    private static func decode(_ data: Data) -> Root? {
+        try? JSONDecoder().decode(Root.self, from: data)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 }
 
@@ -87,5 +100,46 @@ public struct ClaudeAccountEmailFileReader: ClaudeAccountEmailReading {
     public func readAccountEmail() -> String? {
         guard let data = try? readData(path) else { return nil }
         return ClaudeAccountBlob.email(in: data)
+    }
+
+    /// Upstream account identity for duplicate-login detection, same fail-safe contract
+    /// as the email: nil when the file is absent, unreadable, or carries no UUID.
+    public func readAccountUUID() -> String? {
+        guard let data = try? readData(path) else { return nil }
+        return ClaudeAccountBlob.accountUUID(in: data)
+    }
+}
+
+/// Flags Claude accounts whose config homes are signed in to the **same upstream
+/// Claude login**. Detection only — Headroom never merges or removes rows on its own
+/// (a user may keep two homes on one subscription deliberately); the settings UI
+/// badges the duplicate so the user can decide which record to keep. Identity is
+/// `oauthAccount.accountUuid`, the stable upstream key — never the email.
+public struct ClaudeDuplicateLoginDetector: Sendable {
+    private let readAccountUUID: @Sendable (AccountID) -> String?
+
+    public init(
+        readAccountUUID: @escaping @Sendable (AccountID) -> String? = {
+            ClaudeAccountEmailFileReader.forAccount($0).readAccountUUID()
+        }
+    ) {
+        self.readAccountUUID = readAccountUUID
+    }
+
+    /// For each Claude account signed in to the same upstream login as an earlier row,
+    /// the earlier row's label ("Same login as Main"). Registry order decides which
+    /// row counts as the original. Unreadable identity fails safe to "no claim".
+    public func duplicateLabels(for accounts: [ProviderAccount]) -> [AccountKey: String] {
+        var firstLabelByUUID: [String: String] = [:]
+        var duplicates: [AccountKey: String] = [:]
+        for account in accounts where account.providerID == .claude {
+            guard let uuid = readAccountUUID(account.id)?.lowercased() else { continue }
+            if let original = firstLabelByUUID[uuid] {
+                duplicates[account.key] = original
+            } else {
+                firstLabelByUUID[uuid] = account.label
+            }
+        }
+        return duplicates
     }
 }
