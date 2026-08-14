@@ -337,6 +337,26 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(registry.accounts(for: .claude).map(\.id) == [.primary, second.id])
     }
 
+    @Test func orphanedTombstoneSelfHealsAndDoesNotHideBuiltInOnNextAdd() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        // Simulate a crash between removeAccount's two writes: the catalog loses the
+        // extra but the tombstone-clearing write never lands. seed() writes only the
+        // catalog key, leaving the now-orphaned tombstone in defaults.
+        registry.seed([.builtIn(for: .claude)])
+        #expect(!registry.accounts(for: .claude).contains { $0.id == extra.id })
+
+        // Relaunch: the built-in is visible, and reading self-heals the tombstone.
+        let relaunched = AccountRegistry(defaults: defaults)
+        #expect(relaunched.accounts(for: .claude).map(\.id) == [.primary])
+        #expect(!relaunched.isBuiltInHidden(for: .claude))
+        // The stale tombstone must not ambush the next add by re-hiding the built-in.
+        let second = relaunched.addAccount(for: .claude)!
+        #expect(relaunched.accounts(for: .claude).map(\.id) == [.primary, second.id])
+    }
+
     @Test func hiddenBuiltInStillCountsTowardCap() {
         let registry = AccountRegistry(defaults: freshDefaults())
         for _ in 0..<4 { #expect(registry.addAccount(for: .claude) != nil) }

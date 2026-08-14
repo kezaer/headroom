@@ -44,8 +44,18 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
         }
         // The tombstone hides the built-in row only while an extra exists — a torn
         // write or manual defaults edit can never leave a provider with zero rows.
-        if !extras.isEmpty, hiddenBuiltIns().contains(providerID) {
-            return Array(extras.prefix(Self.maxPerProvider - 1))
+        let hidden = hiddenBuiltIns()
+        if hidden.contains(providerID) {
+            if extras.isEmpty {
+                // Orphaned tombstone (e.g. a crash between removeAccount's catalog
+                // and tombstone writes): self-heal by clearing it now, so a future
+                // addAccount can't silently re-hide a built-in the user never
+                // stopped tracking. Persisting the subtraction happens only in this
+                // torn state — the ordinary read path stays write-free.
+                saveHiddenBuiltIns(hidden.subtracting([providerID]))
+            } else {
+                return Array(extras.prefix(Self.maxPerProvider - 1))
+            }
         }
         return Array(([builtIn] + extras).prefix(Self.maxPerProvider))
     }

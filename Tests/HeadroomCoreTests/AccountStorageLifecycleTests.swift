@@ -132,6 +132,49 @@ import Testing
         #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
     }
 
+    /// Regression (code-review finding): built-in setup markers live in the shared
+    /// `Setup/` directory beside the built-in Claude workspace — not under the
+    /// per-account `Accounts/<provider>/<id>/` tree. The removal gate's storage check
+    /// must resolve that real location, or stop-tracking a built-in account detaches
+    /// the row while its Terminal handoff is still open.
+    @Test func builtInSetupMarkerAtSharedSetupDirectoryBlocksStopTracking() async throws {
+        let supportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-builtin-marker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: supportRoot) }
+        let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        let marker = AccountStorage.setupCompletionMarker(
+            for: account, builtInClaudeWorkspace: workspace
+        )
+        #expect(marker.pendingPath == supportRoot
+            .appendingPathComponent("Setup", isDirectory: true)
+            .appendingPathComponent(".headroom-claude-setup-pending").path)
+
+        try AccountStorage.prepareSetupCompletionMarker(marker)
+        #expect(AccountStorage.setupHandoffIsActive(
+            for: account, builtInClaudeWorkspace: workspace
+        ))
+        let storage = DefaultAccountStorage(builtInClaudeWorkspace: workspace)
+        let activeWhileMarkerPresent = await storage.setupHandoffIsActive(for: account)
+        #expect(activeWhileMarkerPresent)
+
+        AccountStorage.clearPreparedSetupCompletionMarker(marker)
+        let activeAfterClear = await storage.setupHandoffIsActive(for: account)
+        #expect(!activeAfterClear)
+    }
+
+    @Test func extraAccountSetupMarkerStaysInsideItsConfigHome() {
+        let extra = ProviderAccount(id: AccountID("extra"), providerID: .claude, label: "Extra")
+        let marker = AccountStorage.setupCompletionMarker(
+            for: extra,
+            builtInClaudeWorkspace: URL(fileURLWithPath: "/nonexistent/ClaudeProbe")
+        )
+        let home = AccountStorage.accountDirectoryURL(for: extra)
+        #expect(marker.pendingPath == home.appendingPathComponent(".headroom-setup-pending").path)
+        #expect(marker.completedPath == home.appendingPathComponent(".headroom-setup-complete").path)
+    }
+
     @Test func completionMarkerClassifiesOnlyRedactionSafeExitStatus() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("headroom-completion-\(UUID().uuidString)", isDirectory: true)
