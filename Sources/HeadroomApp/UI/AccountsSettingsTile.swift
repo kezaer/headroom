@@ -29,7 +29,8 @@ func settingsRecoveryActions(
 /// reflects the result.
 struct AccountsSettingsTile: View {
     let store: UsageStore
-    /// Injectable for tests/demo; the default reads each account's `.claude.json`.
+    /// Injection seam (unused in production wiring); the default reads each
+    /// account's `.claude.json`.
     var duplicateDetector = ClaudeDuplicateLoginDetector()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

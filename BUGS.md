@@ -166,6 +166,28 @@ official `claude` CLI's `/usage` panel instead.
   didn't clean up. Investigate why removal/cleanup missed them and whether the app should
   garbage-collect config homes not present in `providerAccounts.v1`.
 
+## Stop-tracking / duplicate-badge review residuals (2026-08-14)
+
+Soft-bucket items from the built-in stop-tracking + duplicate-login-badge review (all 8
+primary findings were applied; these are the demoted coverage/advisory notes):
+
+- **`providerFactory == nil` guard paths untested.** `canStopTrackingBuiltInAccount` /
+  `resumeTrackingBuiltInAccount` / `attachBuiltInProvider` all no-op without a factory —
+  the demo-mode `UsageStore` composition is a real production path that hits this, and no
+  test constructs a factory-less store to prove it degrades to `.notAllowed`/nil.
+- **`readAccountUUID()` real file-read path untested.** Detector tests stub the read
+  closure; only the pure `ClaudeAccountBlob.accountUUID(in:)` decoder is file-fixture
+  tested. Mirror `readAccountEmail()`'s file-backed tests.
+- **`resumeTrackingBuiltIn`'s `refreshAccountNow` side effect is invoked but never
+  asserted** in `AccountsSettingsInteractionTests` — deleting the call would pass silently.
+- **`oauthAccount.accountUuid` decode is speculative** against a live `.claude.json`
+  capture (repo convention is to verify JSON shapes against real captures). The
+  fail-safe design means a shape change degrades to "no badge", not breakage.
+- **Detector accepts any non-empty `accountUuid` string** without UUID-syntax validation;
+  a hand-edited local file can create a false badge (detection-only, so no data risk).
+- **`UsageStore` is ~1,100 lines.** Next growth in account lifecycle should split
+  add/remove/stop-track/resume into their own file.
+
 - **Orphaned npm grandchild on discovery timeout (review finding #7, 2026-08-12).**
   `CLIExecutableResolver.runLoginShell` signals only the shell PID on the 5s deadline
   (`terminate()` then `SIGKILL`), and the npm-prefix search is the first time the timed

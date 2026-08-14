@@ -66,7 +66,13 @@ through the account-scoped `SetupSessionCoordinator` — the OAuth
 constraint above applies to every account. The menu bar and widgets follow each
 provider's primary account; the popover shows all accounts at the regular meter scale and
 the card list scrolls past a 640pt cap. Account management lives in
-Settings → Accounts (`AccountsSettingsTile`); removal deletes the account's config home.
+Settings → Accounts (`AccountsSettingsTile`); removing an **extra** account deletes its
+Headroom-owned config home, while the **built-in** account can only be *stop-tracked*
+(Aug 2026): a persisted registry tombstone hides the row without touching the CLI's own
+config or login, allowed only while another account exists, undone via "Show CLI Account"
+in the provider header. Claude rows signed in to the same upstream login (matched by
+`oauthAccount.accountUuid`, metadata only) get a detection-only "Same login as X" badge —
+never auto-merged.
 
 ## Commands
 
