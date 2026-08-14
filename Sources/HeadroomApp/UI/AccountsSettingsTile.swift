@@ -110,17 +110,29 @@ struct AccountsSettingsTile: View {
             // into it), so the identity reads never block the settings surface.
             let detector = duplicateDetector
             let accounts = store.accounts(for: .claude)
-            duplicateLoginLabels = await Task.detached {
+            let labels = await Task.detached {
                 detector.duplicateLabels(for: accounts)
             }.value
+            // The detached scan outlives this .task's cancellation, so a slow stale
+            // scan can finish after a newer one — never let it overwrite the fresh
+            // badge state (code-review finding).
+            guard !Task.isCancelled else { return }
+            duplicateLoginLabels = labels
         }
     }
 
-    /// Recompute duplicate badges when the Claude account list changes or a row's
-    /// signed-in identity does (a re-login surfaces as a new snapshot email).
+    /// Recompute duplicate badges when the Claude account list changes, a row is
+    /// renamed (badges quote account labels), a row's signed-in identity changes, or
+    /// a fresh capture lands (a re-login to a different accountUuid under the same
+    /// email only surfaces as a new `capturedAt` — the scan is cheap off-main and
+    /// only runs while the settings pane is visible).
     private var claudeDuplicateFingerprint: String {
         store.accounts(for: .claude)
-            .map { "\($0.id.raw):\(store.snapshot(for: $0.key).accountEmail ?? "")" }
+            .map { account in
+                let snapshot = store.snapshot(for: account.key)
+                let captured = snapshot.capturedAt?.timeIntervalSinceReferenceDate ?? 0
+                return "\(account.id.raw):\(account.label):\(snapshot.accountEmail ?? ""):\(captured)"
+            }
             .joined(separator: "|")
     }
 
@@ -145,7 +157,12 @@ struct AccountsSettingsTile: View {
                     Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
                 }
                 if capacity > 1 {
-                    Text("\(accounts.count) of \(capacity)")
+                    // A stop-tracked built-in is hidden from the list but keeps its
+                    // registry slot, so count it — otherwise the header reads "4 of 5"
+                    // while Add Account is disabled.
+                    let usedSlots = accounts.count
+                        + (store.isBuiltInTrackingStopped(for: providerID) ? 1 : 0)
+                    Text("\(usedSlots) of \(capacity)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 12)

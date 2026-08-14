@@ -130,7 +130,17 @@ public final class UsageStore {
     @ObservationIgnored private var pendingAccountRefreshes: Set<AccountKey> = []
     @ObservationIgnored private var removingAccounts: Set<AccountKey> = []
     @ObservationIgnored private var capabilityGenerations: [ProviderID: UInt64] = [:]
+    /// Per-key attach/detach epoch. A fetch result is only merged when the attachment
+    /// it started against is still current; a stop-track/remove bumps the epoch so a
+    /// late pre-detach result can't overwrite a reattached row's fresh pending state
+    /// or repopulate the continuity cache the detach cleared (code-review finding).
+    @ObservationIgnored private var attachmentGenerations: [AccountKey: UInt64] = [:]
     @ObservationIgnored private var setupCoordinator: SetupSessionCoordinator?
+    /// Provider-ID order fixed at composition time. Account add/detach mutates the
+    /// instance array at arbitrary positions, so deriving group order from instance
+    /// order would demote a provider whose built-in was stop-tracked (code-review
+    /// finding); this keeps settings/popover/widget provider order stable.
+    private let composedProviderOrder: [ProviderID]
 
     public init(
         providers: [any UsageProvider],
@@ -188,6 +198,7 @@ public final class UsageStore {
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
         self.usagePercentageMode = preferences.usagePercentageMode
         let registeredProviderIDs = providers.map(\.id).uniqued()
+        self.composedProviderOrder = registeredProviderIDs
         self.menuBarFillSource = preferences.menuBarFillSource.filtered(to: registeredProviderIDs)
         self.menuBarWindowSources = Dictionary(uniqueKeysWithValues: registeredProviderIDs.map {
             ($0, preferences.menuBarWindowSource(for: $0))
@@ -247,7 +258,10 @@ public final class UsageStore {
     /// Settings/account management use this registry order; display surfaces use
     /// `providerOrder`, which additionally applies the user's surface toggles.
     public var registeredProviderOrder: [ProviderID] {
-        providers.map(\.id).uniqued()
+        let live = providers.map(\.id).uniqued()
+        let liveSet = Set(live)
+        return composedProviderOrder.filter(liveSet.contains)
+            + live.filter { !composedProviderOrder.contains($0) }
     }
 
     public var apiSpendProviderOrder: [ProviderID] {
@@ -420,6 +434,10 @@ public final class UsageStore {
     /// compact-surface exports. Also reinstates a tombstoned built-in whose removal
     /// of the last extra just cleared its tombstone (no-op in every other case).
     private func detachAccount(_ key: AccountKey) {
+        // Invalidate in-flight fetches captured against the detached instance; the
+        // built-in's `.primary` key is reused on resume, so registry membership alone
+        // can't reject a late pre-detach result.
+        attachmentGenerations[key, default: 0] &+= 1
         providers.removeAll { $0.accountKey == key }
         snapshots.removeValue(forKey: key)
         continuityCache?.remove(for: key)
@@ -437,6 +455,10 @@ public final class UsageStore {
         guard let providerFactory else { return }
         providers.append(providerFactory(account))
         snapshots[account.key] = .pending(for: account.providerID)
+        // The reused `.primary` key must leave the coordinator's `.removed` sentinel,
+        // or the resurfaced row's Sign In / guided setup silently no-ops (code-review
+        // finding). Covers both the resume path and the last-extra-removal reinstate.
+        setupCoordinator?.markReinstated(account.key)
     }
 
     /// Removing the last extra clears the provider's tombstone in the registry; the
@@ -660,6 +682,10 @@ public final class UsageStore {
             return enabledSurfaces.contains(surface) && !shouldSkipOnTimer(provider: provider, source: source)
         }
         let capabilityCycle = beginCapabilityRefresh(for: candidates)
+        let fetchAttachments = Dictionary(
+            candidates.map { ($0.accountKey, attachmentGenerations[$0.accountKey] ?? 0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let executableRefreshGeneration = UUID()
         let (stream, continuation) = AsyncStream.makeStream(
             of: (AccountKey, UsageProviderFetchResult).self,
@@ -698,7 +724,8 @@ public final class UsageStore {
             for _ in candidates {
                 guard let (key, result) = await iterator.next() else { break }
                 let notifiesSetup = result.capability == nil || result.capability == .available
-                if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup),
+                if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup,
+                               attachmentGeneration: fetchAttachments[key]),
                    let capability = result.capability {
                     // Serial CLI lanes are ordered observations. Keep the newest
                     // provider-wide result so a recovered later account can clear an
@@ -767,12 +794,14 @@ public final class UsageStore {
               enabledSurfaces.contains(surface)
         else { return }
         let capabilityCycle = beginCapabilityRefresh(for: [provider])
+        let fetchAttachment = attachmentGenerations[key] ?? 0
         let executableRefreshGeneration = CLIExecutableRefreshContext.generation ?? UUID()
         let result = await CLIExecutableRefreshContext.$generation.withValue(executableRefreshGeneration) {
             await provider.fetchResult()
         }
         let notifiesSetup = result.capability == nil || result.capability == .available
-        if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup),
+        if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup,
+                       attachmentGeneration: fetchAttachment),
            let capability = result.capability {
             applyCapability(capability, for: key.providerID, generation: capabilityCycle[key.providerID])
         }
@@ -796,31 +825,36 @@ public final class UsageStore {
     private func mergeResult(
         key: AccountKey,
         result: UsageProviderFetchResult,
-        notifiesSetup: Bool
+        notifiesSetup: Bool,
+        attachmentGeneration: UInt64?
     ) -> Bool {
         let isCapabilityFailure = result.capability.map { $0 != .available } == true
         if isCapabilityFailure {
             // A provider-wide discovery failure says nothing about this account. Keep a
             // pending row neutral and preserve any prior usage or login/trust setup state.
-            return acceptsResult(for: key)
+            return acceptsResult(for: key, attachmentGeneration: attachmentGeneration)
         }
-        return merge(key: key, fresh: result.snapshot, notifiesSetup: notifiesSetup)
+        return merge(key: key, fresh: result.snapshot, notifiesSetup: notifiesSetup,
+                     attachmentGeneration: attachmentGeneration)
     }
 
-    private func acceptsResult(for key: AccountKey) -> Bool {
+    private func acceptsResult(for key: AccountKey, attachmentGeneration: UInt64?) -> Bool {
         accounts(for: key.providerID).contains(where: { $0.key == key })
             && !removingAccounts.contains(key)
+            && attachmentGeneration == attachmentGenerations[key, default: 0]
     }
 
     @discardableResult
     private func merge(
         key: AccountKey,
         fresh: UsageSnapshot,
-        notifiesSetup: Bool = true
+        notifiesSetup: Bool = true,
+        attachmentGeneration: UInt64?
     ) -> Bool {
-        // The account may have been removed while its fetch was in flight — a late
-        // result must not resurrect the row.
-        guard acceptsResult(for: key) else { return false }
+        // The account may have been removed — or its built-in row stop-tracked and
+        // resumed, reusing the key — while its fetch was in flight. A late result from
+        // a detached instance must not resurrect or overwrite the row.
+        guard acceptsResult(for: key, attachmentGeneration: attachmentGeneration) else { return false }
         let next = UsageContinuityPolicy.mergedSnapshot(
             fresh,
             with: snapshots[key],

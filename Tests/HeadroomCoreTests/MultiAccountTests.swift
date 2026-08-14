@@ -827,6 +827,151 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(store.snapshot(for: primaryKey).freshness == .live)
     }
 
+    @Test func resumedBuiltInSetupSessionIsUsableAgain() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in }
+        )
+        store.attachSetupCoordinator(coordinator)
+        _ = store.addAccount(for: .claude)
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(coordinator.state(for: primaryKey) == .removed)
+
+        let resumed = store.resumeTrackingBuiltInAccount(for: .claude)
+        #expect(resumed != nil)
+        // The reused `.primary` key must leave the coordinator's `.removed` sentinel,
+        // or the resumed row's Sign In silently no-ops until relaunch.
+        #expect(coordinator.state(for: primaryKey) == .idle)
+
+        if let resumed { coordinator.begin(for: resumed) }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(coordinator.state(for: primaryKey) == .waiting(attempt: 0))
+    }
+
+    @Test func lastExtraRemovalReinstateClearsCoordinatorRemovedSentinel() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in }
+        )
+        store.attachSetupCoordinator(coordinator)
+        let extra = store.addAccount(for: .claude)!
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(coordinator.state(for: primaryKey) == .removed)
+
+        #expect(await store.removeAccount(extra.key) == .removed)
+        // Removing the last extra reinstates the tombstoned built-in; its setup
+        // session must be usable again through this path too.
+        #expect(coordinator.state(for: primaryKey) == .idle)
+        #expect(coordinator.state(for: extra.key) == .removed)
+    }
+
+    @Test func lateResultFromPreStopProviderCannotOverwriteResumedRow() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let primary = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let store = UsageStore(
+            providers: [primary],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            },
+            continuityCache: continuityCache
+        )
+        _ = store.addAccount(for: .claude)
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+
+        let refresh = Task { await store.refreshAll() }
+        await primary.waitUntilStarted()
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(store.resumeTrackingBuiltInAccount(for: .claude) != nil)
+        #expect(store.snapshot(for: primaryKey).freshness == .pending)
+
+        primary.releaseFetches()
+        await refresh.value
+
+        // The pre-stop instance's late result must not overwrite the resumed row's
+        // deliberately fresh pending state or repopulate the continuity record the
+        // stop-track cleared.
+        #expect(store.snapshot(for: primaryKey).freshness == .pending)
+        #expect(store.snapshot(for: primaryKey).windows.isEmpty)
+        #expect(continuityCache.load()[primaryKey] == nil)
+    }
+
+    @Test func stopTrackingBuiltInKeepsProviderGroupOrder() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+                AccountStubProvider(id: .codex, accountID: .primary, displayName: "Codex",
+                                    snapshot: .pending(for: .codex)),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        _ = store.addAccount(for: .claude)
+        #expect(store.registeredProviderOrder == [.claude, .codex])
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        // The claude group keeps its composed position even though its only remaining
+        // instance sits at the end of the provider array.
+        #expect(store.registeredProviderOrder == [.claude, .codex])
+
+        #expect(store.resumeTrackingBuiltInAccount(for: .claude) != nil)
+        #expect(store.registeredProviderOrder == [.claude, .codex])
+    }
+
     @Test func deletionFailureKeepsRecoverableRegisteredAccount() async {
         let defaults = freshDefaults()
         let registry = AccountRegistry(defaults: defaults)
