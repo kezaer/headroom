@@ -29,9 +29,12 @@ func settingsRecoveryActions(
 /// reflects the result.
 struct AccountsSettingsTile: View {
     let store: UsageStore
+    /// Injectable for tests/demo; the default reads each account's `.claude.json`.
+    var duplicateDetector = ClaudeDuplicateLoginDetector()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @State private var duplicateLoginLabels: [AccountKey: String] = [:]
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
     @State private var removalOrigin: AccountKey?
@@ -102,6 +105,23 @@ struct AccountsSettingsTile: View {
                 commitLabel(for: account)
             }
         }
+        .task(id: claudeDuplicateFingerprint) {
+            // Off-main: `.claude.json` can be large (the CLI writes project history
+            // into it), so the identity reads never block the settings surface.
+            let detector = duplicateDetector
+            let accounts = store.accounts(for: .claude)
+            duplicateLoginLabels = await Task.detached {
+                detector.duplicateLabels(for: accounts)
+            }.value
+        }
+    }
+
+    /// Recompute duplicate badges when the Claude account list changes or a row's
+    /// signed-in identity does (a re-login surfaces as a new snapshot email).
+    private var claudeDuplicateFingerprint: String {
+        store.accounts(for: .claude)
+            .map { "\($0.id.raw):\(store.snapshot(for: $0.key).accountEmail ?? "")" }
+            .joined(separator: "|")
     }
 
     private func account(for key: AccountKey) -> ProviderAccount? {
@@ -245,6 +265,17 @@ struct AccountsSettingsTile: View {
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
                         .help("Uses the account your CLI is signed into")
+                }
+                if let original = duplicateLoginLabels[account.key] {
+                    // Detection only — the user decides which record to keep; Headroom
+                    // never merges or removes duplicate rows on its own.
+                    Text("Same login as \(original)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
+                        .help("This row is signed in to the same Claude account as \(original). You can remove one without signing out of the other.")
+                        .accessibilityLabel("\(account.label) uses the same login as \(original)")
                 }
                 Spacer(minLength: 8)
                 if !usesSecondLine {
