@@ -51,18 +51,19 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
     }
 
     public func canAddAccount(for providerID: ProviderID) -> Bool {
-        countIncludingHidden(for: providerID) < Self.maxPerProvider
+        countIncludingHidden(accounts(for: providerID), for: providerID) < Self.maxPerProvider
     }
 
     /// Create and persist a new account with a fresh ID and a default label
     /// ("Account 2", "Account 3", …). Nil once the provider is at the cap.
     @discardableResult
     public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
-        guard countIncludingHidden(for: providerID) < Self.maxPerProvider else { return nil }
+        let visible = accounts(for: providerID)
+        guard countIncludingHidden(visible, for: providerID) < Self.maxPerProvider else { return nil }
         let account = ProviderAccount(
             id: AccountID(UUID().uuidString.lowercased()),
             providerID: providerID,
-            label: normalizedLabel(label) ?? defaultLabel(existing: accounts(for: providerID))
+            label: normalizedLabel(label) ?? defaultLabel(existing: visible)
         )
         save(allWithSeeds(for: providerID) + [account])
         return account
@@ -130,33 +131,34 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
     // MARK: - Storage
 
     private func load() -> [ProviderAccount] {
-        guard let data = defaults.data(forKey: Self.storageKey),
-              let accounts = try? JSONDecoder().decode([ProviderAccount].self, from: data)
-        else { return [] }
-        return accounts
+        loadJSON([ProviderAccount].self, key: Self.storageKey) ?? []
     }
 
     private func save(_ accounts: [ProviderAccount]) {
-        guard let data = try? JSONEncoder().encode(accounts) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        saveJSON(accounts, key: Self.storageKey)
     }
 
     private func hiddenBuiltIns() -> Set<ProviderID> {
-        guard let data = defaults.data(forKey: Self.hiddenBuiltInsKey),
-              let ids = try? JSONDecoder().decode(Set<ProviderID>.self, from: data)
-        else { return [] }
-        return ids
+        loadJSON(Set<ProviderID>.self, key: Self.hiddenBuiltInsKey) ?? []
     }
 
     private func saveHiddenBuiltIns(_ ids: Set<ProviderID>) {
-        guard let data = try? JSONEncoder().encode(ids) else { return }
-        defaults.set(data, forKey: Self.hiddenBuiltInsKey)
+        saveJSON(ids, key: Self.hiddenBuiltInsKey)
+    }
+
+    private func loadJSON<T: Decodable>(_ type: T.Type, key: String) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private func saveJSON<T: Encodable>(_ value: T, key: String) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults.set(data, forKey: key)
     }
 
     /// Row count with a hidden built-in still occupying its slot — the cap gate, so
     /// resuming a tombstoned built-in can never push a provider past `maxPerProvider`.
-    private func countIncludingHidden(for providerID: ProviderID) -> Int {
-        let visible = accounts(for: providerID)
+    private func countIncludingHidden(_ visible: [ProviderAccount], for providerID: ProviderID) -> Int {
         let hiddenSlot = isBuiltInHidden(for: providerID)
             && !visible.contains(where: { $0.isBuiltIn })
         return visible.count + (hiddenSlot ? 1 : 0)

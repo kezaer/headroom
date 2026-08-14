@@ -259,23 +259,16 @@ struct AccountsSettingsTile: View {
             HStack(spacing: 8) {
                 accountIdentity(account, email: email, isEditingLabel: isEditingLabel)
                 if account.isBuiltIn {
-                    Text("CLI login")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
-                        .help("Uses the account your CLI is signed into")
+                    pillBadge("CLI login", help: "Uses the account your CLI is signed into")
                 }
                 if let original = duplicateLoginLabels[account.key] {
                     // Detection only — the user decides which record to keep; Headroom
                     // never merges or removes duplicate rows on its own.
-                    Text("Same login as \(original)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
-                        .help("This row is signed in to the same Claude account as \(original). You can remove one without signing out of the other.")
-                        .accessibilityLabel("\(account.label) uses the same login as \(original)")
+                    pillBadge(
+                        "Same login as \(original)",
+                        help: "This row is signed in to the same Claude account as \(original). You can remove one without signing out of the other.",
+                        accessibilityLabel: "\(account.label) uses the same login as \(original)"
+                    )
                 }
                 Spacer(minLength: 8)
                 if !usesSecondLine {
@@ -484,6 +477,21 @@ struct AccountsSettingsTile: View {
                 .accessibilityHidden(!canAct)
                 .focused($focusedRemovalAction, equals: account.key)
             }
+    }
+
+    /// The row-tag capsule shared by "CLI login" and "Same login as X".
+    private func pillBadge(
+        _ text: String,
+        help helpText: String,
+        accessibilityLabel: String? = nil
+    ) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
+            .help(helpText)
+            .accessibilityLabel(accessibilityLabel ?? text)
     }
 
     /// Nil for an account with no known address yet — a row can render before its first

@@ -341,10 +341,7 @@ public final class UsageStore {
               let account = accounts(for: key.providerID).first(where: { $0.key == key }),
               !account.isBuiltIn
         else { return .notAllowed }
-        if await accountStorage.setupHandoffIsActive(for: account) {
-            accountRemovalStates[key] = .setupActive
-            return .setupActive
-        }
+        if let blocked = await setupHandoffBlock(for: account) { return blocked }
         removingAccounts.insert(key)
         pendingAccountRefreshes.remove(key)
         accountRemovalStates[key] = .removing
@@ -362,16 +359,7 @@ public final class UsageStore {
             return .failed
         }
         accountRegistry.removeAccount(key)
-        providers.removeAll { $0.accountKey == key }
-        snapshots.removeValue(forKey: key)
-        continuityCache?.remove(for: key)
-        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
-        reinstateBuiltInIfResurfaced(for: key.providerID)
-        removingAccounts.remove(key)
-        accountRemovalStates.removeValue(forKey: key)
-        setupCoordinator?.markRemoved(key)
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
+        detachAccount(key)
         return .removed
     }
 
@@ -397,20 +385,10 @@ public final class UsageStore {
               let accountRegistry,
               let account = accounts(for: providerID).first(where: { $0.key == key })
         else { return .notAllowed }
-        if await accountStorage.setupHandoffIsActive(for: account) {
-            accountRemovalStates[key] = .setupActive
-            return .setupActive
-        }
+        if let blocked = await setupHandoffBlock(for: account) { return blocked }
         guard accountRegistry.stopTrackingBuiltIn(for: providerID) else { return .notAllowed }
         pendingAccountRefreshes.remove(key)
-        providers.removeAll { $0.accountKey == key }
-        snapshots.removeValue(forKey: key)
-        continuityCache?.remove(for: key)
-        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
-        accountRemovalStates.removeValue(forKey: key)
-        setupCoordinator?.markRemoved(key)
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
+        detachAccount(key)
         return .removed
     }
 
@@ -418,28 +396,57 @@ public final class UsageStore {
     /// refresh to the caller (mirrors `addAccount`), so the pending row is deterministic.
     @discardableResult
     public func resumeTrackingBuiltInAccount(for providerID: ProviderID) -> ProviderAccount? {
-        guard let accountRegistry, let providerFactory,
+        guard let accountRegistry, providerFactory != nil,
               accountRegistry.resumeTrackingBuiltIn(for: providerID),
               let account = accountRegistry.accounts(for: providerID).first(where: { $0.isBuiltIn })
         else { return nil }
-        providers.append(providerFactory(account))
+        attachBuiltInProvider(account)
         accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
-        snapshots[account.key] = .pending(for: providerID)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
         return account
+    }
+
+    /// Both removal flavors refuse while the account's official-CLI sign-in handoff
+    /// is still open in Terminal.
+    private func setupHandoffBlock(for account: ProviderAccount) async -> AccountRemovalResult? {
+        guard await accountStorage.setupHandoffIsActive(for: account) else { return nil }
+        accountRemovalStates[account.key] = .setupActive
+        return .setupActive
+    }
+
+    /// Shared in-memory detach once the registry no longer lists `key`: provider
+    /// instance, snapshot, continuity record, row list, removal bookkeeping, and the
+    /// compact-surface exports. Also reinstates a tombstoned built-in whose removal
+    /// of the last extra just cleared its tombstone (no-op in every other case).
+    private func detachAccount(_ key: AccountKey) {
+        providers.removeAll { $0.accountKey == key }
+        snapshots.removeValue(forKey: key)
+        continuityCache?.remove(for: key)
+        accountsByProvider[key.providerID] = accountRegistry?.accounts(for: key.providerID) ?? []
+        reinstateBuiltInIfResurfaced(for: key.providerID)
+        removingAccounts.remove(key)
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.markRemoved(key)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+    }
+
+    /// Recreate a built-in account's provider instance with a fresh pending row.
+    private func attachBuiltInProvider(_ account: ProviderAccount) {
+        guard let providerFactory else { return }
+        providers.append(providerFactory(account))
+        snapshots[account.key] = .pending(for: account.providerID)
     }
 
     /// Removing the last extra clears the provider's tombstone in the registry; the
     /// store must then recreate the built-in's provider instance so the resurfaced
     /// row actually polls again.
     private func reinstateBuiltInIfResurfaced(for providerID: ProviderID) {
-        guard let providerFactory,
-              let builtIn = accounts(for: providerID).first(where: { $0.isBuiltIn }),
+        guard let builtIn = accounts(for: providerID).first(where: { $0.isBuiltIn }),
               !providers.contains(where: { $0.accountKey == builtIn.key })
         else { return }
-        providers.append(providerFactory(builtIn))
-        snapshots[builtIn.key] = .pending(for: providerID)
+        attachBuiltInProvider(builtIn)
     }
 
     public func cancelAccountRemoval(_ key: AccountKey) {
