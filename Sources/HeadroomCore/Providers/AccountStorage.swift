@@ -82,11 +82,32 @@ public enum AccountStorage {
         grokHomeDirectoryURL(for: account).appendingPathComponent("auth.json")
     }
 
-    public static func setupCompletionMarker(for account: ProviderAccount) -> SetupCompletionMarker {
-        let directory = accountDirectoryURL(for: account)
+    /// Single source of truth for setup-handoff marker paths, for ANY account.
+    /// Extra accounts keep their markers inside their Headroom-owned config home.
+    /// Built-in accounts have no config home Headroom owns (their config is the CLI's
+    /// default), so their markers live in the shared `Setup/` directory beside the
+    /// built-in Claude workspace — the same location `SetupSessions` stages handoff
+    /// scripts. Every handoff-liveness check must resolve through here; a divergent
+    /// resolver once let built-in stop-tracking look at the wrong path, report "no
+    /// handoff", and detach the row mid-setup (code-review finding).
+    public static func setupCompletionMarker(
+        for account: ProviderAccount,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
+    ) -> SetupCompletionMarker {
+        guard account.isBuiltIn else {
+            let directory = accountDirectoryURL(for: account)
+            return SetupCompletionMarker(
+                pendingPath: directory.appendingPathComponent(".headroom-setup-pending").path,
+                completedPath: directory.appendingPathComponent(".headroom-setup-complete").path
+            )
+        }
+        let directory = builtInClaudeWorkspace
+            .deletingLastPathComponent()
+            .appendingPathComponent("Setup", isDirectory: true)
+        let stem = ".headroom-\(safePathComponent(account.providerID.raw))-setup"
         return SetupCompletionMarker(
-            pendingPath: directory.appendingPathComponent(".headroom-setup-pending").path,
-            completedPath: directory.appendingPathComponent(".headroom-setup-complete").path
+            pendingPath: directory.appendingPathComponent("\(stem)-pending").path,
+            completedPath: directory.appendingPathComponent("\(stem)-complete").path
         )
     }
 
@@ -133,8 +154,18 @@ public enum AccountStorage {
     /// and zsh replacing it with its PID. If the app or Terminal crashes in that gap,
     /// the marker expires rather than blocking account removal forever. Unknown marker
     /// formats still fail closed; a PID clears only when the process is provably gone.
-    public static func setupHandoffIsActive(for account: ProviderAccount) -> Bool {
-        setupHandoffIsActive(marker: setupCompletionMarker(for: account))
+    public static func setupHandoffIsActive(
+        for account: ProviderAccount,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
+        now: Date = .now
+    ) -> Bool {
+        setupHandoffIsActive(
+            marker: setupCompletionMarker(
+                for: account,
+                builtInClaudeWorkspace: builtInClaudeWorkspace
+            ),
+            now: now
+        )
     }
 
     public static func setupHandoffIsActive(
@@ -266,7 +297,14 @@ public extension AccountStorageManaging {
 }
 
 public struct DefaultAccountStorage: AccountStorageManaging {
-    public init() {}
+    /// Built-in accounts anchor their setup markers beside this workspace (see
+    /// `AccountStorage.setupCompletionMarker`); injectable so tests never touch the
+    /// real Application Support tree.
+    private let builtInClaudeWorkspace: URL
+
+    public init(builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL) {
+        self.builtInClaudeWorkspace = builtInClaudeWorkspace
+    }
     public func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> {
         do {
             _ = try AccountStorage.ensureDirectories(for: account)
@@ -276,8 +314,9 @@ public struct DefaultAccountStorage: AccountStorageManaging {
         }
     }
     public func setupHandoffIsActive(for account: ProviderAccount) async -> Bool {
-        await Task.detached(priority: .utility) {
-            AccountStorage.setupHandoffIsActive(for: account)
+        let workspace = builtInClaudeWorkspace
+        return await Task.detached(priority: .utility) {
+            AccountStorage.setupHandoffIsActive(for: account, builtInClaudeWorkspace: workspace)
         }.value
     }
     public func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {

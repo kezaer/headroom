@@ -316,6 +316,15 @@ public final class SetupSessionCoordinator {
         invalidateWork(for: key, finalState: .removed, releaseLoginSlot: true)
     }
 
+    /// A stop-tracked built-in reuses its `.primary` key when tracking resumes, so the
+    /// `.removed` sentinel must be cleared — otherwise every later `begin`/`receive`
+    /// for the resurfaced row silently no-ops until relaunch (code-review finding).
+    /// Only the removal sentinel is reset; any other state is live session lifecycle.
+    public func markReinstated(_ key: AccountKey) {
+        guard state(for: key) == .removed else { return }
+        states[key] = .idle
+    }
+
     public func receive(_ snapshot: UsageSnapshot, for key: AccountKey) {
         guard state(for: key) != .removed else { return }
         if snapshot.freshness == .live {

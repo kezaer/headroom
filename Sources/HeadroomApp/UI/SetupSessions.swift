@@ -458,18 +458,17 @@ enum SetupSessions {
         }.value
     }
 
+    /// Delegates to the shared account-aware resolver in HeadroomCore so the marker
+    /// path staged here can never diverge from the one `UsageStore`'s removal gate
+    /// checks via `AccountStorage.setupHandoffIsActive(for:)` (code-review finding:
+    /// a divergent built-in path let stop-tracking detach a row mid-handoff).
     private static func completionMarker(
         for account: ProviderAccount,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) -> SetupCompletionMarker {
-        if !account.isBuiltIn { return AccountStorage.setupCompletionMarker(for: account) }
-        let directory = builtInClaudeWorkspace
-            .deletingLastPathComponent()
-            .appendingPathComponent("Setup", isDirectory: true)
-        let stem = ".headroom-\(account.providerID.raw)-setup"
-        return SetupCompletionMarker(
-            pendingPath: directory.appendingPathComponent("\(stem)-pending").path,
-            completedPath: directory.appendingPathComponent("\(stem)-complete").path
+        AccountStorage.setupCompletionMarker(
+            for: account,
+            builtInClaudeWorkspace: builtInClaudeWorkspace
         )
     }
 

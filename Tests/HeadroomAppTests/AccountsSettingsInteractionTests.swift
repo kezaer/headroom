@@ -193,6 +193,33 @@ struct AccountsSettingsInteractionTests {
         #expect(storage.removedKeys == [account.key, account.key])
     }
 
+    @Test func builtInRemovalRoutesToStopTrackingWithoutTouchingDisk() async {
+        let storage = InteractionStorage()
+        let fixture = makeFixture(storage: storage)
+        defer { fixture.cleanup() }
+        guard let extra = AccountsSettingsInteractions.addAccount(
+            for: .claude,
+            to: fixture.store,
+            openSetup: { _ in }
+        ) else {
+            Issue.record("Expected an additional Claude account")
+            return
+        }
+        let builtIn = fixture.store.accounts(for: .claude).first(where: \.isBuiltIn)!
+
+        #expect(await AccountsSettingsInteractions.removeAccount(builtIn, from: fixture.store) == .removed)
+        #expect(fixture.store.accounts(for: .claude).map(\.key) == [extra.key])
+        // Stop-tracking is registry-only: the CLI's own config home is never deleted.
+        #expect(storage.removedKeys.isEmpty)
+        #expect(fixture.store.isBuiltInTrackingStopped(for: .claude))
+
+        let resumed = AccountsSettingsInteractions.resumeTrackingBuiltIn(for: .claude, in: fixture.store)
+        #expect(resumed?.id == .primary)
+        #expect(fixture.store.accounts(for: .claude).first?.isBuiltIn == true)
+        #expect(!fixture.store.isBuiltInTrackingStopped(for: .claude))
+        await settleTasks()
+    }
+
     @Test func everyRecoveryActionHasOneAppBoundaryRoute() {
         let expected: [(SetupRecoveryAction, SetupSessions.RecoveryRoute)] = [
             (.installClaudeCLI, .documentation(URL(string: "https://code.claude.com/docs/en/installation")!)),

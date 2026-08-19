@@ -20,15 +20,22 @@ func settingsRecoveryActions(
 /// and an Add button, then one row per account: an editable label, a plain-language
 /// status, and the account's actions (Sign in for a pending login, Remove for extras).
 ///
-/// The built-in account is pinned and unremovable — it *is* the user's own CLI login —
-/// so its row shows a quiet "CLI login" tag where extras get the trash affordance.
-/// All sign-ins run through the official CLI in Terminal (compliance boundary
-/// unchanged); this tile only opens that handoff and reflects the result.
+/// The built-in account *is* the user's own CLI login, so it can never be deleted —
+/// its row shows a quiet "CLI login" tag, and once another account exists it offers a
+/// non-destructive "stop tracking" instead of the extras' trash affordance (which
+/// deletes that account's Headroom-owned config home). A stop-tracked built-in can be
+/// resurfaced from the provider header. All sign-ins run through the official CLI in
+/// Terminal (compliance boundary unchanged); this tile only opens that handoff and
+/// reflects the result.
 struct AccountsSettingsTile: View {
     let store: UsageStore
+    /// Injection seam (unused in production wiring); the default reads each
+    /// account's `.claude.json`.
+    var duplicateDetector = ClaudeDuplicateLoginDetector()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @State private var duplicateLoginLabels: [AccountKey: String] = [:]
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
     @State private var removalOrigin: AccountKey?
@@ -58,12 +65,19 @@ struct AccountsSettingsTile: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .raisedTile(cornerRadius: 10, surface: .opaque)
         .confirmationDialog(
-            "Remove this account?",
+            removalCandidate?.isBuiltIn == true
+                ? "Stop tracking this account?"
+                : "Remove this account?",
             isPresented: removalDialogPresented,
             titleVisibility: .visible,
             presenting: removalCandidate
         ) { account in
-            Button("Remove \(account.label)", role: .destructive) {
+            // Stop-tracking is deliberately not `.destructive` — it hides the row and
+            // deletes nothing, unlike extra-account removal.
+            Button(
+                account.isBuiltIn ? "Stop Tracking \(account.label)" : "Remove \(account.label)",
+                role: account.isBuiltIn ? nil : .destructive
+            ) {
                 removalInProgress = account.key
                 Task { @MainActor in
                     let result = await AccountsSettingsInteractions.removeAccount(account, from: store)
@@ -80,7 +94,9 @@ struct AccountsSettingsTile: View {
             }
             Button("Cancel", role: .cancel) { restoreRemovalFocus() }
         } message: { account in
-            Text("Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
+            Text(account.isBuiltIn
+                 ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
+                 : "Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
         }
         // Commit a pending rename when the field loses focus — Enter-only commit
         // silently discarded renames while still displaying the draft (code-review
@@ -90,6 +106,35 @@ struct AccountsSettingsTile: View {
                 commitLabel(for: account)
             }
         }
+        .task(id: claudeDuplicateFingerprint) {
+            // Off-main: `.claude.json` can be large (the CLI writes project history
+            // into it), so the identity reads never block the settings surface.
+            let detector = duplicateDetector
+            let accounts = store.accounts(for: .claude)
+            let labels = await Task.detached {
+                detector.duplicateLabels(for: accounts)
+            }.value
+            // The detached scan outlives this .task's cancellation, so a slow stale
+            // scan can finish after a newer one — never let it overwrite the fresh
+            // badge state (code-review finding).
+            guard !Task.isCancelled else { return }
+            duplicateLoginLabels = labels
+        }
+    }
+
+    /// Recompute duplicate badges when the Claude account list changes, a row is
+    /// renamed (badges quote account labels), a row's signed-in identity changes, or
+    /// a fresh capture lands (a re-login to a different accountUuid under the same
+    /// email only surfaces as a new `capturedAt` — the scan is cheap off-main and
+    /// only runs while the settings pane is visible).
+    private var claudeDuplicateFingerprint: String {
+        store.accounts(for: .claude)
+            .map { account in
+                let snapshot = store.snapshot(for: account.key)
+                let captured = snapshot.capturedAt?.timeIntervalSinceReferenceDate ?? 0
+                return "\(account.id.raw):\(account.label):\(snapshot.accountEmail ?? ""):\(captured)"
+            }
+            .joined(separator: "|")
     }
 
     private func account(for key: AccountKey) -> ProviderAccount? {
@@ -113,7 +158,12 @@ struct AccountsSettingsTile: View {
                     Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
                 }
                 if capacity > 1 {
-                    Text("\(accounts.count) of \(capacity)")
+                    // A stop-tracked built-in is hidden from the list but keeps its
+                    // registry slot, so count it — otherwise the header reads "4 of 5"
+                    // while Add Account is disabled.
+                    let usedSlots = accounts.count
+                        + (store.isBuiltInTrackingStopped(for: providerID) ? 1 : 0)
+                    Text("\(usedSlots) of \(capacity)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 12)
@@ -152,6 +202,24 @@ struct AccountsSettingsTile: View {
             }
             ForEach(accounts) { account in
                 accountRow(account, capability: capability)
+            }
+            if store.isBuiltInTrackingStopped(for: providerID) {
+                // The way back from stop-tracking: resurface the CLI's own login and
+                // fetch it right away. Quiet on purpose — it's an undo, not a feature.
+                Button("Show CLI Account") {
+                    _ = withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+                        AccountsSettingsInteractions.resumeTrackingBuiltIn(
+                            for: providerID,
+                            in: store
+                        )
+                    }
+                }
+                .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
+                .controlSize(.small)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .help("Track the account your CLI is signed into again")
+                .padding(.leading, 16)
             }
             if let surface = UsageSurface.subscription(for: providerID),
                !store.isSurfaceEnabled(surface) {
@@ -209,12 +277,16 @@ struct AccountsSettingsTile: View {
             HStack(spacing: 8) {
                 accountIdentity(account, email: email, isEditingLabel: isEditingLabel)
                 if account.isBuiltIn {
-                    Text("CLI login")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
-                        .help("Uses the account your CLI is signed into")
+                    pillBadge("CLI login", help: "Uses the account your CLI is signed into")
+                }
+                if let original = duplicateLoginLabels[account.key] {
+                    // Detection only — the user decides which record to keep; Headroom
+                    // never merges or removes duplicate rows on its own.
+                    pillBadge(
+                        "Same login as \(original)",
+                        help: "This row is signed in to the same Claude account as \(original). You can remove one without signing out of the other.",
+                        accessibilityLabel: "\(account.label) uses the same login as \(original)"
+                    )
                 }
                 Spacer(minLength: 8)
                 if !usesSecondLine {
@@ -398,23 +470,46 @@ struct AccountsSettingsTile: View {
                     .controlSize(.small)
                     .accessibilityLabel("Cancel removal of \(account.label)")
             } else {
+                // Built-ins can be stop-tracked (hidden, nothing deleted) once another
+                // account exists; a lone built-in keeps the slot laid out but inert so
+                // a provider can never reach zero rows.
+                let canAct = account.isBuiltIn
+                    ? store.canStopTrackingBuiltInAccount(for: account.providerID)
+                    : true
                 Button {
                     removalOrigin = account.key
                     removalCandidate = account
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: account.isBuiltIn ? "minus.circle" : "trash")
                         .font(.system(size: 11))
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
                 .foregroundStyle(.secondary)
-                .help("Remove this account")
-                .accessibilityLabel("Remove \(account.label)")
-                .opacity(account.isBuiltIn ? 0 : 1)
-                .disabled(account.isBuiltIn || removalState == .removing)
-                .accessibilityHidden(account.isBuiltIn)
+                .help(account.isBuiltIn ? "Stop tracking this account" : "Remove this account")
+                .accessibilityLabel(account.isBuiltIn
+                                    ? "Stop tracking \(account.label)"
+                                    : "Remove \(account.label)")
+                .opacity(canAct ? 1 : 0)
+                .disabled(!canAct || removalState == .removing)
+                .accessibilityHidden(!canAct)
                 .focused($focusedRemovalAction, equals: account.key)
             }
+    }
+
+    /// The row-tag capsule shared by "CLI login" and "Same login as X".
+    private func pillBadge(
+        _ text: String,
+        help helpText: String,
+        accessibilityLabel: String? = nil
+    ) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
+            .help(helpText)
+            .accessibilityLabel(accessibilityLabel ?? text)
     }
 
     /// Nil for an account with no known address yet — a row can render before its first

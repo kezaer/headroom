@@ -5,14 +5,20 @@ import Foundation
 /// IDs only; credentials stay in each CLI's own config home, KTD4).
 ///
 /// Invariants the registry maintains:
-/// - Every provider always has its built-in `.primary` account, listed first.
+/// - Every provider has its built-in `.primary` account, listed first — unless the user
+///   stopped tracking it while extras exist (persisted tombstone, Aug 2026). A provider
+///   never ends up with zero rows: the tombstone only takes effect alongside at least
+///   one extra, and removing the last extra clears it.
 /// - At most `maxPerProvider` accounts per provider (UI affordances are designed to 5).
-/// - Built-in accounts can be renamed but never removed.
+///   A hidden built-in keeps its slot so resuming can never overflow the cap.
+/// - Built-in accounts can be renamed and stop-tracked but never deleted — their config
+///   home is the user's own CLI login, which Headroom must never touch.
 public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-safe
     public static let maxPerProvider = 5
 
     private let defaults: UserDefaults
     private static let storageKey = "providerAccounts.v1"
+    private static let hiddenBuiltInsKey = "hiddenBuiltInAccounts.v1"
 
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
@@ -36,26 +42,71 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
             else { return nil }
             return account
         }
+        // The tombstone hides the built-in row only while an extra exists — a torn
+        // write or manual defaults edit can never leave a provider with zero rows.
+        let hidden = hiddenBuiltIns()
+        if hidden.contains(providerID) {
+            if extras.isEmpty {
+                // Orphaned tombstone (e.g. a crash between removeAccount's catalog
+                // and tombstone writes): self-heal by clearing it now, so a future
+                // addAccount can't silently re-hide a built-in the user never
+                // stopped tracking. Persisting the subtraction happens only in this
+                // torn state — the ordinary read path stays write-free.
+                saveHiddenBuiltIns(hidden.subtracting([providerID]))
+            } else {
+                return Array(extras.prefix(Self.maxPerProvider - 1))
+            }
+        }
         return Array(([builtIn] + extras).prefix(Self.maxPerProvider))
     }
 
     public func canAddAccount(for providerID: ProviderID) -> Bool {
-        accounts(for: providerID).count < Self.maxPerProvider
+        countIncludingHidden(accounts(for: providerID), for: providerID) < Self.maxPerProvider
     }
 
     /// Create and persist a new account with a fresh ID and a default label
     /// ("Account 2", "Account 3", …). Nil once the provider is at the cap.
     @discardableResult
     public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
-        let existing = accounts(for: providerID)
-        guard existing.count < Self.maxPerProvider else { return nil }
+        let visible = accounts(for: providerID)
+        guard countIncludingHidden(visible, for: providerID) < Self.maxPerProvider else { return nil }
         let account = ProviderAccount(
             id: AccountID(UUID().uuidString.lowercased()),
             providerID: providerID,
-            label: normalizedLabel(label) ?? defaultLabel(existing: existing)
+            label: normalizedLabel(label) ?? defaultLabel(existing: visible)
         )
         save(allWithSeeds(for: providerID) + [account])
         return account
+    }
+
+    // MARK: - Built-in tracking (stop/resume)
+
+    /// True while the provider's built-in row is tombstoned (hidden from `accounts(for:)`).
+    public func isBuiltInHidden(for providerID: ProviderID) -> Bool {
+        hiddenBuiltIns().contains(providerID)
+    }
+
+    /// Stop-tracking needs a surviving row: refused while the built-in is the only account.
+    public func canStopTrackingBuiltIn(for providerID: ProviderID) -> Bool {
+        !isBuiltInHidden(for: providerID)
+            && accounts(for: providerID).contains { !$0.isBuiltIn }
+    }
+
+    /// Hide the built-in account from the tracked list without touching its registry
+    /// record, label, or (crucially) anything on disk — the CLI login stays untouched.
+    @discardableResult
+    public func stopTrackingBuiltIn(for providerID: ProviderID) -> Bool {
+        guard canStopTrackingBuiltIn(for: providerID) else { return false }
+        saveHiddenBuiltIns(hiddenBuiltIns().union([providerID]))
+        return true
+    }
+
+    /// Clear the tombstone; the built-in resurfaces first with its persisted label.
+    @discardableResult
+    public func resumeTrackingBuiltIn(for providerID: ProviderID) -> Bool {
+        guard isBuiltInHidden(for: providerID) else { return false }
+        saveHiddenBuiltIns(hiddenBuiltIns().subtracting([providerID]))
+        return true
     }
 
     public func renameAccount(_ key: AccountKey, to label: String) {
@@ -79,20 +130,48 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
         let all = load()
         guard let target = all.first(where: { $0.key == key }), !target.isBuiltIn else { return }
         save(all.filter { $0.key != key })
+        // Removing the last extra makes a tombstoned built-in the only possible row
+        // again. Clear the tombstone so it resurfaces now — and so a future extra
+        // doesn't silently re-hide it.
+        if !accounts(for: key.providerID).contains(where: { !$0.isBuiltIn }) {
+            saveHiddenBuiltIns(hiddenBuiltIns().subtracting([key.providerID]))
+        }
     }
 
     // MARK: - Storage
 
     private func load() -> [ProviderAccount] {
-        guard let data = defaults.data(forKey: Self.storageKey),
-              let accounts = try? JSONDecoder().decode([ProviderAccount].self, from: data)
-        else { return [] }
-        return accounts
+        loadJSON([ProviderAccount].self, key: Self.storageKey) ?? []
     }
 
     private func save(_ accounts: [ProviderAccount]) {
-        guard let data = try? JSONEncoder().encode(accounts) else { return }
-        defaults.set(data, forKey: Self.storageKey)
+        saveJSON(accounts, key: Self.storageKey)
+    }
+
+    private func hiddenBuiltIns() -> Set<ProviderID> {
+        loadJSON(Set<ProviderID>.self, key: Self.hiddenBuiltInsKey) ?? []
+    }
+
+    private func saveHiddenBuiltIns(_ ids: Set<ProviderID>) {
+        saveJSON(ids, key: Self.hiddenBuiltInsKey)
+    }
+
+    private func loadJSON<T: Decodable>(_ type: T.Type, key: String) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private func saveJSON<T: Encodable>(_ value: T, key: String) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    /// Row count with a hidden built-in still occupying its slot — the cap gate, so
+    /// resuming a tombstoned built-in can never push a provider past `maxPerProvider`.
+    private func countIncludingHidden(_ visible: [ProviderAccount], for providerID: ProviderID) -> Int {
+        let hiddenSlot = isBuiltInHidden(for: providerID)
+            && !visible.contains(where: { $0.isBuiltIn })
+        return visible.count + (hiddenSlot ? 1 : 0)
     }
 
     /// The full stored list, with the given provider's built-in seed materialized so a

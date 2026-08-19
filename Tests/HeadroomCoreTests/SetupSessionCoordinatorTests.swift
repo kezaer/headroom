@@ -511,6 +511,41 @@ import Testing
         #expect(harness.scheduler.pendingCount == 0)
     }
 
+    @Test func reinstatedKeyStartsSetupAgainAfterRemoval() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.markRemoved(account.key)
+        #expect(coordinator.state(for: account.key) == .removed)
+        // While removed, begin is a silent no-op — the sentinel the reinstate clears.
+        coordinator.begin(for: account)
+        await settleTasks()
+        #expect(harness.prepareCalls.isEmpty)
+
+        coordinator.markReinstated(account.key)
+        #expect(coordinator.state(for: account.key) == .idle)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        #expect(harness.prepareCalls == [.init(key: account.key, mode: .standard)])
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+    }
+
+    @Test func reinstateOnlyClearsTheRemovedSentinel() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount(id: AccountID("claude-extra"), providerID: .claude, label: "Work", isBuiltIn: false)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+
+        coordinator.markReinstated(account.key)
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+    }
+
     private func settleTasks() async {
         for _ in 0..<20 { await Task.yield() }
     }

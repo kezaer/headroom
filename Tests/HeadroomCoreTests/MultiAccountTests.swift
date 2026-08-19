@@ -68,6 +68,26 @@ private struct ActiveSetupRemovalStorage: AccountStorageManaging {
     func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .failure(.setupActive) }
 }
 
+/// Records every on-disk removal so stop-tracking tests can prove the CLI's own
+/// config home is never touched.
+private final class RecordingRemovalStorage: AccountStorageManaging, @unchecked Sendable {
+    private let lock = NSLock()
+    private var removed: [AccountKey] = []
+    var removedKeys: [AccountKey] { lock.withLock { removed } }
+
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
+        lock.withLock { removed.append(account.key) }
+        return .success(())
+    }
+}
+
+private struct ActiveHandoffStorage: AccountStorageManaging {
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { true }
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+}
+
 private actor FetchConcurrencyProbe {
     private var active = 0
     private(set) var maximum = 0
@@ -271,6 +291,91 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(accounts[0].isBuiltIn)
         #expect(accounts[0].label == "Personal")
         #expect(accounts[1].label == "Work")
+    }
+
+    @Test func stopTrackingHidesBuiltInAcrossReload() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.canStopTrackingBuiltIn(for: .claude))
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id])
+        // The tombstone is persisted state, not an in-memory flag — a fresh registry
+        // (relaunch / registry reconstruction) must not resurrect the built-in row.
+        #expect(AccountRegistry(defaults: defaults).accounts(for: .claude).map(\.id) == [extra.id])
+    }
+
+    @Test func stopTrackingRefusedWhenBuiltInIsOnlyAccount() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        #expect(!registry.canStopTrackingBuiltIn(for: .claude))
+        #expect(!registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary])
+    }
+
+    @Test func resumeTrackingRestoresBuiltInFirstWithItsLabel() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        registry.renameAccount(AccountKey(providerID: .claude, accountID: .primary), to: "Personal")
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.resumeTrackingBuiltIn(for: .claude))
+        let accounts = AccountRegistry(defaults: defaults).accounts(for: .claude)
+        #expect(accounts.map(\.id) == [.primary, extra.id])
+        #expect(accounts.first?.label == "Personal")
+    }
+
+    @Test func removingLastExtraClearsTombstone() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        registry.removeAccount(extra.key)
+        // The built-in is the only possible row again, and the cleared tombstone means
+        // a future extra must not silently re-hide it.
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary])
+        #expect(!registry.isBuiltInHidden(for: .claude))
+        let second = registry.addAccount(for: .claude)!
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary, second.id])
+    }
+
+    @Test func orphanedTombstoneSelfHealsAndDoesNotHideBuiltInOnNextAdd() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        // Simulate a crash between removeAccount's two writes: the catalog loses the
+        // extra but the tombstone-clearing write never lands. seed() writes only the
+        // catalog key, leaving the now-orphaned tombstone in defaults.
+        registry.seed([.builtIn(for: .claude)])
+        #expect(!registry.accounts(for: .claude).contains { $0.id == extra.id })
+
+        // Relaunch: the built-in is visible, and reading self-heals the tombstone.
+        let relaunched = AccountRegistry(defaults: defaults)
+        #expect(relaunched.accounts(for: .claude).map(\.id) == [.primary])
+        #expect(!relaunched.isBuiltInHidden(for: .claude))
+        // The stale tombstone must not ambush the next add by re-hiding the built-in.
+        let second = relaunched.addAccount(for: .claude)!
+        #expect(relaunched.accounts(for: .claude).map(\.id) == [.primary, second.id])
+    }
+
+    @Test func hiddenBuiltInStillCountsTowardCap() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        for _ in 0..<4 { #expect(registry.addAccount(for: .claude) != nil) }
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        // The hidden built-in keeps its slot so resuming can never overflow the cap.
+        #expect(!registry.canAddAccount(for: .claude))
+        #expect(registry.addAccount(for: .claude) == nil)
+        #expect(registry.resumeTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).count == 5)
+    }
+
+    @Test func tombstoneIsPerProvider() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        _ = registry.addAccount(for: .claude)
+        _ = registry.addAccount(for: .codex)
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.isBuiltInHidden(for: .claude))
+        #expect(!registry.isBuiltInHidden(for: .codex))
+        #expect(registry.accounts(for: .codex).first?.id == .primary)
     }
 
     @Test func storageComponentsCannotTraverseOutOfAccountRoot() {
@@ -607,6 +712,284 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         )
         #expect(await store.removeAccount(AccountKey(providerID: .claude, accountID: .primary)) == .notAllowed)
         #expect(store.accounts(for: .claude).count == 1)
+    }
+
+    @Test func stopTrackingBuiltInDetachesWithoutDeletingCLIState() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let storage = RecordingRemovalStorage()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: storage,
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            },
+            continuityCache: continuityCache
+        )
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+        let extra = store.addAccount(for: .claude)!
+        await store.refreshAll()
+        #expect(continuityCache.load()[primaryKey] != nil)
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(store.accounts(for: .claude).map(\.key) == [extra.key])
+        // Compact surfaces (menu bar, widgets) follow the surviving account.
+        #expect(store.primaryAccount(for: .claude)?.key == extra.key)
+        // The whole point: nothing on disk was deleted — not the extra's home, and
+        // certainly not the CLI's own config.
+        #expect(storage.removedKeys.isEmpty)
+        #expect(continuityCache.load()[primaryKey] == nil)
+        // A later refresh doesn't resurrect the detached row.
+        await store.refreshAll()
+        #expect(store.snapshot(for: primaryKey).freshness == .pending)
+    }
+
+    @Test func stopTrackingBuiltInRefusedAsOnlyAccount() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: .claude))
+            }
+        )
+        #expect(!store.canStopTrackingBuiltInAccount(for: .claude))
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .notAllowed)
+        #expect(store.accounts(for: .claude).count == 1)
+    }
+
+    @Test func stopTrackingBuiltInBlockedByActiveSetupHandoff() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: ActiveHandoffStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: .claude))
+            }
+        )
+        _ = store.addAccount(for: .claude)
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .setupActive)
+        #expect(store.accounts(for: .claude).map(\.id).contains(.primary))
+        #expect(store.accountRemovalStates[primaryKey] == .setupActive)
+        store.cancelAccountRemoval(primaryKey)
+        #expect(store.accountRemovalStates[primaryKey] == nil)
+    }
+
+    @Test func resumeTrackingRestoresBuiltInProviderAndFetches() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        _ = store.addAccount(for: .claude)
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+
+        let resumed = store.resumeTrackingBuiltInAccount(for: .claude)
+        #expect(resumed?.id == .primary)
+        #expect(store.accounts(for: .claude).first?.id == .primary)
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+        #expect(store.snapshot(for: primaryKey).freshness == .pending)
+        await store.refreshAll()
+        #expect(store.snapshot(for: primaryKey).freshness == .live)
+    }
+
+    @Test func removingLastExtraReinstatesTombstonedBuiltIn() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        let extra = store.addAccount(for: .claude)!
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(await store.removeAccount(extra.key) == .removed)
+        // The registry cleared the tombstone; the store must also recreate the
+        // built-in's provider instance so the resurfaced row actually polls.
+        #expect(store.accounts(for: .claude).map(\.id) == [.primary])
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+        await store.refreshAll()
+        #expect(store.snapshot(for: primaryKey).freshness == .live)
+    }
+
+    @Test func resumedBuiltInSetupSessionIsUsableAgain() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in }
+        )
+        store.attachSetupCoordinator(coordinator)
+        _ = store.addAccount(for: .claude)
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(coordinator.state(for: primaryKey) == .removed)
+
+        let resumed = store.resumeTrackingBuiltInAccount(for: .claude)
+        #expect(resumed != nil)
+        // The reused `.primary` key must leave the coordinator's `.removed` sentinel,
+        // or the resumed row's Sign In silently no-ops until relaunch.
+        #expect(coordinator.state(for: primaryKey) == .idle)
+
+        if let resumed { coordinator.begin(for: resumed) }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(coordinator.state(for: primaryKey) == .waiting(attempt: 0))
+    }
+
+    @Test func lastExtraRemovalReinstateClearsCoordinatorRemovedSentinel() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in }
+        )
+        store.attachSetupCoordinator(coordinator)
+        let extra = store.addAccount(for: .claude)!
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(coordinator.state(for: primaryKey) == .removed)
+
+        #expect(await store.removeAccount(extra.key) == .removed)
+        // Removing the last extra reinstates the tombstoned built-in; its setup
+        // session must be usable again through this path too.
+        #expect(coordinator.state(for: primaryKey) == .idle)
+        #expect(coordinator.state(for: extra.key) == .removed)
+    }
+
+    @Test func lateResultFromPreStopProviderCannotOverwriteResumedRow() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let primary = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let store = UsageStore(
+            providers: [primary],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            },
+            continuityCache: continuityCache
+        )
+        _ = store.addAccount(for: .claude)
+        let primaryKey = AccountKey(providerID: .claude, accountID: .primary)
+
+        let refresh = Task { await store.refreshAll() }
+        await primary.waitUntilStarted()
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(store.resumeTrackingBuiltInAccount(for: .claude) != nil)
+        #expect(store.snapshot(for: primaryKey).freshness == .pending)
+
+        primary.releaseFetches()
+        await refresh.value
+
+        // The pre-stop instance's late result must not overwrite the resumed row's
+        // deliberately fresh pending state or repopulate the continuity record the
+        // stop-track cleared.
+        #expect(store.snapshot(for: primaryKey).freshness == .pending)
+        #expect(store.snapshot(for: primaryKey).windows.isEmpty)
+        #expect(continuityCache.load()[primaryKey] == nil)
+    }
+
+    @Test func stopTrackingBuiltInKeepsProviderGroupOrder() async {
+        let defaults = freshDefaults()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+                AccountStubProvider(id: .codex, accountID: .primary, displayName: "Codex",
+                                    snapshot: .pending(for: .codex)),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 50)]))
+            }
+        )
+        _ = store.addAccount(for: .claude)
+        #expect(store.registeredProviderOrder == [.claude, .codex])
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        // The claude group keeps its composed position even though its only remaining
+        // instance sits at the end of the provider array.
+        #expect(store.registeredProviderOrder == [.claude, .codex])
+
+        #expect(store.resumeTrackingBuiltInAccount(for: .claude) != nil)
+        #expect(store.registeredProviderOrder == [.claude, .codex])
     }
 
     @Test func deletionFailureKeepsRecoverableRegisteredAccount() async {
