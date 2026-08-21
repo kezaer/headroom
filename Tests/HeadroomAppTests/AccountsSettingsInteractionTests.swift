@@ -195,6 +195,38 @@ struct AccountsSettingsInteractionTests {
         #expect(fixture.store.accounts(for: .codex).first(where: { $0.key == account.key })?.label == "Work Account")
     }
 
+    @Test func committedRenameIgnoresLateFieldWriteAfterFocusMoves() {
+        let work = ProviderAccount(
+            id: AccountID("work"),
+            providerID: .claude,
+            label: "Work QA"
+        )
+        let studio = ProviderAccount(
+            id: AccountID("studio"),
+            providerID: .claude,
+            label: "Studio"
+        )
+
+        #expect(!acceptsAccountLabelDraftChange(
+            for: work.key,
+            focusedAccountKey: studio.key
+        ))
+        #expect(accountLabelFieldValue(
+            for: work,
+            draft: "Work",
+            focusedAccountKey: studio.key
+        ) == "Work QA")
+        #expect(acceptsAccountLabelDraftChange(
+            for: work.key,
+            focusedAccountKey: work.key
+        ))
+        #expect(accountLabelFieldValue(
+            for: work,
+            draft: "Work QA Draft",
+            focusedAccountKey: work.key
+        ) == "Work QA Draft")
+    }
+
     @Test func removalFailureKeepsTheSelectedRowAndRetryRemovesOnlyThatAccount() async {
         let storage = InteractionStorage(removals: [.failure(.removeFailed), .success(())])
         let fixture = makeFixture(storage: storage)

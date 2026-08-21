@@ -29,6 +29,21 @@ func settingsStopWaitingAccount(
     return account
 }
 
+func accountLabelFieldValue(
+    for account: ProviderAccount,
+    draft: String?,
+    focusedAccountKey: AccountKey?
+) -> String {
+    focusedAccountKey == account.key ? (draft ?? account.label) : account.label
+}
+
+func acceptsAccountLabelDraftChange(
+    for accountKey: AccountKey,
+    focusedAccountKey: AccountKey?
+) -> Bool {
+    focusedAccountKey == accountKey
+}
+
 /// Settings → Accounts (multi-account, Jul 2026): one tile managing every configured
 /// subscription account. Grouped per provider — brand row with a live "n of 5" count
 /// and an Add button, then one row per account: an editable label, a plain-language
@@ -814,8 +829,20 @@ struct AccountsSettingsTile: View {
 
     private func labelBinding(for account: ProviderAccount) -> Binding<String> {
         Binding(
-            get: { labelDrafts[account.key] ?? account.label },
-            set: { labelDrafts[account.key] = $0 }
+            get: {
+                accountLabelFieldValue(
+                    for: account,
+                    draft: labelDrafts[account.key],
+                    focusedAccountKey: focusedLabel
+                )
+            },
+            set: { value in
+                guard acceptsAccountLabelDraftChange(
+                    for: account.key,
+                    focusedAccountKey: focusedLabel
+                ) else { return }
+                labelDrafts[account.key] = value
+            }
         )
     }
 
