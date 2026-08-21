@@ -94,6 +94,119 @@ import Testing
         #expect(coordinator.state(for: account.key) == .cancelled)
     }
 
+    @Test func forceCancelOpenHandoffClearsRefusalAndReleasesLoginSlot() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount(id: AccountID("codex-extra"), providerID: .codex, label: "Work", isBuiltIn: false)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.begin(for: account)
+        #expect(coordinator.state(for: account.key) == .blockedByOpenHandoff)
+
+        coordinator.forceCancel(account.key)
+
+        #expect(coordinator.state(for: account.key) == .cancelled)
+        #expect(!coordinator.hasActiveHandoff(for: account.key))
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
+    @Test func forceCancelWaitingHandoffMakesPendingRetryInert() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount(id: AccountID("claude-extra"), providerID: .claude, label: "Work", isBuiltIn: false)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(harness.scheduler.pendingCount == 1)
+
+        coordinator.forceCancel(account.key)
+        harness.scheduler.fireLastIncludingCancelled()
+
+        #expect(coordinator.state(for: account.key) == .cancelled)
+        #expect(!coordinator.hasActiveHandoff(for: account.key))
+        #expect(harness.refreshCalls.isEmpty)
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
+    @Test func forceCancelAllowsImmediateBeginForSameAccount() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount(id: AccountID("codex-extra"), providerID: .codex, label: "Work", isBuiltIn: false)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.forceCancel(account.key)
+        coordinator.begin(for: account)
+        await settleTasks()
+
+        #expect(harness.prepareCalls == [
+            .init(key: account.key, mode: .standard),
+            .init(key: account.key, mode: .standard),
+        ])
+        #expect(harness.openCalls == [account.key, account.key])
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(coordinator.hasActiveHandoff(for: account.key))
+    }
+
+    @Test func forceCancelFinalVerificationMakesLateFailuresAndStopLossInert() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator(verificationStopLoss: .seconds(100))
+        let account = ProviderAccount(id: AccountID("claude-extra"), providerID: .claude, label: "Work", isBuiltIn: false)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(coordinator.state(for: account.key) == .verifying)
+
+        coordinator.forceCancel(account.key)
+        coordinator.receiveCapabilityFailure(.confirmedAbsent, for: .claude)
+        coordinator.receive(
+            .stale(for: .claude, reason: .providerSetup(.claudeCLIMissing)),
+            for: account.key
+        )
+        harness.scheduler.fireLastIncludingCancelled()
+
+        #expect(coordinator.state(for: account.key) == .cancelled)
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
+    @Test func lateHandoffEndAfterForceCancelDoesNotStartVerification() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount(id: AccountID("codex-extra"), providerID: .codex, label: "Work", isBuiltIn: false)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.forceCancel(account.key)
+        coordinator.handoffDidEnd(account.key, completion: .failed)
+
+        #expect(coordinator.state(for: account.key) == .cancelled)
+        #expect(harness.refreshCalls.isEmpty)
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
+    @Test func forceCancelCodexSlotHolderAllowsBlockedAccountToContinue() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let first = ProviderAccount(id: AccountID("codex-one"), providerID: .codex, label: "One", isBuiltIn: false)
+        let second = ProviderAccount(id: AccountID("codex-two"), providerID: .codex, label: "Two", isBuiltIn: false)
+
+        coordinator.begin(for: first)
+        await settleTasks()
+        coordinator.begin(for: second)
+        #expect(coordinator.state(for: second.key) == .blockedByProviderLogin(providerID: .codex, active: first.key))
+
+        coordinator.forceCancel(first.key)
+        coordinator.continueSetup(for: second)
+        await settleTasks()
+
+        #expect(coordinator.state(for: first.key) == .cancelled)
+        #expect(coordinator.state(for: second.key) == .waiting(attempt: 0))
+        #expect(harness.openCalls == [first.key, second.key])
+    }
+
     @Test func retriesUseVirtualSchedulerAndStopAfterLive() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator(retryDelays: [.seconds(1), .seconds(2)])

@@ -260,6 +260,14 @@ public final class SetupSessionCoordinator {
         invalidateWork(for: key, finalState: .cancelled, releaseLoginSlot: true)
     }
 
+    /// Abandons an external handoff immediately. Removing the handoff first is
+    /// intentional: `invalidateWork` only releases the provider login slot when no
+    /// external handoff remains associated with the account.
+    public func forceCancel(_ key: AccountKey) {
+        activeHandoffs.remove(key)
+        invalidateWork(for: key, finalState: .cancelled, releaseLoginSlot: true)
+    }
+
     public func settleConnected(_ key: AccountKey) {
         guard state(for: key) == .connected else { return }
         states[key] = .idle
@@ -326,7 +334,7 @@ public final class SetupSessionCoordinator {
     }
 
     public func receive(_ snapshot: UsageSnapshot, for key: AccountKey) {
-        guard state(for: key) != .removed else { return }
+        guard state(for: key) != .removed, state(for: key) != .cancelled else { return }
         if snapshot.freshness == .live {
             // Live data is a setup payoff only when this account already has setup
             // lifecycle state. Ordinary live-to-live polling must leave an idle
