@@ -84,7 +84,8 @@ enum SetupSessions {
             accountExists: { key in
                 store.accounts(for: key.providerID).contains(where: { $0.key == key })
             },
-            requestRefresh: { key in store.refreshAccountNow(key) }
+            requestRefresh: { key in store.refreshAccountNow(key) },
+            resetBoundary: { key in store.invalidateUsageForAccountReset(key) }
         )
         self.coordinator = coordinator
         store.attachSetupCoordinator(coordinator)
@@ -125,6 +126,10 @@ enum SetupSessions {
         case .cursor: assertionFailure("Cursor setup requires the configured coordinator")
         default: assertionFailure("No setup session registered for \(account.providerID)")
         }
+    }
+
+    static func resetSetup(for account: ProviderAccount) {
+        coordinator?.beginReset(for: account)
     }
 
     /// Execute the action selected by the core recovery table. Keeping this switch at

@@ -109,6 +109,7 @@ public final class SetupSessionCoordinator {
     public typealias Discard = @MainActor @Sendable (PreparedSetupHandoff) async -> Void
     public typealias AccountExists = @MainActor @Sendable (AccountKey) -> Bool
     public typealias RequestRefresh = @MainActor @Sendable (AccountKey) -> Void
+    public typealias ResetBoundary = @MainActor @Sendable (AccountKey) -> Void
 
     private var states: [AccountKey: SetupSessionState] = [:]
     private var generations: [AccountKey: Int] = [:]
@@ -120,6 +121,7 @@ public final class SetupSessionCoordinator {
     @ObservationIgnored private var handoffsAwaitingFinalRefresh: [AccountKey: SetupHandoffCompletion] = [:]
     @ObservationIgnored private var verificationCapabilityFailures: [AccountKey: ProviderCapabilityState] = [:]
     @ObservationIgnored private var sessionModes: [AccountKey: SetupHandoffMode] = [:]
+    @ObservationIgnored private var resetSessions: Set<AccountKey> = []
 
     @ObservationIgnored private let scheduler: any SetupRetryScheduling
     @ObservationIgnored private let retryDelays: [Duration]
@@ -129,6 +131,7 @@ public final class SetupSessionCoordinator {
     @ObservationIgnored private let discard: Discard
     @ObservationIgnored private let accountExists: AccountExists
     @ObservationIgnored private let requestRefresh: RequestRefresh
+    @ObservationIgnored private let resetBoundary: ResetBoundary
 
     public init(
         scheduler: any SetupRetryScheduling = TaskSetupRetryScheduler(),
@@ -140,7 +143,8 @@ public final class SetupSessionCoordinator {
         open: @escaping Open,
         discard: @escaping Discard = { _ in },
         accountExists: @escaping AccountExists,
-        requestRefresh: @escaping RequestRefresh
+        requestRefresh: @escaping RequestRefresh,
+        resetBoundary: @escaping ResetBoundary = { _ in }
     ) {
         self.scheduler = scheduler
         self.retryDelays = retryDelays
@@ -150,6 +154,7 @@ public final class SetupSessionCoordinator {
         self.discard = discard
         self.accountExists = accountExists
         self.requestRefresh = requestRefresh
+        self.resetBoundary = resetBoundary
     }
 
     public func state(for key: AccountKey) -> SetupSessionState {
@@ -165,7 +170,16 @@ public final class SetupSessionCoordinator {
     }
 
     public func begin(for account: ProviderAccount, mode: SetupHandoffMode = .standard) {
+        resetSessions.remove(account.key)
         start(account, mode: mode, allowBlocked: false)
+    }
+
+    /// Reset differs from ordinary setup only in settlement: existing live usage is
+    /// ignored until the external handoff ends and a post-handoff capture arrives.
+    public func beginReset(for account: ProviderAccount) {
+        resetSessions.insert(account.key)
+        resetBoundary(account.key)
+        start(account, mode: .standard, allowBlocked: false)
     }
 
     /// A blocked request never starts on its own when the previous provider slot clears.
@@ -297,6 +311,7 @@ public final class SetupSessionCoordinator {
         if activeLogins[key.providerID] == key { activeLogins.removeValue(forKey: key.providerID) }
         switch state(for: key) {
         case .idle, .waiting, .blockedByOpenHandoff, .failed(.retryExhausted):
+            if resetSessions.contains(key) { resetBoundary(key) }
             invalidateWork(for: key, finalState: nil, releaseLoginSlot: false)
             handoffsAwaitingFinalRefresh[key] = completion
             states[key] = .verifying
@@ -336,6 +351,9 @@ public final class SetupSessionCoordinator {
     public func receive(_ snapshot: UsageSnapshot, for key: AccountKey) {
         guard state(for: key) != .removed, state(for: key) != .cancelled else { return }
         if snapshot.freshness == .live {
+            if resetSessions.contains(key), handoffsAwaitingFinalRefresh[key] == nil {
+                return
+            }
             // Live data is a setup payoff only when this account already has setup
             // lifecycle state. Ordinary live-to-live polling must leave an idle
             // session idle, or a later reconnect can be blocked by a stale
@@ -471,6 +489,7 @@ public final class SetupSessionCoordinator {
             switch finalState {
             case .connected, .cancelled, .removing, .removed:
                 sessionModes.removeValue(forKey: key)
+                resetSessions.remove(key)
             default:
                 break
             }

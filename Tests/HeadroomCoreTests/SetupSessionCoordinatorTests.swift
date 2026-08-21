@@ -207,6 +207,57 @@ import Testing
         #expect(harness.openCalls == [first.key, second.key])
     }
 
+    @Test func resetIgnoresLiveSnapshotDuringPreparationAndStillOpensHandoff() async {
+        let harness = SetupCoordinatorHarness()
+        harness.suspendPreparation = true
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .preparing)
+        #expect(harness.openCalls.isEmpty)
+        harness.resumePreparation()
+        await settleTasks()
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(harness.openCalls == [account.key])
+    }
+
+    @Test func resetSettlesOnlyFromLiveResultAfterHandoffEnds() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .codex)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+        coordinator.receive(.live(.codex, windows: []), for: account.key)
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(coordinator.hasActiveHandoff(for: account.key))
+
+        coordinator.handoffDidEnd(account.key, completion: .failed)
+        #expect(coordinator.state(for: account.key) == .verifying)
+        coordinator.receive(.live(.codex, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .connected)
+        #expect(harness.resetBoundaryCalls == [account.key, account.key])
+    }
+
+    @Test func forceCancelResetLeavesSessionCancelledAndAllowsOrdinaryPolling() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+        coordinator.forceCancel(account.key)
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .cancelled)
+        #expect(!coordinator.hasActiveHandoff(for: account.key))
+    }
+
     @Test func retriesUseVirtualSchedulerAndStopAfterLive() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator(retryDelays: [.seconds(1), .seconds(2)])
@@ -676,6 +727,7 @@ private final class SetupCoordinatorHarness {
     var openCalls: [AccountKey] = []
     var discardCalls: [AccountKey] = []
     var refreshCalls: [AccountKey] = []
+    var resetBoundaryCalls: [AccountKey] = []
     var existingAccounts: Set<AccountKey> = []
     var suspendPreparation = false
     var openResult: SetupOpenResult = .success(())
@@ -704,7 +756,8 @@ private final class SetupCoordinatorHarness {
             },
             discard: { [weak self] handoff in self?.discardCalls.append(handoff.accountKey) },
             accountExists: { [weak self] key in self?.existingAccounts.contains(key) == true },
-            requestRefresh: { [weak self] key in self?.refreshCalls.append(key) }
+            requestRefresh: { [weak self] key in self?.refreshCalls.append(key) },
+            resetBoundary: { [weak self] key in self?.resetBoundaryCalls.append(key) }
         )
     }
 

@@ -20,6 +20,13 @@ extension UsageStore {
         setupCoordinator = coordinator
     }
 
+    /// Reject any capture started before this reset boundary and drop retained usage
+    /// so the next accepted result cannot merge windows from the previous login.
+    public func invalidateUsageForAccountReset(_ key: AccountKey) {
+        attachmentGenerations[key, default: 0] &+= 1
+        continuityCache?.remove(for: key)
+    }
+
     public func canAddAccount(for providerID: ProviderID) -> Bool {
         guard let accountRegistry, providerFactory != nil,
               accounts(for: providerID).count < accountCapacity(for: providerID)

@@ -963,6 +963,108 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(continuityCache.load()[primaryKey] == nil)
     }
 
+    @Test func resetBoundariesRejectOldAndMidHandoffResultsBeforeFreshCapture() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        continuityCache.save(
+            .live(.claude, windows: [window(.weekly, used: 91)]),
+            for: key
+        )
+        let provider = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let store = UsageStore(
+            providers: [provider],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .live(.claude, windows: [window(.weekly, used: 20)])
+                )
+            },
+            continuityCache: continuityCache
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in },
+            resetBoundary: { store.invalidateUsageForAccountReset($0) }
+        )
+        store.attachSetupCoordinator(coordinator)
+        let oldRefresh = Task { await store.refreshAll() }
+        await provider.waitUntilStarted()
+
+        coordinator.beginReset(for: .builtIn(for: .claude))
+        provider.releaseFetches()
+        await oldRefresh.value
+        #expect(continuityCache.load()[key] == nil)
+
+        provider.suspendNextFetch()
+        let midHandoffRefresh = Task { await store.refreshAll() }
+        await provider.waitUntilStarted()
+        coordinator.handoffDidEnd(key)
+        provider.releaseFetches()
+        await midHandoffRefresh.value
+        #expect(continuityCache.load()[key] == nil)
+
+        await store.refreshAll()
+        #expect(coordinator.state(for: key) == .connected)
+        #expect(store.snapshot(for: key).windows.first?.utilization == 20)
+        #expect(continuityCache.load()[key]?.windows.first?.utilization == 20)
+    }
+
+    @Test func forceCancelledResetKeepsAccountVisibleAndPollable() async {
+        let defaults = freshDefaults()
+        let account = ProviderAccount.builtIn(for: .claude)
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: .live(.claude, windows: [window(.weekly, used: 37)])
+                ),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { _ in
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: .pending(for: .claude)
+                )
+            }
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in },
+            resetBoundary: { store.invalidateUsageForAccountReset($0) }
+        )
+        store.attachSetupCoordinator(coordinator)
+
+        coordinator.beginReset(for: account)
+        coordinator.forceCancel(account.key)
+        await store.refreshAll()
+
+        #expect(store.accounts(for: .claude).map(\.key) == [account.key])
+        #expect(store.snapshot(for: account.key).freshness == .live)
+        #expect(coordinator.state(for: account.key) == .cancelled)
+    }
+
     @Test func stopTrackingBuiltInKeepsProviderGroupOrder() async {
         let defaults = freshDefaults()
         let store = UsageStore(
