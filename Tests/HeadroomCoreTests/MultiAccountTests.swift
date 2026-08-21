@@ -378,6 +378,51 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(registry.accounts(for: .codex).first?.id == .primary)
     }
 
+    @Test func promotedPrimaryIsFirstAndPersistsAcrossRegistryRecreation() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+
+        #expect(registry.promote(extra.key))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id, .primary])
+        #expect(AccountRegistry(defaults: defaults).accounts(for: .claude).map(\.id) == [extra.id, .primary])
+    }
+
+    @Test func danglingPrimaryPointerFallsBackWithoutWritingDefaults() throws {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        let survivor = registry.addAccount(for: .claude)!
+        #expect(registry.promote(extra.key))
+        registry.removeAccount(extra.key)
+        let before = try #require(defaults.data(forKey: "primaryAccounts.v1"))
+
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary, survivor.id])
+        #expect(defaults.data(forKey: "primaryAccounts.v1") == before)
+    }
+
+    @Test func promotedExtraStaysPrimaryAcrossBuiltInStopAndResume() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.promote(extra.key))
+
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id])
+        #expect(registry.resumeTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id, .primary])
+    }
+
+    @Test func primaryPointerDoesNotChangeCapacityAndCannotPromoteUnknownAccount() throws {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        var last: ProviderAccount?
+        for _ in 0..<4 { last = registry.addAccount(for: .claude) }
+        let promoted = try #require(last)
+
+        #expect(registry.promote(promoted.key))
+        #expect(!registry.canAddAccount(for: .claude))
+        #expect(!registry.promote(AccountKey(providerID: .claude, accountID: AccountID("missing"))))
+    }
+
     @Test func storageComponentsCannotTraverseOutOfAccountRoot() {
         #expect(AccountStorage.safePathComponent("../victim") == "%2E%2E%2Fvictim")
         #expect(AccountStorage.safePathComponent("normal-id_1") == "normal-id_1")
@@ -599,6 +644,111 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         await store.refreshAll()
         // 30% used → 70% remaining, from the built-in account — not the 95%-used extra.
         #expect(store.menuBarSummary.text == "70%")
+    }
+
+    @Test func promotionReordersPrimaryConsumersAndExportsImmediately() async {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        let widgetExporter = SpyWidgetExporter()
+        let phoneExporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+                AccountStubProvider(id: .claude, accountID: extra.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 95)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: account.providerID))
+            },
+            widgetExporter: widgetExporter,
+            phoneSyncExporter: phoneExporter
+        )
+        await store.refreshAll()
+        let widgetBaseline = widgetExporter.exports.count
+        let phoneBaseline = phoneExporter.exports.count
+
+        #expect(store.promoteAccount(extra.key))
+        #expect(store.primaryAccount(for: .claude)?.key == extra.key)
+        #expect(store.snapshot(for: .claude).windows.first?.utilization == 95)
+        #expect(store.menuBarSummary.text == "5%")
+        #expect(widgetExporter.exports.count == widgetBaseline + 1)
+        #expect(phoneExporter.exports.count == phoneBaseline + 1)
+    }
+
+    @Test func storeRestoresPersistedPrimaryOrderRegardlessOfProviderConstructionOrder() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.promote(extra.key))
+
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .pending(for: .claude)),
+                AccountStubProvider(id: .claude, accountID: extra.id, displayName: "Claude",
+                                    snapshot: .pending(for: .claude)),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: account.providerID))
+            }
+        )
+
+        #expect(store.accounts(for: .claude).map(\.id) == [extra.id, .primary])
+        #expect(store.primaryAccount(for: .claude)?.key == extra.key)
+    }
+
+    @Test func promotionRefreshesOnlyThePromotedAccount() async {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extraAccount = registry.addAccount(for: .claude)!
+        let builtIn = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let extra = SuspendedAccountProvider(id: .claude, accountID: extraAccount.id)
+        let store = UsageStore(
+            providers: [builtIn, extra],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: account.providerID))
+            }
+        )
+
+        #expect(store.promoteAccount(extraAccount.key))
+        await extra.waitUntilStarted()
+        #expect(builtIn.fetchCount == 0)
+        #expect(extra.fetchCount == 1)
+        extra.releaseFetches()
+        for _ in 0..<5 { await Task.yield() }
+    }
+
+    @Test func timerBackoffFollowsPrimaryPositionInsteadOfBuiltInIdentity() {
+        let neverSignedIn = Freshness.stale(.notLoggedIn("sign in"))
+        let builtIn = AccountKey(providerID: .claude, accountID: .primary)
+        let promoted = AccountKey(providerID: .claude, accountID: AccountID("work"))
+
+        #expect(!UsageStore.shouldBackOffNeverSignedInAccount(
+            promoted,
+            primary: promoted,
+            timerCycle: 1,
+            freshness: neverSignedIn
+        ))
+        #expect(UsageStore.shouldBackOffNeverSignedInAccount(
+            builtIn,
+            primary: promoted,
+            timerCycle: 1,
+            freshness: neverSignedIn
+        ))
     }
 
     @Test func anyAccountNeedingReauthFlagsMenuBarAttention() async {
@@ -961,6 +1111,243 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(store.snapshot(for: primaryKey).freshness == .pending)
         #expect(store.snapshot(for: primaryKey).windows.isEmpty)
         #expect(continuityCache.load()[primaryKey] == nil)
+    }
+
+    @Test func resetBoundariesRejectOldAndMidHandoffResultsBeforeFreshCapture() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        continuityCache.save(
+            .live(.claude, windows: [window(.weekly, used: 91)]),
+            for: key
+        )
+        let provider = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let store = UsageStore(
+            providers: [provider],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .live(.claude, windows: [window(.weekly, used: 20)])
+                )
+            },
+            continuityCache: continuityCache
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in },
+            resetBoundary: { store.invalidateUsageForAccountReset($0) }
+        )
+        store.attachSetupCoordinator(coordinator)
+        let oldRefresh = Task { await store.refreshAll() }
+        await provider.waitUntilStarted()
+
+        coordinator.beginReset(for: .builtIn(for: .claude))
+        provider.releaseFetches()
+        await oldRefresh.value
+        #expect(continuityCache.load()[key] == nil)
+
+        provider.suspendNextFetch()
+        let midHandoffRefresh = Task { await store.refreshAll() }
+        await provider.waitUntilStarted()
+        coordinator.handoffDidEnd(key)
+        provider.releaseFetches()
+        await midHandoffRefresh.value
+        #expect(continuityCache.load()[key] == nil)
+
+        await store.refreshAll()
+        #expect(coordinator.state(for: key) == .connected)
+        #expect(store.snapshot(for: key).windows.first?.utilization == 20)
+        #expect(continuityCache.load()[key]?.windows.first?.utilization == 20)
+    }
+
+    @Test func resetBoundaryDoesNotRetainOldLoginWindowInPartialLiveCapture() async {
+        let defaults = freshDefaults()
+        let preferences = Preferences(defaults: defaults)
+        preferences.widgetsEnabled = true
+        preferences.syncToIPhoneEnabled = true
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        continuityCache.save(
+            UsageSnapshot(
+                providerID: .claude,
+                windows: [
+                    window(.weekly, used: 41),
+                    window(.other("Weekly (Fable)"), used: 73),
+                ],
+                planLabel: "Old Max",
+                accountEmail: "old@example.com",
+                capturedAt: Date(timeIntervalSince1970: 1_000_000),
+                freshness: .live
+            ),
+            for: key
+        )
+        let newSnapshot = UsageSnapshot(
+            providerID: .claude,
+            windows: [window(.weekly, used: 12)],
+            planLabel: "New Pro",
+            accountEmail: "new@example.com",
+            capturedAt: now,
+            freshness: .live
+        )
+        let widgetExporter = SpyWidgetExporter()
+        let phoneExporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: newSnapshot
+                ),
+            ],
+            preferences: preferences,
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .pending(for: account.providerID)
+                )
+            },
+            continuityCache: continuityCache,
+            now: { now },
+            widgetExporter: widgetExporter,
+            phoneSyncExporter: phoneExporter
+        )
+
+        #expect(store.snapshot(for: key).windows.count == 2)
+        store.invalidateUsageForAccountReset(key)
+
+        let resetSnapshot = store.snapshot(for: key)
+        #expect(resetSnapshot.freshness == .pending)
+        #expect(resetSnapshot.windows.isEmpty)
+        #expect(resetSnapshot.planLabel == nil)
+        #expect(resetSnapshot.accountEmail == nil)
+        #expect(store.accounts(for: .claude).map(\.key) == [key])
+        #expect(widgetExporter.exports.last?.providers.first?.windows.isEmpty == true)
+        #expect(widgetExporter.exports.last?.providers.first?.planLabel == nil)
+        #expect(phoneExporter.exports.last?.providers.first?.windows.isEmpty == true)
+        #expect(phoneExporter.exports.last?.providers.first?.planLabel == nil)
+
+        await store.refreshAll()
+
+        let refreshed = store.snapshot(for: key)
+        #expect(refreshed.windows.map(\.kind) == [.weekly])
+        #expect(refreshed.planLabel == "New Pro")
+        #expect(refreshed.accountEmail == "new@example.com")
+        #expect(continuityCache.load()[key]?.windows.map(\.kind) == [.weekly])
+    }
+
+    @Test func resetBoundaryDoesNotRetainOldLoginDataInTransientFirstCapture() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        continuityCache.save(
+            UsageSnapshot(
+                providerID: .claude,
+                windows: [
+                    window(.weekly, used: 41),
+                    window(.other("Weekly (Fable)"), used: 73),
+                ],
+                planLabel: "Old Max",
+                accountEmail: "old@example.com",
+                capturedAt: Date(timeIntervalSince1970: 1_000_000),
+                freshness: .live
+            ),
+            for: key
+        )
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: .stale(for: .claude, reason: .transient("Try again"))
+                ),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .pending(for: account.providerID)
+                )
+            },
+            continuityCache: continuityCache,
+            now: { now }
+        )
+
+        store.invalidateUsageForAccountReset(key)
+        await store.refreshAll()
+
+        let refreshed = store.snapshot(for: key)
+        #expect(refreshed.windows.isEmpty)
+        #expect(refreshed.planLabel == nil)
+        #expect(refreshed.accountEmail == nil)
+        #expect(store.accounts(for: .claude).map(\.key) == [key])
+        #expect(continuityCache.load()[key] == nil)
+    }
+
+    @Test func forceCancelledResetKeepsAccountVisibleAndPollable() async {
+        let defaults = freshDefaults()
+        let account = ProviderAccount.builtIn(for: .claude)
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: .live(.claude, windows: [window(.weekly, used: 37)])
+                ),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { _ in
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: .pending(for: .claude)
+                )
+            }
+        )
+        let coordinator = SetupSessionCoordinator(
+            scheduler: IgnoringSetupScheduler(),
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in },
+            resetBoundary: { store.invalidateUsageForAccountReset($0) }
+        )
+        store.attachSetupCoordinator(coordinator)
+
+        coordinator.beginReset(for: account)
+        coordinator.forceCancel(account.key)
+        await store.refreshAll()
+
+        #expect(store.accounts(for: .claude).map(\.key) == [account.key])
+        #expect(store.snapshot(for: account.key).freshness == .live)
+        #expect(coordinator.state(for: account.key) == .cancelled)
     }
 
     @Test func stopTrackingBuiltInKeepsProviderGroupOrder() async {

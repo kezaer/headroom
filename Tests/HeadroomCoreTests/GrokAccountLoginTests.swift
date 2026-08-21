@@ -77,8 +77,8 @@ import Testing
 
         #expect(!script.contains(sensitiveSentinel))
         #expect(script.contains("'/opt/homebrew/bin/grok' login"))
-        #expect(script.contains("complete:${setup_status}"))
-        #expect(script.contains("print -r -- \"standard:$$\""))
+        #expect(script.contains("complete:${setup_purpose}:${handoff_generation}:${setup_status}"))
+        #expect(script.contains("HEADROOM_SETUP_OWNER=\"${setup_purpose}:standard:${handoff_generation}:$$\""))
 
         let process = Process()
         let input = Pipe()

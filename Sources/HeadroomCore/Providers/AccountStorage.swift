@@ -16,6 +16,57 @@ import Darwin
 public enum AccountStorage {
     static let preparedMarkerGracePeriod: TimeInterval = 5 * 60
 
+    private enum PendingSetupMarker {
+        case opening(
+            purpose: SetupHandoffPurpose,
+            mode: SetupHandoffMode?,
+            generation: String?,
+            startedAt: Date?
+        )
+        case active(
+            purpose: SetupHandoffPurpose,
+            mode: SetupHandoffMode,
+            generation: String?,
+            pid: Int32
+        )
+
+        var purpose: SetupHandoffPurpose {
+            switch self {
+            case .opening(let purpose, _, _, _), .active(let purpose, _, _, _): purpose
+            }
+        }
+
+        var mode: SetupHandoffMode? {
+            switch self {
+            case .opening(_, let mode, _, _): mode
+            case .active(_, let mode, _, _): mode
+            }
+        }
+
+        var generation: String? {
+            switch self {
+            case .opening(_, _, let generation, _), .active(_, _, let generation, _): generation
+            }
+        }
+    }
+
+    private enum SetupGenerationState {
+        case active(String)
+        case cancelled(String)
+
+        var generation: String {
+            switch self {
+            case .active(let generation), .cancelled(let generation): generation
+            }
+        }
+    }
+
+    private struct CompletedSetupMarker {
+        let purpose: SetupHandoffPurpose
+        let generation: String?
+        let completion: SetupHandoffCompletion
+    }
+
     public static var baseDirectoryURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
@@ -111,43 +162,122 @@ public enum AccountStorage {
         )
     }
 
-    /// Stage the durable handoff sentinel before Terminal opens. The wrapper replaces
-    /// `opening` with its redaction-safe mode and PID, writes a completion marker on
-    /// every normal/signal exit, then removes the pending marker. This survives view
-    /// and app closure without persisting account identity or provider output.
-    public static func prepareSetupCompletionMarker(_ marker: SetupCompletionMarker) throws {
+    /// Stage one generation before Terminal opens. Per-generation pending/completion
+    /// files keep a cancelled wrapper physically separate from its successor, while
+    /// the durable state file lets relaunch recovery reject cancelled generations.
+    /// All fields are fixed allowlisted protocol data; no account identity is stored.
+    @discardableResult
+    public static func prepareSetupCompletionMarker(
+        _ marker: SetupCompletionMarker,
+        mode: SetupHandoffMode = .standard,
+        purpose: SetupHandoffPurpose = .setup
+    ) throws -> String {
         let manager = FileManager.default
-        let pendingURL = URL(fileURLWithPath: marker.pendingPath)
+        let generation = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let pendingURL = URL(fileURLWithPath: generatedPendingPath(marker, generation: generation))
         try manager.createDirectory(
             at: pendingURL.deletingLastPathComponent(),
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        if let previous = parseGenerationState(marker: marker) {
+            removeGeneratedMarkers(marker, generation: previous.generation)
+        }
+        let opening = "opening:\(purpose.rawValue):\(markerName(for: mode)):\(generation):\(Date().timeIntervalSince1970)\n"
+        do {
+            try writeOwnerOnly(opening, to: pendingURL)
+            try writeGenerationState(.active(generation), marker: marker)
+        } catch {
+            try? manager.removeItem(at: pendingURL)
+            throw error
+        }
+        // A new generation safely supersedes a cancellation tombstone and any legacy
+        // fixed-path marker. Late legacy wrappers can only touch these unused paths.
+        try? manager.removeItem(atPath: marker.pendingPath)
         try? manager.removeItem(atPath: marker.completedPath)
-        let opening = "opening:\(Date().timeIntervalSince1970)\n"
-        try Data(opening.utf8).write(to: pendingURL, options: .atomic)
-        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.pendingPath)
+        return generation
     }
 
     public static func clearPreparedSetupCompletionMarker(_ marker: SetupCompletionMarker) {
+        if case .active(let generation) = parseGenerationState(marker: marker) {
+            removeGeneratedMarkers(marker, generation: generation)
+            try? FileManager.default.removeItem(atPath: generationStatePath(marker))
+        }
         try? FileManager.default.removeItem(atPath: marker.pendingPath)
+        try? FileManager.default.removeItem(atPath: marker.completedPath)
     }
 
-    /// Read only the wrapper's allowlisted `complete:<status>` marker. Missing,
-    /// malformed, or out-of-range data stays unknown and never reaches diagnostics.
+    /// Cancel the current generation before removing its files. The tombstone remains
+    /// until a successor is safely staged, so a late wrapper completion stays ignored
+    /// across app relaunches. This never terminates the external Terminal process.
+    public static func clearSetupCompletionMarkers(_ marker: SetupCompletionMarker) {
+        let generation = parseGenerationState(marker: marker)?.generation ?? "legacy"
+        try? writeGenerationState(.cancelled(generation), marker: marker)
+        if generation != "legacy" {
+            removeGeneratedMarkers(marker, generation: generation)
+        }
+        try? FileManager.default.removeItem(atPath: marker.pendingPath)
+        try? FileManager.default.removeItem(atPath: marker.completedPath)
+    }
+
+    /// Consume an inactive handoff after its result has been delivered. Cancellation
+    /// tombstones are deliberately retained until successor staging.
+    public static func clearFinishedSetupCompletionMarkers(_ marker: SetupCompletionMarker) {
+        switch parseGenerationState(marker: marker) {
+        case .active(let generation):
+            removeGeneratedMarkers(marker, generation: generation)
+            try? FileManager.default.removeItem(atPath: generationStatePath(marker))
+        case .cancelled:
+            break
+        case nil:
+            try? FileManager.default.removeItem(atPath: marker.pendingPath)
+            try? FileManager.default.removeItem(atPath: marker.completedPath)
+        }
+    }
+
+    /// Read only the current generation's allowlisted completion marker, plus the two
+    /// legacy fixed-path forms. Cancelled/stale generations remain unknown.
     public static func setupHandoffCompletion(
         marker: SetupCompletionMarker
     ) -> SetupHandoffCompletion {
-        guard let data = FileManager.default.contents(atPath: marker.completedPath),
-              let value = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        else { return .unknown }
-        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 2,
-              parts[0] == "complete",
-              let status = UInt8(parts[1])
-        else { return .unknown }
-        return status == 0 ? .succeeded : .failed
+        switch parseGenerationState(marker: marker) {
+        case .active(let generation):
+            let completed = parseCompletedMarker(
+                atPath: generatedCompletedPath(marker, generation: generation)
+            )
+            return completed?.generation == generation ? completed?.completion ?? .unknown : .unknown
+        case .cancelled:
+            return .unknown
+        case nil:
+            if generationStateExists(marker) { return .unknown }
+            return parseCompletedMarker(atPath: marker.completedPath)?.completion ?? .unknown
+        }
+    }
+
+    /// Purpose is durable across both the opening/active pending marker and the final
+    /// completion marker. Legacy markers predate reset and therefore mean setup.
+    public static func setupHandoffPurpose(
+        marker: SetupCompletionMarker
+    ) -> SetupHandoffPurpose? {
+        switch parseGenerationState(marker: marker) {
+        case .active(let generation):
+            let pending = parsePendingMarker(
+                atPath: generatedPendingPath(marker, generation: generation)
+            )
+            if pending?.generation == generation { return pending?.purpose }
+            let completed = parseCompletedMarker(
+                atPath: generatedCompletedPath(marker, generation: generation)
+            )
+            return completed?.generation == generation ? completed?.purpose : nil
+        case .cancelled:
+            return nil
+        case nil:
+            if generationStateExists(marker) { return nil }
+            if FileManager.default.fileExists(atPath: marker.pendingPath) {
+                return parsePendingMarker(atPath: marker.pendingPath)?.purpose
+            }
+            return parseCompletedMarker(atPath: marker.completedPath)?.purpose
+        }
     }
 
     /// A short-lived `opening` marker covers the gap between AppKit accepting the file
@@ -173,47 +303,279 @@ public enum AccountStorage {
         now: Date = .now
     ) -> Bool {
         let manager = FileManager.default
-        guard manager.fileExists(atPath: marker.pendingPath) else { return false }
-        guard let data = manager.contents(atPath: marker.pendingPath),
-              let value = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        else { return true }
-        if value == "opening" || value.hasPrefix("opening:") {
-            let parts = value.split(separator: ":", maxSplits: 1)
-            let encodedDate = parts.count == 2
-                ? Double(parts[1]).map { Date(timeIntervalSince1970: $0) }
-                : nil
-            let attributes = try? manager.attributesOfItem(atPath: marker.pendingPath)
+        let pendingPath: String
+        let isLegacy: Bool
+        switch parseGenerationState(marker: marker) {
+        case .active(let generation):
+            isLegacy = false
+            let completion = parseCompletedMarker(
+                atPath: generatedCompletedPath(marker, generation: generation)
+            )
+            if completion?.generation == generation { return false }
+            pendingPath = generatedPendingPath(marker, generation: generation)
+            guard manager.fileExists(atPath: pendingPath) else { return true }
+        case .cancelled:
+            return false
+        case nil:
+            if generationStateExists(marker) { return true }
+            isLegacy = true
+            pendingPath = marker.pendingPath
+            guard manager.fileExists(atPath: pendingPath) else { return false }
+        }
+        guard let pending = parsePendingMarker(atPath: pendingPath) else { return true }
+        if !isLegacy,
+           case .active(let generation) = parseGenerationState(marker: marker),
+           pending.generation != generation {
+            return true
+        }
+        switch pending {
+        case .opening(_, _, _, let encodedDate):
+            let attributes = try? manager.attributesOfItem(atPath: pendingPath)
             let writtenAt = encodedDate ?? attributes?[.modificationDate] as? Date
             guard let writtenAt,
                   now.timeIntervalSince(writtenAt) > preparedMarkerGracePeriod
             else { return true }
-            try? manager.removeItem(atPath: marker.pendingPath)
+            if isLegacy { try? manager.removeItem(atPath: pendingPath) }
+            return false
+        case .active(_, _, _, let pid):
+            if kill(pid, 0) == 0 || errno == EPERM { return true }
+            guard errno == ESRCH else { return true }
+            if isLegacy { try? manager.removeItem(atPath: pendingPath) }
             return false
         }
-        let modeAndPID = value.split(separator: ":", maxSplits: 1)
-        let pidText = modeAndPID.count == 2
-            && (modeAndPID[0] == "standard" || modeAndPID[0] == "deviceCode")
-            ? modeAndPID[1]
-            : Substring(value)
-        guard let pid = Int32(pidText), pid > 1 else { return true }
-        if kill(pid, 0) == 0 || errno == EPERM { return true }
-        guard errno == ESRCH else { return true }
-        try? manager.removeItem(atPath: marker.pendingPath)
-        return false
     }
 
     /// Restore the explicit login mode after an app relaunch while Terminal remains
-    /// open. Legacy PID-only markers are standard; opening/unknown markers have no
-    /// recoverable mode yet.
+    /// open. New opening markers include mode; legacy PID-only markers are standard.
     public static func setupHandoffMode(marker: SetupCompletionMarker) -> SetupHandoffMode? {
-        guard let data = FileManager.default.contents(atPath: marker.pendingPath),
-              let value = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        else { return nil }
-        if value.hasPrefix("deviceCode:") { return .deviceCode }
-        if value.hasPrefix("standard:") || Int32(value) != nil { return .standard }
+        switch parseGenerationState(marker: marker) {
+        case .active(let generation):
+            let pending = parsePendingMarker(
+                atPath: generatedPendingPath(marker, generation: generation)
+            )
+            return pending?.generation == generation ? pending?.mode : nil
+        case .cancelled:
+            return nil
+        case nil:
+            if generationStateExists(marker) { return nil }
+            return parsePendingMarker(atPath: marker.pendingPath)?.mode
+        }
+    }
+
+    private static func parsePendingMarker(atPath path: String) -> PendingSetupMarker? {
+        guard let value = markerValue(atPath: path) else { return nil }
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+
+        if value == "opening" {
+            return .opening(purpose: .setup, mode: nil, generation: nil, startedAt: nil)
+        }
+        if parts.count == 2,
+           parts[0] == "opening",
+           let timestamp = markerTimestamp(parts[1]) {
+            return .opening(
+                purpose: .setup,
+                mode: nil,
+                generation: nil,
+                startedAt: Date(timeIntervalSince1970: timestamp)
+            )
+        }
+        if parts.count == 4,
+           parts[0] == "opening",
+           let purpose = SetupHandoffPurpose(rawValue: String(parts[1])),
+           let mode = setupMode(named: parts[2]),
+           let timestamp = markerTimestamp(parts[3]) {
+            return .opening(
+                purpose: purpose,
+                mode: mode,
+                generation: nil,
+                startedAt: Date(timeIntervalSince1970: timestamp)
+            )
+        }
+        if parts.count == 5,
+           parts[0] == "opening",
+           let purpose = SetupHandoffPurpose(rawValue: String(parts[1])),
+           let mode = setupMode(named: parts[2]),
+           let generation = markerGeneration(parts[3]),
+           let timestamp = markerTimestamp(parts[4]) {
+            return .opening(
+                purpose: purpose,
+                mode: mode,
+                generation: generation,
+                startedAt: Date(timeIntervalSince1970: timestamp)
+            )
+        }
+        if parts.count == 1,
+           let pid = markerPID(parts[0]) {
+            return .active(purpose: .setup, mode: .standard, generation: nil, pid: pid)
+        }
+        if parts.count == 2,
+           let mode = setupMode(named: parts[0]),
+           let pid = markerPID(parts[1]) {
+            return .active(purpose: .setup, mode: mode, generation: nil, pid: pid)
+        }
+        if parts.count == 3,
+           let purpose = SetupHandoffPurpose(rawValue: String(parts[0])),
+           let mode = setupMode(named: parts[1]),
+           let pid = markerPID(parts[2]) {
+            return .active(purpose: purpose, mode: mode, generation: nil, pid: pid)
+        }
+        if parts.count == 4,
+           let purpose = SetupHandoffPurpose(rawValue: String(parts[0])),
+           let mode = setupMode(named: parts[1]),
+           let generation = markerGeneration(parts[2]),
+           let pid = markerPID(parts[3]) {
+            return .active(purpose: purpose, mode: mode, generation: generation, pid: pid)
+        }
         return nil
+    }
+
+    private static func parseCompletedMarker(atPath path: String) -> CompletedSetupMarker? {
+        guard let value = markerValue(atPath: path) else { return nil }
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        let purpose: SetupHandoffPurpose
+        let generation: String?
+        let statusText: Substring
+        switch parts.count {
+        case 2 where parts[0] == "complete":
+            purpose = .setup
+            generation = nil
+            statusText = parts[1]
+        case 3 where parts[0] == "complete":
+            guard let parsed = SetupHandoffPurpose(rawValue: String(parts[1])) else { return nil }
+            purpose = parsed
+            generation = nil
+            statusText = parts[2]
+        case 4 where parts[0] == "complete":
+            guard let parsedPurpose = SetupHandoffPurpose(rawValue: String(parts[1])),
+                  let parsedGeneration = markerGeneration(parts[2])
+            else { return nil }
+            purpose = parsedPurpose
+            generation = parsedGeneration
+            statusText = parts[3]
+        default:
+            return nil
+        }
+        guard decimalDigitsOnly(statusText), let status = UInt8(statusText) else { return nil }
+        return CompletedSetupMarker(
+            purpose: purpose,
+            generation: generation,
+            completion: status == 0 ? .succeeded : .failed
+        )
+    }
+
+    private static func parseGenerationState(marker: SetupCompletionMarker) -> SetupGenerationState? {
+        guard let value = markerValue(atPath: generationStatePath(marker)) else { return nil }
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        if parts[0] == "cancelled", parts[1] == "legacy" { return .cancelled("legacy") }
+        guard let generation = markerGeneration(parts[1]) else { return nil }
+        switch parts[0] {
+        case "active": return .active(generation)
+        case "cancelled": return .cancelled(generation)
+        default: return nil
+        }
+    }
+
+    private static func generationStateExists(_ marker: SetupCompletionMarker) -> Bool {
+        FileManager.default.fileExists(atPath: generationStatePath(marker))
+    }
+
+    private static func writeGenerationState(
+        _ state: SetupGenerationState,
+        marker: SetupCompletionMarker
+    ) throws {
+        let kind = switch state {
+        case .active: "active"
+        case .cancelled: "cancelled"
+        }
+        try writeOwnerOnly(
+            "\(kind):\(state.generation)\n",
+            to: URL(fileURLWithPath: generationStatePath(marker))
+        )
+    }
+
+    private static func writeOwnerOnly(_ value: String, to url: URL) throws {
+        try Data(value.utf8).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    static func generationStatePath(_ marker: SetupCompletionMarker) -> String {
+        marker.pendingPath + ".state"
+    }
+
+    static func generatedPendingPath(_ marker: SetupCompletionMarker, generation: String) -> String {
+        precondition(isMarkerGeneration(generation))
+        return marker.pendingPath + "." + generation
+    }
+
+    static func generatedCompletedPath(_ marker: SetupCompletionMarker, generation: String) -> String {
+        precondition(isMarkerGeneration(generation))
+        return marker.completedPath + "." + generation
+    }
+
+    static func setupHandoffGeneration(marker: SetupCompletionMarker) -> String? {
+        guard case .active(let generation) = parseGenerationState(marker: marker) else { return nil }
+        return generation
+    }
+
+    private static func removeGeneratedMarkers(
+        _ marker: SetupCompletionMarker,
+        generation: String
+    ) {
+        guard isMarkerGeneration(generation) else { return }
+        try? FileManager.default.removeItem(
+            atPath: generatedPendingPath(marker, generation: generation)
+        )
+        try? FileManager.default.removeItem(
+            atPath: generatedCompletedPath(marker, generation: generation)
+        )
+    }
+
+    private static func markerValue(atPath path: String) -> String? {
+        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func markerTimestamp(_ value: Substring) -> Double? {
+        let fields = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard (fields.count == 1 || fields.count == 2),
+              fields.allSatisfy({ !$0.isEmpty && decimalDigitsOnly($0) }),
+              let timestamp = Double(value), timestamp.isFinite
+        else { return nil }
+        return timestamp
+    }
+
+    private static func markerPID(_ value: Substring) -> Int32? {
+        guard decimalDigitsOnly(value), let pid = Int32(value), pid > 1 else { return nil }
+        return pid
+    }
+
+    private static func markerGeneration(_ value: Substring) -> String? {
+        let generation = String(value)
+        return isMarkerGeneration(generation) ? generation : nil
+    }
+
+    private static func isMarkerGeneration(_ value: String) -> Bool {
+        value.utf8.count == 32 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
+
+    private static func decimalDigitsOnly(_ value: Substring) -> Bool {
+        !value.isEmpty && value.utf8.allSatisfy { $0 >= 48 && $0 <= 57 }
+    }
+
+    private static func markerName(for mode: SetupHandoffMode) -> String {
+        mode == .deviceCode ? "deviceCode" : "standard"
+    }
+
+    private static func setupMode(named value: Substring) -> SetupHandoffMode? {
+        switch value {
+        case "standard": .standard
+        case "deviceCode": .deviceCode
+        default: nil
+        }
     }
 
     /// Create the account's directories so the CLI handoff and probe never race a

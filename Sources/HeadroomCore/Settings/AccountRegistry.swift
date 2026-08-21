@@ -5,8 +5,9 @@ import Foundation
 /// IDs only; credentials stay in each CLI's own config home, KTD4).
 ///
 /// Invariants the registry maintains:
-/// - Every provider has its built-in `.primary` account, listed first — unless the user
-///   stopped tracking it while extras exist (persisted tombstone, Aug 2026). A provider
+/// - Every provider has its built-in `.primary` account — unless the user stopped
+///   tracking it while extras exist (persisted tombstone, Aug 2026). The user's
+///   persisted primary choice is listed first when it is visible. A provider
 ///   never ends up with zero rows: the tombstone only takes effect alongside at least
 ///   one extra, and removing the last extra clears it.
 /// - At most `maxPerProvider` accounts per provider (UI affordances are designed to 5).
@@ -19,12 +20,13 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
     private let defaults: UserDefaults
     private static let storageKey = "providerAccounts.v1"
     private static let hiddenBuiltInsKey = "hiddenBuiltInAccounts.v1"
+    private static let primaryAccountsKey = "primaryAccounts.v1"
 
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
-    /// Accounts for one provider, built-in first, extras in creation order. The
-    /// built-in account is synthesized when nothing is stored yet, so first launch
-    /// after upgrade needs no migration step.
+    /// Accounts for one provider, with the selected primary first and the remaining
+    /// rows in canonical built-in/creation order. The built-in account is synthesized
+    /// when nothing is stored yet, so first launch after upgrade needs no migration.
     public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
         let stored = load().filter { $0.providerID == providerID }
         // Treat persisted metadata as untrusted input: older builds, manual defaults
@@ -54,10 +56,16 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
                 // torn state — the ordinary read path stays write-free.
                 saveHiddenBuiltIns(hidden.subtracting([providerID]))
             } else {
-                return Array(extras.prefix(Self.maxPerProvider - 1))
+                return applyingPrimarySelection(
+                    to: Array(extras.prefix(Self.maxPerProvider - 1)),
+                    for: providerID
+                )
             }
         }
-        return Array(([builtIn] + extras).prefix(Self.maxPerProvider))
+        return applyingPrimarySelection(
+            to: Array(([builtIn] + extras).prefix(Self.maxPerProvider)),
+            for: providerID
+        )
     }
 
     public func canAddAccount(for providerID: ProviderID) -> Bool {
@@ -101,7 +109,8 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
         return true
     }
 
-    /// Clear the tombstone; the built-in resurfaces first with its persisted label.
+    /// Clear the tombstone; the built-in resurfaces with its persisted label while
+    /// the provider's retained primary selection continues to determine row order.
     @discardableResult
     public func resumeTrackingBuiltIn(for providerID: ProviderID) -> Bool {
         guard isBuiltInHidden(for: providerID) else { return false }
@@ -115,6 +124,18 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
         guard let index = all.firstIndex(where: { $0.key == key }) else { return }
         all[index].label = normalized
         save(all)
+    }
+
+    /// Persist the visible account that compact surfaces should follow. The pointer
+    /// is deliberately retained when its row is later hidden or removed; reads fall
+    /// back without writing and restore the choice if that same row resurfaces.
+    @discardableResult
+    public func promote(_ key: AccountKey) -> Bool {
+        guard accounts(for: key.providerID).contains(where: { $0.key == key }) else { return false }
+        var primary = primaryAccounts()
+        primary[key.providerID] = key.accountID
+        saveJSON(primary, key: Self.primaryAccountsKey)
+        return true
     }
 
     /// Replace the stored catalog wholesale. Fixture/test seeding only — production
@@ -154,6 +175,23 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
 
     private func saveHiddenBuiltIns(_ ids: Set<ProviderID>) {
         saveJSON(ids, key: Self.hiddenBuiltInsKey)
+    }
+
+    private func primaryAccounts() -> [ProviderID: AccountID] {
+        loadJSON([ProviderID: AccountID].self, key: Self.primaryAccountsKey) ?? [:]
+    }
+
+    private func applyingPrimarySelection(
+        to accounts: [ProviderAccount],
+        for providerID: ProviderID
+    ) -> [ProviderAccount] {
+        guard let selectedID = primaryAccounts()[providerID],
+              let selectedIndex = accounts.firstIndex(where: { $0.id == selectedID }),
+              selectedIndex != accounts.startIndex
+        else { return accounts }
+        var reordered = accounts
+        reordered.insert(reordered.remove(at: selectedIndex), at: 0)
+        return reordered
     }
 
     private func loadJSON<T: Decodable>(_ type: T.Type, key: String) -> T? {

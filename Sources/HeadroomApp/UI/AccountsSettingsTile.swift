@@ -15,6 +15,35 @@ func settingsRecoveryActions(
     )
 }
 
+@MainActor
+func settingsStopWaitingAccount(
+    _ account: ProviderAccount,
+    removalState: AccountRemovalState?,
+    setupState: SetupSessionState,
+    hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
+) -> ProviderAccount? {
+    guard hasActiveHandoff(account)
+            || removalState == .setupActive
+            || setupState == .blockedByOpenHandoff
+    else { return nil }
+    return account
+}
+
+func accountLabelFieldValue(
+    for account: ProviderAccount,
+    draft: String?,
+    focusedAccountKey: AccountKey?
+) -> String {
+    focusedAccountKey == account.key ? (draft ?? account.label) : account.label
+}
+
+func acceptsAccountLabelDraftChange(
+    for accountKey: AccountKey,
+    focusedAccountKey: AccountKey?
+) -> Bool {
+    focusedAccountKey == accountKey
+}
+
 /// Settings → Accounts (multi-account, Jul 2026): one tile managing every configured
 /// subscription account. Grouped per provider — brand row with a live "n of 5" count
 /// and an Add button, then one row per account: an editable label, a plain-language
@@ -38,6 +67,7 @@ struct AccountsSettingsTile: View {
     @State private var duplicateLoginLabels: [AccountKey: String] = [:]
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
+    @State private var resetCandidate: ProviderAccount?
     @State private var removalOrigin: AccountKey?
     @State private var removalInProgress: AccountKey?
     @State private var hoveredLabel: AccountKey?
@@ -97,6 +127,23 @@ struct AccountsSettingsTile: View {
             Text(account.isBuiltIn
                  ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
                  : "Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
+        }
+        .confirmationDialog(
+            "Sign out and set up again?",
+            isPresented: resetDialogPresented,
+            titleVisibility: .visible,
+            presenting: resetCandidate
+        ) { account in
+            Button("Sign Out & Set Up Again") {
+                _ = AccountsSettingsInteractions.resetBuiltIn(account, in: store)
+                resetCandidate = nil
+                restoreRemovalFocus()
+            }
+            Button("Cancel", role: .cancel) { restoreRemovalFocus() }
+        } message: { account in
+            let provider = store.displayNames[account.providerID]
+                ?? account.providerID.raw.capitalized
+            Text("Signing in again switches the \(provider) CLI login across this Mac, including Terminal sessions. If you only want Headroom to show another login, add it as a separate account and use Make Main.")
         }
         // Commit a pending rename when the field loses focus — Enter-only commit
         // silently discarded renames while still displaying the draft (code-review
@@ -181,6 +228,9 @@ struct AccountsSettingsTile: View {
             if let capability, !accounts.isEmpty {
                 ProviderCapabilityRecoveryView(
                     presentation: capability,
+                    stopWaitingAccount: accounts.first {
+                        SetupSessions.hasActiveHandoff(for: $0)
+                    },
                     onPrimaryAction: {
                         AccountsSettingsInteractions.performCapabilityRecovery(
                             capability.recovery.primaryAction,
@@ -305,7 +355,11 @@ struct AccountsSettingsTile: View {
                         )
                     }
                 }
-                removalActions(for: account, removalState: removalState)
+                removalActions(
+                    for: account,
+                    removalState: removalState,
+                    setupState: setupState
+                )
             }
             if usesSecondLine {
                 HStack(spacing: 8) {
@@ -447,11 +501,24 @@ struct AccountsSettingsTile: View {
 
     @ViewBuilder private func removalActions(
         for account: ProviderAccount,
-        removalState: AccountRemovalState?
+        removalState: AccountRemovalState?,
+        setupState: SetupSessionState
     ) -> some View {
         // The trash slot is always laid out — hidden (not absent) on built-in rows —
         // so status text shares one right anchor down the whole list (audit P2).
-            if removalState == .failed || removalState == .setupActive {
+            if let stopWaitingAccount = settingsStopWaitingAccount(
+                account,
+                removalState: removalState,
+                setupState: setupState
+            ) {
+                StopWaitingButton(
+                    account: stopWaitingAccount,
+                    onConfirmationPresented: { removalOrigin = stopWaitingAccount.key },
+                    onStop: { AccountsSettingsInteractions.stopWaiting(for: $0, in: store) },
+                    onDismiss: restoreRemovalFocus
+                )
+                .focused($focusedRemovalAction, equals: account.key)
+            } else if removalState == .failed {
                 Button("Retry") {
                     Task { @MainActor in
                         _ = await AccountsSettingsInteractions.removeAccount(account, from: store)
@@ -470,30 +537,100 @@ struct AccountsSettingsTile: View {
                     .controlSize(.small)
                     .accessibilityLabel("Cancel removal of \(account.label)")
             } else {
-                // Built-ins can be stop-tracked (hidden, nothing deleted) once another
-                // account exists; a lone built-in keeps the slot laid out but inert so
-                // a provider can never reach zero rows.
-                let canAct = account.isBuiltIn
-                    ? store.canStopTrackingBuiltInAccount(for: account.providerID)
-                    : true
-                Button {
-                    removalOrigin = account.key
-                    removalCandidate = account
-                } label: {
-                    Image(systemName: account.isBuiltIn ? "minus.circle" : "trash")
-                        .font(.system(size: 11))
-                        .frame(width: 22, height: 22)
+                if account.isBuiltIn {
+                    let builtInActions = AccountsSettingsInteractions.builtInRowActions(for: account, in: store)
+                    let promotion = AccountsSettingsInteractions.promotionState(for: account, in: store)
+                    switch (builtInActions, promotion) {
+                    case (.resetOnly, _):
+                        Button { requestReset(account) } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 11))
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
+                        .foregroundStyle(.secondary)
+                        .help("Sign out and set up this account again")
+                        .accessibilityLabel("Sign out and set up \(account.label) again")
+                        .focused($focusedRemovalAction, equals: account.key)
+                    case (.resetAndStopTracking, .primary):
+                        Menu {
+                            Button("Sign Out & Set Up Again") { requestReset(account) }
+                            Divider()
+                            Button("Stop Tracking") {
+                                removalOrigin = account.key
+                                removalCandidate = account
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 22, height: 22)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Account actions")
+                        .accessibilityLabel("Actions for \(account.label)")
+                        .focused($focusedRemovalAction, equals: account.key)
+                    case (.resetAndStopTracking, .available):
+                        Menu {
+                            Button("Make Main") { makeMain(account) }
+                            Divider()
+                            Button("Sign Out & Set Up Again") { requestReset(account) }
+                            Divider()
+                            Button("Stop Tracking") {
+                                removalOrigin = account.key
+                                removalCandidate = account
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 22, height: 22)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Account actions")
+                        .accessibilityLabel("Actions for \(account.label), including Make Main")
+                        .focused($focusedRemovalAction, equals: account.key)
+                    case (.unavailable, _), (.resetAndStopTracking, .unavailable):
+                        Color.clear
+                            .frame(width: 22, height: 22)
+                            .accessibilityHidden(true)
+                    }
+                } else {
+                    if AccountsSettingsInteractions.promotionState(for: account, in: store) == .available {
+                        Menu {
+                            Button("Make Main") { makeMain(account) }
+                            Divider()
+                            Button("Remove Account") {
+                                removalOrigin = account.key
+                                removalCandidate = account
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 11, weight: .semibold))
+                                .frame(width: 22, height: 22)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("Account actions")
+                        .accessibilityLabel("Actions for \(account.label), including Make Main")
+                        .focused($focusedRemovalAction, equals: account.key)
+                    } else {
+                        Button {
+                            removalOrigin = account.key
+                            removalCandidate = account
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 11))
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
+                        .foregroundStyle(.secondary)
+                        .help("Remove this account")
+                        .accessibilityLabel("Remove \(account.label)")
+                        .disabled(removalState == .removing)
+                        .focused($focusedRemovalAction, equals: account.key)
+                    }
                 }
-                .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
-                .foregroundStyle(.secondary)
-                .help(account.isBuiltIn ? "Stop tracking this account" : "Remove this account")
-                .accessibilityLabel(account.isBuiltIn
-                                    ? "Stop tracking \(account.label)"
-                                    : "Remove \(account.label)")
-                .opacity(canAct ? 1 : 0)
-                .disabled(!canAct || removalState == .removing)
-                .accessibilityHidden(!canAct)
-                .focused($focusedRemovalAction, equals: account.key)
             }
     }
 
@@ -692,8 +829,20 @@ struct AccountsSettingsTile: View {
 
     private func labelBinding(for account: ProviderAccount) -> Binding<String> {
         Binding(
-            get: { labelDrafts[account.key] ?? account.label },
-            set: { labelDrafts[account.key] = $0 }
+            get: {
+                accountLabelFieldValue(
+                    for: account,
+                    draft: labelDrafts[account.key],
+                    focusedAccountKey: focusedLabel
+                )
+            },
+            set: { value in
+                guard acceptsAccountLabelDraftChange(
+                    for: account.key,
+                    focusedAccountKey: focusedLabel
+                ) else { return }
+                labelDrafts[account.key] = value
+            }
         )
     }
 
@@ -715,9 +864,48 @@ struct AccountsSettingsTile: View {
         )
     }
 
+    private var resetDialogPresented: Binding<Bool> {
+        Binding(
+            get: { resetCandidate != nil },
+            set: {
+                if !$0 {
+                    resetCandidate = nil
+                    restoreRemovalFocus()
+                }
+            }
+        )
+    }
+
+    private func requestReset(_ account: ProviderAccount) {
+        removalOrigin = account.key
+        resetCandidate = account
+    }
+
+    private func makeMain(_ account: ProviderAccount) {
+        removalOrigin = account.key
+        var feedback: AccountsSettingsInteractions.PromotionFeedback?
+        withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+            feedback = AccountsSettingsInteractions.makeMain(account, in: store)
+        }
+        guard let feedback else { return }
+        Task { @MainActor in
+            await Task.yield()
+            focusedRemovalAction = feedback.accountKey
+            NSAccessibility.post(
+                element: NSApplication.shared,
+                notification: .announcementRequested,
+                userInfo: [
+                    .announcement: feedback.announcement,
+                    .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ]
+            )
+        }
+    }
+
     private func restoreRemovalFocus() {
         let key = removalOrigin
         removalCandidate = nil
+        resetCandidate = nil
         Task { @MainActor in
             await Task.yield()
             focusedRemovalAction = key

@@ -43,12 +43,15 @@ enum SetupSessions {
     }
 
     private static var coordinator: SetupSessionCoordinator?
+    private static weak var store: UsageStore?
     private static var preparedScripts: [AccountKey: PreparedScript] = [:]
+    private static var activeScripts: [AccountKey: PreparedScript] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var checkNowTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
     private static var capabilityAnnouncementDedupe = CapabilityAnnouncementDedupe()
     private static var claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
+    private static var builtInClaudeWorkspace = ClaudeUsageWorkspace.defaultDirectoryURL
 
     /// The one shared Claude locator, so manual-command surfaces resolve the same
     /// validated absolute executable the probe and setup handoff use (R6).
@@ -61,14 +64,19 @@ enum SetupSessions {
 
     static func configure(
         store: UsageStore,
-        claudeExecutableLocator: any CLIExecutableLocating
+        claudeExecutableLocator: any CLIExecutableLocating,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) {
+        self.store = store
         self.claudeExecutableLocator = claudeExecutableLocator
+        self.builtInClaudeWorkspace = builtInClaudeWorkspace
         let coordinator = SetupSessionCoordinator(
-            prepare: { account, mode in
+            prepare: { account, mode, purpose in
                 await prepareHandoff(
                     for: account,
                     mode: mode,
+                    purpose: purpose,
+                    builtInClaudeWorkspace: builtInClaudeWorkspace,
                     claudeExecutableLocator: claudeExecutableLocator
                 )
             },
@@ -77,25 +85,34 @@ enum SetupSessions {
             accountExists: { key in
                 store.accounts(for: key.providerID).contains(where: { $0.key == key })
             },
-            requestRefresh: { key in store.refreshAccountNow(key) }
+            requestRefresh: { key in store.refreshAccountNow(key) },
+            resetBoundary: { key in store.invalidateUsageForAccountReset(key) }
         )
         self.coordinator = coordinator
         store.attachSetupCoordinator(coordinator)
         for providerID in store.providerOrder {
             for account in store.accounts(for: providerID) {
-                let marker = completionMarker(for: account)
+                let marker = completionMarker(
+                    for: account,
+                    builtInClaudeWorkspace: builtInClaudeWorkspace
+                )
                 if AccountStorage.setupHandoffIsActive(marker: marker) {
                     coordinator.restoreActiveHandoff(
                         account.key,
-                        mode: AccountStorage.setupHandoffMode(marker: marker) ?? .standard
+                        mode: AccountStorage.setupHandoffMode(marker: marker) ?? .standard,
+                        purpose: AccountStorage.setupHandoffPurpose(marker: marker) ?? .setup
                     )
                     monitorCompletion(marker, for: account.key)
                 } else {
                     let completion = AccountStorage.setupHandoffCompletion(marker: marker)
                     if completion != .unknown {
-                        coordinator.handoffDidEnd(account.key, completion: completion)
-                        try? FileManager.default.removeItem(atPath: marker.completedPath)
+                        coordinator.handoffDidEnd(
+                            account.key,
+                            completion: completion,
+                            purpose: AccountStorage.setupHandoffPurpose(marker: marker) ?? .setup
+                        )
                     }
+                    AccountStorage.clearFinishedSetupCompletionMarkers(marker)
                 }
             }
         }
@@ -115,6 +132,10 @@ enum SetupSessions {
         case .cursor: assertionFailure("Cursor setup requires the configured coordinator")
         default: assertionFailure("No setup session registered for \(account.providerID)")
         }
+    }
+
+    static func resetSetup(for account: ProviderAccount) {
+        coordinator?.beginReset(for: account)
     }
 
     /// Execute the action selected by the core recovery table. Keeping this switch at
@@ -300,9 +321,30 @@ enum SetupSessions {
         SetupSessionActivity.shared.set(nil, for: account.key)
     }
 
+    /// Stop waiting for an external CLI handoff without attempting to terminate its
+    /// user-visible Terminal process. Cancellation is tombstoned synchronously before
+    /// the generation's files are removed, so a late wrapper stays ignored on relaunch.
+    static func forceCancel(for account: ProviderAccount) {
+        completionTasks.removeValue(forKey: account.key)?.cancel()
+        let prepared = preparedScripts.removeValue(forKey: account.key)
+            ?? activeScripts.removeValue(forKey: account.key)
+        let marker = prepared?.completionMarker ?? completionMarker(
+            for: account,
+            builtInClaudeWorkspace: builtInClaudeWorkspace
+        )
+        AccountStorage.clearSetupCompletionMarkers(marker)
+        if let prepared {
+            try? FileManager.default.removeItem(at: prepared.scriptURL)
+        }
+        coordinator?.forceCancel(account.key)
+        store?.cancelAccountRemoval(account.key)
+        SetupSessionActivity.shared.set(nil, for: account.key)
+    }
+
     static func prepareHandoff(
         for account: ProviderAccount,
         mode: SetupHandoffMode,
+        purpose: SetupHandoffPurpose = .setup,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
         claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
     ) async -> SetupPreparationResult {
@@ -360,6 +402,7 @@ enum SetupSessions {
                         loginPath: CLIExecutableResolver.resolveLoginPath(fallback: fallback),
                         workspaceDirectory: workspace.path,
                         configDirectory: configuration.claudeConfigDirectory?.path,
+                        purpose: purpose,
                         completionMarker: completionMarker
                     )
                     script = ClaudeSetupCommand.script(for: descriptor)
@@ -423,7 +466,11 @@ enum SetupSessions {
         switch preparation {
         case .success(let preparedScript):
             preparedScripts[account.key] = preparedScript
-            return .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            return .success(PreparedSetupHandoff(
+                accountKey: account.key,
+                mode: mode,
+                purpose: purpose
+            ))
         case .failure(let failure):
             return .failure(failure)
         }
@@ -434,7 +481,11 @@ enum SetupSessions {
             return .failure(.stagingFailed)
         }
         do {
-            try AccountStorage.prepareSetupCompletionMarker(prepared.completionMarker)
+            try AccountStorage.prepareSetupCompletionMarker(
+                prepared.completionMarker,
+                mode: handoff.mode,
+                purpose: handoff.purpose
+            )
         } catch {
             try? FileManager.default.removeItem(at: prepared.scriptURL)
             return .failure(.stagingFailed)
@@ -446,6 +497,7 @@ enum SetupSessions {
                 ? .failure(.terminalRejected)
                 : .failure(.pasteboardFailed)
         }
+        activeScripts[handoff.accountKey] = prepared
         monitorCompletion(prepared.completionMarker, for: handoff.accountKey)
         return .success(())
     }
@@ -481,9 +533,11 @@ enum SetupSessions {
             guard !Task.isCancelled else { return }
             coordinator?.handoffDidEnd(
                 key,
-                completion: AccountStorage.setupHandoffCompletion(marker: marker)
+                completion: AccountStorage.setupHandoffCompletion(marker: marker),
+                purpose: AccountStorage.setupHandoffPurpose(marker: marker)
             )
-            try? FileManager.default.removeItem(atPath: marker.completedPath)
+            AccountStorage.clearFinishedSetupCompletionMarkers(marker)
+            activeScripts.removeValue(forKey: key)
             completionTasks[key] = nil
         }
     }

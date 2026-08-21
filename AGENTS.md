@@ -63,14 +63,23 @@ Codex reads the `auth.json` that official `codex login` wrote under that account
 Codex and Grok offer account-scoped device-code handoffs as well as standard login. Sign-in
 is always a Terminal handoff to the official CLI
 through the account-scoped `SetupSessionCoordinator` — the OAuth
-constraint above applies to every account. The menu bar and widgets follow each
-provider's primary account; the popover shows all accounts at the regular meter scale and
-the card list scrolls past a 640pt cap. Account management lives in
-Settings → Accounts (`AccountsSettingsTile`); removing an **extra** account deletes its
-Headroom-owned config home, while the **built-in** account can only be *stop-tracked*
-(Aug 2026): a persisted registry tombstone hides the row without touching the CLI's own
-config or login, allowed only while another account exists, undone via "Show CLI Account"
-in the provider header. Claude rows signed in to the same upstream login (matched by
+constraint above applies to every account. An abandoned handoff can be force-cancelled with
+**Stop waiting**: Headroom clears its durable markers and releases the coordinator slot, while
+the user remains responsible for closing the still-visible Terminal process. Every visible
+**built-in** row can also **Sign Out & Set Up Again**; that reset targets the CLI's default
+config, so changing its login is machine-wide (including Terminal), and old/mid-handoff usage
+is generation-rejected until a fresh post-handoff capture arrives.
+
+Each provider has a persisted primary selection. **Make Main** reorders the selected row to the
+top, refreshes only it, and immediately reroutes the menu bar, widgets, phone projection,
+capability recovery, and the never-signed-in timer exemption. A dangling primary pointer falls
+back to canonical order without writing defaults and is retained in case the row resurfaces.
+The popover still shows all accounts at the regular meter scale and the card list scrolls past a
+640pt cap. Account management lives in Settings → Accounts (`AccountsSettingsTile`); removing
+an **extra** account deletes its Headroom-owned config home, while the **built-in** account can
+only be *stop-tracked* (Aug 2026): a persisted registry tombstone hides the row without touching
+the CLI's own config or login, allowed only while another account exists, undone via "Show CLI
+Account" in the provider header. Claude rows signed in to the same upstream login (matched by
 `oauthAccount.accountUuid`, metadata only) get a detection-only "Same login as X" badge —
 never auto-merged.
 
@@ -165,6 +174,12 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   through `CLIExecutableResolver` so Finder launches still support Homebrew/NVM/asdf/mise
   installs; never place auth-file contents, provider responses, or caught errors in the
   generated script.
+- **Codex keep-alive is not shipped.** A 2026-08-20 live gate ran official Codex CLI 0.147.0
+  against a real isolated `CODEX_HOME` just over 8 days old with `codex exec --sandbox
+  read-only --skip-git-repo-check --ephemeral`; the command succeeded but `last_refresh` did
+  not advance. Never treat process success as token refresh. Revisit only with an account old
+  enough to clear the CLI's actual threshold and require the auth timestamp to advance before
+  adding warning or scheduler UI; see `BUGS.md`.
 - **ANSI stripping uses ICU escapes (`\x1B`), not Swift's `\u{1B}`** — the latter silently
   fails inside `.regularExpression`.
 - Each Claude poll spawns a full `claude` process (print path ~3–5s including the auth and

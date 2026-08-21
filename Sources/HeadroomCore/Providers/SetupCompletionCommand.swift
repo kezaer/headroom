@@ -6,17 +6,64 @@ enum SetupCompletionCommand {
         marker: SetupCompletionMarker,
         mode: SetupHandoffMode
     ) -> String {
-        let pending = shellQuoted(marker.pendingPath)
-        let completed = shellQuoted(marker.completedPath)
+        let pendingBase = shellQuoted(marker.pendingPath)
+        let completedBase = shellQuoted(marker.completedPath)
+        let generationState = shellQuoted(AccountStorage.generationStatePath(marker))
         let modeName = mode == .deviceCode ? "deviceCode" : "standard"
         return """
         umask 077
         typeset -gr HEADROOM_SETUP_SCRIPT="$0"
-        print -r -- "\(modeName):$$" > \(pending) || exit 73
+        typeset -gr HEADROOM_SETUP_PENDING_BASE=\(pendingBase)
+        typeset -gr HEADROOM_SETUP_COMPLETED_BASE=\(completedBase)
+        typeset -gr HEADROOM_SETUP_GENERATION_STATE=\(generationState)
+        typeset generation_state=""
+        typeset generation_state_kind=""
+        typeset handoff_generation=""
+        typeset generation_state_trailing=""
+        typeset prepared_marker=""
+        typeset marker_kind=""
+        typeset setup_purpose=""
+        typeset marker_mode=""
+        typeset marker_generation=""
+        typeset marker_timestamp=""
+        typeset trailing_field=""
+        IFS= read -r generation_state < "$HEADROOM_SETUP_GENERATION_STATE" 2>/dev/null || exit 73
+        IFS=: read -r generation_state_kind handoff_generation generation_state_trailing <<< "$generation_state"
+        if [[ "$generation_state_kind" != "active"
+              || -n "$generation_state_trailing"
+              || ${#handoff_generation} -ne 32
+              || "$handoff_generation" == *[^0-9a-f]* ]]; then
+          exit 73
+        fi
+        typeset -gr HEADROOM_SETUP_PENDING="${HEADROOM_SETUP_PENDING_BASE}.${handoff_generation}"
+        typeset -gr HEADROOM_SETUP_COMPLETED="${HEADROOM_SETUP_COMPLETED_BASE}.${handoff_generation}"
+        IFS= read -r prepared_marker < "$HEADROOM_SETUP_PENDING" 2>/dev/null || exit 73
+        IFS=: read -r marker_kind setup_purpose marker_mode marker_generation marker_timestamp trailing_field <<< "$prepared_marker"
+        if [[ "$marker_kind" != "opening"
+              || ( "$setup_purpose" != "setup" && "$setup_purpose" != "reset" )
+              || "$marker_mode" != "\(modeName)"
+              || "$marker_generation" != "$handoff_generation"
+              || -n "$trailing_field"
+              || ( "$marker_timestamp" != <-> && "$marker_timestamp" != <->.<-> ) ]]; then
+          exit 73
+        fi
+        typeset -gr HEADROOM_SETUP_OWNER="${setup_purpose}:\(modeName):${handoff_generation}:$$"
+        print -r -- "$HEADROOM_SETUP_OWNER" > "$HEADROOM_SETUP_PENDING" || exit 73
         function headroom_setup_completed {
           typeset setup_status=$?
-          print -r -- "complete:${setup_status}" > \(completed)
-          rm -f -- \(pending)
+          typeset marker_owner=""
+          typeset current_generation_state=""
+          IFS= read -r marker_owner < "$HEADROOM_SETUP_PENDING" 2>/dev/null || true
+          IFS= read -r current_generation_state < "$HEADROOM_SETUP_GENERATION_STATE" 2>/dev/null || true
+          if [[ "$marker_owner" == "$HEADROOM_SETUP_OWNER"
+                && "$current_generation_state" == "active:${handoff_generation}" ]]; then
+            print -r -- "complete:${setup_purpose}:${handoff_generation}:${setup_status}" > "$HEADROOM_SETUP_COMPLETED"
+            IFS= read -r current_generation_state < "$HEADROOM_SETUP_GENERATION_STATE" 2>/dev/null || true
+            if [[ "$current_generation_state" != "active:${handoff_generation}" ]]; then
+              rm -f -- "$HEADROOM_SETUP_COMPLETED"
+            fi
+          fi
+          rm -f -- "$HEADROOM_SETUP_PENDING"
           rm -f -- "$HEADROOM_SETUP_SCRIPT"
         }
         trap headroom_setup_completed EXIT

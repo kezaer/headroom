@@ -76,13 +76,18 @@ import Testing
             pendingPath: accountURL.appendingPathComponent(".headroom-setup-pending").path,
             completedPath: accountURL.appendingPathComponent(".headroom-setup-complete").path
         )
-        try AccountStorage.prepareSetupCompletionMarker(marker)
+        let generation = try AccountStorage.prepareSetupCompletionMarker(marker)
         #expect(AccountStorage.setupHandoffIsActive(marker: marker))
         #expect(throws: (any Error).self) {
             try AccountStorage.removeDirectories(for: account, baseDirectoryURL: root)
         }
 
-        try Data("2147483647\n".utf8).write(to: URL(fileURLWithPath: marker.pendingPath))
+        try Data("setup:standard:\(generation):2147483647\n".utf8).write(
+            to: URL(fileURLWithPath: AccountStorage.generatedPendingPath(
+                marker,
+                generation: generation
+            ))
+        )
         #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
         try AccountStorage.removeDirectories(for: account, baseDirectoryURL: root)
         #expect(!FileManager.default.fileExists(atPath: accountURL.path))
@@ -129,6 +134,35 @@ import Testing
 
         try Data("deviceCode:2147483647\n".utf8).write(to: file)
         #expect(AccountStorage.setupHandoffMode(marker: marker) == .deviceCode)
+        #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
+    }
+
+    @Test func resetPurposeAndModeSurviveTheOpeningGapAndActiveMarker() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-reset-purpose-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let marker = SetupCompletionMarker(
+            pendingPath: directory.appendingPathComponent("pending").path,
+            completedPath: directory.appendingPathComponent("complete").path
+        )
+
+        let generation = try AccountStorage.prepareSetupCompletionMarker(
+            marker,
+            mode: .deviceCode,
+            purpose: .reset
+        )
+
+        #expect(AccountStorage.setupHandoffIsActive(marker: marker))
+        #expect(AccountStorage.setupHandoffMode(marker: marker) == .deviceCode)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .reset)
+
+        try Data("reset:deviceCode:\(generation):2147483647\n".utf8)
+            .write(to: URL(fileURLWithPath: AccountStorage.generatedPendingPath(
+                marker,
+                generation: generation
+            )))
+        #expect(AccountStorage.setupHandoffMode(marker: marker) == .deviceCode)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .reset)
         #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
     }
 
@@ -191,7 +225,92 @@ import Testing
         #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .succeeded)
         try Data("complete:130\n".utf8).write(to: completedURL)
         #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .failed)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .setup)
+        try Data("complete:reset:0\n".utf8).write(to: completedURL)
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .succeeded)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .reset)
+        try Data("complete:unknown:0\n".utf8).write(to: completedURL)
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == nil)
+        try Data("complete:reset:256\n".utf8).write(to: completedURL)
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
+        try Data("complete:reset:+1\n".utf8).write(to: completedURL)
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
         try Data("provider output must not be parsed\n".utf8).write(to: completedURL)
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
+    }
+
+    @Test func forceCancelMarkerCleanupRemovesPendingAndCompletedFilesAndIsIdempotent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-force-cancel-marker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = SetupCompletionMarker(
+            pendingPath: directory.appendingPathComponent("pending").path,
+            completedPath: directory.appendingPathComponent("complete").path
+        )
+        try Data("standard:2147483647\n".utf8).write(to: URL(fileURLWithPath: marker.pendingPath))
+        try Data("complete:0\n".utf8).write(to: URL(fileURLWithPath: marker.completedPath))
+
+        AccountStorage.clearSetupCompletionMarkers(marker)
+        AccountStorage.clearSetupCompletionMarkers(marker)
+
+        #expect(!FileManager.default.fileExists(atPath: marker.pendingPath))
+        #expect(!FileManager.default.fileExists(atPath: marker.completedPath))
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
+        #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
+    }
+
+    @Test func cancelledGenerationCannotOverwriteOrDeleteImmediateSuccessorMarkers() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-force-cancel-wrapper-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = SetupCompletionMarker(
+            pendingPath: directory.appendingPathComponent("pending").path,
+            completedPath: directory.appendingPathComponent("complete").path
+        )
+        let cancelledGeneration = try AccountStorage.prepareSetupCompletionMarker(
+            marker,
+            mode: .standard,
+            purpose: .setup
+        )
+        let acceptedOwner = try String(
+            contentsOfFile: AccountStorage.generatedPendingPath(
+                marker,
+                generation: cancelledGeneration
+            ),
+            encoding: .utf8
+        )
+        #expect(!acceptedOwner.isEmpty)
+
+        AccountStorage.clearSetupCompletionMarkers(marker)
+        let successorGeneration = try AccountStorage.prepareSetupCompletionMarker(
+            marker,
+            mode: .deviceCode,
+            purpose: .reset
+        )
+        #expect(successorGeneration != cancelledGeneration)
+
+        // Model the cancelled wrapper's already-authorized EXIT work. Its unique
+        // generation paths cannot overwrite or remove the successor's markers.
+        try Data("complete:setup:\(cancelledGeneration):0\n".utf8).write(
+            to: URL(fileURLWithPath: AccountStorage.generatedCompletedPath(
+                marker,
+                generation: cancelledGeneration
+            ))
+        )
+        try? FileManager.default.removeItem(
+            atPath: AccountStorage.generatedPendingPath(
+                marker,
+                generation: cancelledGeneration
+            )
+        )
+
+        #expect(AccountStorage.setupHandoffGeneration(marker: marker) == successorGeneration)
+        #expect(AccountStorage.setupHandoffIsActive(marker: marker))
+        #expect(AccountStorage.setupHandoffMode(marker: marker) == .deviceCode)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .reset)
         #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
     }
 }

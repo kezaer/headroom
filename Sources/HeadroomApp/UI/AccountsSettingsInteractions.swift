@@ -53,6 +53,22 @@ struct CapabilityAnnouncementDedupe {
 /// official-CLI handoff, while persistence and cleanup stay owned by `UsageStore`.
 @MainActor
 enum AccountsSettingsInteractions {
+    enum PromotionState: Equatable {
+        case unavailable
+        case primary
+        case available
+    }
+
+    struct PromotionFeedback: Equatable {
+        let accountKey: AccountKey
+        let announcement: String
+    }
+
+    enum BuiltInRowActions: Equatable {
+        case unavailable
+        case resetOnly
+        case resetAndStopTracking
+    }
     struct RecoveryRowActions: Equatable {
         let presentation: ProviderRecoveryPresentation
         let accountLabel: String
@@ -129,6 +145,62 @@ enum AccountsSettingsInteractions {
             : await store.removeAccount(account.key)
     }
 
+    /// Shared Settings/popover action for an abandoned Terminal handoff. The store
+    /// cleanup makes a prior `.setupActive` removal refusal immediately retryable.
+    static func stopWaiting(
+        for account: ProviderAccount,
+        in store: UsageStore,
+        forceCancel: @MainActor (ProviderAccount) -> Void = SetupSessions.forceCancel(for:)
+    ) {
+        forceCancel(account)
+        store.cancelAccountRemoval(account.key)
+    }
+
+    static func builtInRowActions(
+        for account: ProviderAccount,
+        in store: UsageStore
+    ) -> BuiltInRowActions {
+        guard account.isBuiltIn,
+              store.canResetBuiltInAccount(for: account.providerID)
+        else { return .unavailable }
+        return store.canStopTrackingBuiltInAccount(for: account.providerID)
+            ? .resetAndStopTracking
+            : .resetOnly
+    }
+
+    @discardableResult
+    static func resetBuiltIn(
+        _ account: ProviderAccount,
+        in store: UsageStore,
+        beginReset: @MainActor (ProviderAccount) -> Void = SetupSessions.resetSetup(for:)
+    ) -> Bool {
+        guard account.isBuiltIn,
+              store.canResetBuiltInAccount(for: account.providerID)
+        else { return false }
+        beginReset(account)
+        return true
+    }
+
+    static func promotionState(
+        for account: ProviderAccount,
+        in store: UsageStore
+    ) -> PromotionState {
+        if store.primaryAccount(for: account.providerID)?.key == account.key { return .primary }
+        return store.canPromoteAccount(account.key) ? .available : .unavailable
+    }
+
+    @discardableResult
+    static func makeMain(
+        _ account: ProviderAccount,
+        in store: UsageStore
+    ) -> PromotionFeedback? {
+        guard store.promoteAccount(account.key) else { return nil }
+        return PromotionFeedback(
+            accountKey: account.key,
+            announcement: "\(account.label) is now Main"
+        )
+    }
+
     /// Undo for stop-tracking: resurface the CLI's own login and fetch it right away.
     @discardableResult
     static func resumeTrackingBuiltIn(
@@ -141,7 +213,7 @@ enum AccountsSettingsInteractions {
     }
 
     /// Provider capability belongs to the shared executable, so the notice always binds
-    /// its recovery to the built-in/primary account. Check Again's callback consequently
+    /// its recovery to the selected primary account. Check Again's callback consequently
     /// refreshes one account after forced discovery instead of sweeping every configured login.
     @discardableResult
     static func performCapabilityRecovery(

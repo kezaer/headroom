@@ -16,6 +16,19 @@ official `claude` CLI's `/usage` panel instead.
   xAI validated separately. Diagnostic:
   `swift run Headroom --probe-spend <openai|anthropic|xai> [--key-file <path>]`.
 
+## Codex extra-account persistence is blocked on a valid live refresh gate
+
+- **Do not ship the proposed pre-expiry warning or weekly keep-alive yet.** On 2026-08-20,
+  official Codex CLI 0.147.0 ran successfully against a real isolated `CODEX_HOME` whose
+  `last_refresh` was 8.01 days old, from a fresh empty working directory with `--sandbox
+  read-only --skip-git-repo-check --ephemeral` and file credential storage. The command exited
+  0 but did not advance `last_refresh`; it also reported 11,442 tokens for the minimal gate,
+  so the proposed "tiny" weekly cost is not established. The lifecycle-overhaul plan's stop
+  condition therefore blocked U8–U9 rather than shipping a placebo. Retry only with an isolated
+  account comfortably older than the source threshold (at least the plan's 8.25-day example).
+  Success must mean the timestamp advances and polling survives the old expiry; process exit
+  alone is insufficient. If that still fails, abandon `codex exec` as a keep-alive mechanism.
+
 ## Claude CLI probe
 
 - **Resolved upstream on 2026-07-20: the per-model weekly row ("Weekly (Fable)") returned in
@@ -160,33 +173,41 @@ official `claude` CLI's `/usage` panel instead.
   Watch app surface, and real-device QA. Treat it as a follow-up rather than folding it
   into the iPhone companion branch.
 
-- **Orphaned Claude account config homes.** `~/Library/Application Support/Headroom/Accounts/claude/`
+- **Orphaned Claude account config homes (window narrowed 2026-08-20).**
+  `~/Library/Application Support/Headroom/Accounts/claude/`
   holds ~15 UUID dirs (each with `config/` + `workspace/`) but the registry lists only one
   extra Claude account. Likely leftovers from repeated add/remove or demo/test runs that
-  didn't clean up. Investigate why removal/cleanup missed them and whether the app should
-  garbage-collect config homes not present in `providerAccounts.v1`.
+  didn't clean up. Force-cancel now clears both completion markers, discards the prepared
+  script, and PID-guards a late wrapper exit, so an abandoned handoff can no longer resurrect
+  in app state. The official CLI process can still outlive force-cancel and write into its
+  config home until the user closes Terminal; legacy homes also remain. Investigate those two
+  residual sources before garbage-collecting homes absent from `providerAccounts.v1`.
 
 ## Stop-tracking / duplicate-badge review residuals (2026-08-14)
 
 Soft-bucket items from the built-in stop-tracking + duplicate-login-badge review (all 8
 primary findings were applied; these are the demoted coverage/advisory notes):
 
-- **`providerFactory == nil` guard paths untested.** `canStopTrackingBuiltInAccount` /
-  `resumeTrackingBuiltInAccount` / `attachBuiltInProvider` all no-op without a factory —
-  the demo-mode `UsageStore` composition is a real production path that hits this, and no
-  test constructs a factory-less store to prove it degrades to `.notAllowed`/nil.
+- **`providerFactory == nil` guard coverage is partial.** The lifecycle-overhaul interaction
+  tests now construct factory-less demo stores and prove built-in reset and Make Main are inert.
+  `canStopTrackingBuiltInAccount` / `resumeTrackingBuiltInAccount` / `attachBuiltInProvider`
+  still lack a direct factory-less store assertion; keep this narrower residual until those
+  paths explicitly prove `.notAllowed`/nil without changing registry state.
 - **`readAccountUUID()` real file-read path untested.** Detector tests stub the read
   closure; only the pure `ClaudeAccountBlob.accountUUID(in:)` decoder is file-fixture
   tested. Mirror `readAccountEmail()`'s file-backed tests.
-- **`resumeTrackingBuiltIn`'s `refreshAccountNow` side effect is invoked but never
-  asserted** in `AccountsSettingsInteractionTests` — deleting the call would pass silently.
+- **`resumeTrackingBuiltIn`'s `refreshAccountNow` side effect remains unasserted.** Promotion
+  now has targeted-refresh coverage, but `AccountsSettingsInteractionTests` would still pass if
+  the resume helper stopped refreshing. Add a counting provider at the app boundary before
+  closing this residual.
 - **`oauthAccount.accountUuid` decode is speculative** against a live `.claude.json`
   capture (repo convention is to verify JSON shapes against real captures). The
   fail-safe design means a shape change degrades to "no badge", not breakage.
 - **Detector accepts any non-empty `accountUuid` string** without UUID-syntax validation;
   a hand-edited local file can create a false badge (detection-only, so no data risk).
-- **`UsageStore` is ~1,100 lines.** Next growth in account lifecycle should split
-  add/remove/stop-track/resume into their own file.
+- ~~**`UsageStore` account lifecycle needed extraction.**~~ Resolved 2026-08-20:
+  add/remove/stop-track/resume/reset/promotion now live in
+  `UsageStoreAccountLifecycle.swift`; the store retains polling and merge orchestration.
 
 - **Orphaned npm grandchild on discovery timeout (review finding #7, 2026-08-12).**
   `CLIExecutableResolver.runLoginShell` signals only the shell PID on the 5s deadline
