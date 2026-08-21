@@ -43,12 +43,15 @@ enum SetupSessions {
     }
 
     private static var coordinator: SetupSessionCoordinator?
+    private static weak var store: UsageStore?
     private static var preparedScripts: [AccountKey: PreparedScript] = [:]
+    private static var activeScripts: [AccountKey: PreparedScript] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var checkNowTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
     private static var capabilityAnnouncementDedupe = CapabilityAnnouncementDedupe()
     private static var claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
+    private static var builtInClaudeWorkspace = ClaudeUsageWorkspace.defaultDirectoryURL
 
     /// The one shared Claude locator, so manual-command surfaces resolve the same
     /// validated absolute executable the probe and setup handoff use (R6).
@@ -61,14 +64,18 @@ enum SetupSessions {
 
     static func configure(
         store: UsageStore,
-        claudeExecutableLocator: any CLIExecutableLocating
+        claudeExecutableLocator: any CLIExecutableLocating,
+        builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) {
+        self.store = store
         self.claudeExecutableLocator = claudeExecutableLocator
+        self.builtInClaudeWorkspace = builtInClaudeWorkspace
         let coordinator = SetupSessionCoordinator(
             prepare: { account, mode in
                 await prepareHandoff(
                     for: account,
                     mode: mode,
+                    builtInClaudeWorkspace: builtInClaudeWorkspace,
                     claudeExecutableLocator: claudeExecutableLocator
                 )
             },
@@ -83,7 +90,10 @@ enum SetupSessions {
         store.attachSetupCoordinator(coordinator)
         for providerID in store.providerOrder {
             for account in store.accounts(for: providerID) {
-                let marker = completionMarker(for: account)
+                let marker = completionMarker(
+                    for: account,
+                    builtInClaudeWorkspace: builtInClaudeWorkspace
+                )
                 if AccountStorage.setupHandoffIsActive(marker: marker) {
                     coordinator.restoreActiveHandoff(
                         account.key,
@@ -300,6 +310,26 @@ enum SetupSessions {
         SetupSessionActivity.shared.set(nil, for: account.key)
     }
 
+    /// Stop waiting for an external CLI handoff without attempting to terminate its
+    /// user-visible Terminal process. Marker deletion is synchronous so the wrapper's
+    /// PID guard observes the cancellation before it can publish a late completion.
+    static func forceCancel(for account: ProviderAccount) {
+        completionTasks.removeValue(forKey: account.key)?.cancel()
+        let prepared = preparedScripts.removeValue(forKey: account.key)
+            ?? activeScripts.removeValue(forKey: account.key)
+        let marker = prepared?.completionMarker ?? completionMarker(
+            for: account,
+            builtInClaudeWorkspace: builtInClaudeWorkspace
+        )
+        AccountStorage.clearSetupCompletionMarkers(marker)
+        if let prepared {
+            try? FileManager.default.removeItem(at: prepared.scriptURL)
+        }
+        coordinator?.forceCancel(account.key)
+        store?.cancelAccountRemoval(account.key)
+        SetupSessionActivity.shared.set(nil, for: account.key)
+    }
+
     static func prepareHandoff(
         for account: ProviderAccount,
         mode: SetupHandoffMode,
@@ -446,6 +476,7 @@ enum SetupSessions {
                 ? .failure(.terminalRejected)
                 : .failure(.pasteboardFailed)
         }
+        activeScripts[handoff.accountKey] = prepared
         monitorCompletion(prepared.completionMarker, for: handoff.accountKey)
         return .success(())
     }
@@ -484,6 +515,7 @@ enum SetupSessions {
                 completion: AccountStorage.setupHandoffCompletion(marker: marker)
             )
             try? FileManager.default.removeItem(atPath: marker.completedPath)
+            activeScripts.removeValue(forKey: key)
             completionTasks[key] = nil
         }
     }

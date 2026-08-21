@@ -15,9 +15,13 @@ enum SetupCompletionCommand {
         print -r -- "\(modeName):$$" > \(pending) || exit 73
         function headroom_setup_completed {
           typeset setup_status=$?
-          print -r -- "complete:${setup_status}" > \(completed)
-          rm -f -- \(pending)
-          rm -f -- "$HEADROOM_SETUP_SCRIPT"
+          typeset marker_owner=""
+          IFS= read -r marker_owner < \(pending) 2>/dev/null || true
+          if [[ "$marker_owner" == "\(modeName):$$" ]]; then
+            print -r -- "complete:${setup_status}" > \(completed)
+            rm -f -- \(pending)
+            rm -f -- "$HEADROOM_SETUP_SCRIPT"
+          fi
         }
         trap headroom_setup_completed EXIT
         trap 'exit 129' HUP

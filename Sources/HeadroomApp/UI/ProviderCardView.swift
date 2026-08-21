@@ -70,6 +70,9 @@ struct ProviderCardView: View {
     private var hasActiveSetupSession: Bool {
         providerCardHasActiveSetupSession(entries: entries)
     }
+    private var activeSetupAccount: ProviderAccount? {
+        entries.map(\.account).first { SetupSessions.hasActiveHandoff(for: $0) }
+    }
 
     var body: some View {
         Group {
@@ -120,6 +123,7 @@ struct ProviderCardView: View {
             header
             ProviderCapabilityRecoveryView(
                 presentation: presentation,
+                stopWaitingAccount: activeSetupAccount,
                 onPrimaryAction: {
                     performRecovery(
                         presentation.recovery.primaryAction,
@@ -509,6 +513,7 @@ private struct ProviderSetupRecoveryCard: View {
 
 struct ProviderCapabilityRecoveryView: View {
     let presentation: CapabilityRecoveryPresentation
+    var stopWaitingAccount: ProviderAccount? = nil
     let onPrimaryAction: () -> Void
     let onSecondaryAction: (() -> Void)?
 
@@ -532,6 +537,9 @@ struct ProviderCapabilityRecoveryView: View {
                     Button(secondaryLabel, action: onSecondaryAction)
                         .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
                 }
+                if let stopWaitingAccount {
+                    StopWaitingButton(account: stopWaitingAccount)
+                }
             }
             if let refusalMessage {
                 Text(refusalMessage)
@@ -549,6 +557,28 @@ struct ProviderCapabilityRecoveryView: View {
             if case .refused(let message) = presentation.state(for: action) { return message }
         }
         return nil
+    }
+}
+
+struct StopWaitingButton: View {
+    let account: ProviderAccount
+    @State private var isConfirming = false
+
+    var body: some View {
+        Button("Stop waiting") { isConfirming = true }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Stop waiting for setup for \(account.label)")
+            .confirmationDialog(
+                "Stop waiting for setup?",
+                isPresented: $isConfirming,
+                titleVisibility: .visible
+            ) {
+                Button("Stop Waiting") { SetupSessions.forceCancel(for: account) }
+                Button("Keep Waiting", role: .cancel) {}
+            } message: {
+                Text("Headroom stops waiting immediately. The Terminal window may still be open; close it by hand if you no longer need it.")
+            }
     }
 }
 
@@ -721,6 +751,7 @@ private struct AccountSectionView: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
                     Spacer(minLength: 6)
+                    StopWaitingButton(account: account)
                 }
             } else if case .blockedByProviderLogin = setupState {
                 HStack(spacing: 7) {

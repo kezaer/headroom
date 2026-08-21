@@ -129,6 +129,17 @@ enum AccountsSettingsInteractions {
             : await store.removeAccount(account.key)
     }
 
+    /// Shared Settings/popover action for an abandoned Terminal handoff. The store
+    /// cleanup makes a prior `.setupActive` removal refusal immediately retryable.
+    static func stopWaiting(
+        for account: ProviderAccount,
+        in store: UsageStore,
+        forceCancel: @MainActor (ProviderAccount) -> Void = SetupSessions.forceCancel(for:)
+    ) {
+        forceCancel(account)
+        store.cancelAccountRemoval(account.key)
+    }
+
     /// Undo for stop-tracking: resurface the CLI's own login and fetch it right away.
     @discardableResult
     static func resumeTrackingBuiltIn(

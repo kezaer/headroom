@@ -244,6 +244,65 @@ struct AccountsSettingsInteractionTests {
         }
     }
 
+    @Test func stopWaitingClearsSetupActiveRemovalRefusalAndRoutesForceCancel() async {
+        let storage = InteractionStorage(setupHandoffActive: true)
+        let fixture = makeFixture(storage: storage)
+        defer { fixture.cleanup() }
+        let account = try! #require(AccountsSettingsInteractions.addAccount(
+            for: .claude,
+            to: fixture.store,
+            openSetup: { _ in }
+        ))
+        #expect(await fixture.store.removeAccount(account.key) == .setupActive)
+        #expect(fixture.store.accountRemovalStates[account.key] == .setupActive)
+        var cancelled: [AccountKey] = []
+
+        AccountsSettingsInteractions.stopWaiting(
+            for: account,
+            in: fixture.store,
+            forceCancel: { cancelled.append($0.key) }
+        )
+
+        #expect(cancelled == [account.key])
+        #expect(fixture.store.accountRemovalStates[account.key] == nil)
+    }
+
+    @Test func forceCancelClearsDurableMarkersAndRelaunchRestoresNoGhostSession() throws {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let supportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-force-cancel-relaunch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: supportRoot) }
+        let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        let account = ProviderAccount.builtIn(for: .claude)
+        let marker = AccountStorage.setupCompletionMarker(
+            for: account,
+            builtInClaudeWorkspace: workspace
+        )
+        try AccountStorage.prepareSetupCompletionMarker(marker)
+        try Data("complete:1\n".utf8).write(to: URL(fileURLWithPath: marker.completedPath))
+        SetupSessions.configure(
+            store: fixture.store,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true"),
+            builtInClaudeWorkspace: workspace
+        )
+        #expect(SetupSessions.hasActiveHandoff(for: account))
+
+        SetupSessions.forceCancel(for: account)
+
+        #expect(!FileManager.default.fileExists(atPath: marker.pendingPath))
+        #expect(!FileManager.default.fileExists(atPath: marker.completedPath))
+        #expect(!SetupSessions.hasActiveHandoff(for: account))
+
+        SetupSessions.configure(
+            store: fixture.store,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true"),
+            builtInClaudeWorkspace: workspace
+        )
+        #expect(SetupSessions.state(for: account) == .idle)
+        #expect(!SetupSessions.hasActiveHandoff(for: account))
+    }
+
     @Test func checkNowForcesClaudeDiscoveryBeforeRefreshingOnlyTheSelectedAccount() async {
         let fixture = makeFixture()
         defer { fixture.cleanup() }
@@ -556,9 +615,14 @@ private final class InteractionStorage: AccountStorageManaging, @unchecked Senda
     private let lock = NSLock()
     private var removals: [Result<Void, AccountStorageFailure>]
     private var _removedKeys: [AccountKey] = []
+    private let setupHandoffActive: Bool
 
-    init(removals: [Result<Void, AccountStorageFailure>] = []) {
+    init(
+        removals: [Result<Void, AccountStorageFailure>] = [],
+        setupHandoffActive: Bool = false
+    ) {
         self.removals = removals
+        self.setupHandoffActive = setupHandoffActive
     }
 
     var removedKeys: [AccountKey] { lock.withLock { _removedKeys } }
@@ -567,7 +631,7 @@ private final class InteractionStorage: AccountStorageManaging, @unchecked Senda
         .success(())
     }
 
-    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { false }
+    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { setupHandoffActive }
 
     func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
         lock.withLock {

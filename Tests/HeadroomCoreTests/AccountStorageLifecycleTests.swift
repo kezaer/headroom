@@ -194,4 +194,57 @@ import Testing
         try Data("provider output must not be parsed\n".utf8).write(to: completedURL)
         #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .unknown)
     }
+
+    @Test func forceCancelMarkerCleanupRemovesPendingAndCompletedFilesAndIsIdempotent() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-force-cancel-marker-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = SetupCompletionMarker(
+            pendingPath: directory.appendingPathComponent("pending").path,
+            completedPath: directory.appendingPathComponent("complete").path
+        )
+        try Data("standard:2147483647\n".utf8).write(to: URL(fileURLWithPath: marker.pendingPath))
+        try Data("complete:0\n".utf8).write(to: URL(fileURLWithPath: marker.completedPath))
+
+        AccountStorage.clearSetupCompletionMarkers(marker)
+        AccountStorage.clearSetupCompletionMarkers(marker)
+
+        #expect(!FileManager.default.fileExists(atPath: marker.pendingPath))
+        #expect(!FileManager.default.fileExists(atPath: marker.completedPath))
+    }
+
+    @Test func completionWrapperDoesNotOverwriteSuccessorMarkerAfterForceCancel() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-force-cancel-wrapper-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let scriptURL = directory.appendingPathComponent("old.command")
+        let marker = SetupCompletionMarker(
+            pendingPath: directory.appendingPathComponent("pending").path,
+            completedPath: directory.appendingPathComponent("complete").path
+        )
+        let script = SetupCompletionCommand.wrap(
+            "sleep 0.2",
+            marker: marker,
+            mode: .standard
+        )
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [scriptURL.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        for _ in 0..<100 where !FileManager.default.fileExists(atPath: marker.pendingPath) {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+        try Data("standard:2147483647\n".utf8).write(to: URL(fileURLWithPath: marker.pendingPath))
+        process.waitUntilExit()
+
+        #expect(try String(contentsOfFile: marker.pendingPath, encoding: .utf8) == "standard:2147483647\n")
+        #expect(!FileManager.default.fileExists(atPath: marker.completedPath))
+        #expect(FileManager.default.fileExists(atPath: scriptURL.path))
+    }
 }

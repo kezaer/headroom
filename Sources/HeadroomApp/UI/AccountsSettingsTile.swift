@@ -38,6 +38,7 @@ struct AccountsSettingsTile: View {
     @State private var duplicateLoginLabels: [AccountKey: String] = [:]
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
+    @State private var forceCancelCandidate: ProviderAccount?
     @State private var removalOrigin: AccountKey?
     @State private var removalInProgress: AccountKey?
     @State private var hoveredLabel: AccountKey?
@@ -97,6 +98,21 @@ struct AccountsSettingsTile: View {
             Text(account.isBuiltIn
                  ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
                  : "Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
+        }
+        .confirmationDialog(
+            "Stop waiting for setup?",
+            isPresented: forceCancelDialogPresented,
+            titleVisibility: .visible,
+            presenting: forceCancelCandidate
+        ) { account in
+            Button("Stop Waiting") {
+                AccountsSettingsInteractions.stopWaiting(for: account, in: store)
+                forceCancelCandidate = nil
+                restoreRemovalFocus()
+            }
+            Button("Keep Waiting", role: .cancel) { restoreRemovalFocus() }
+        } message: { _ in
+            Text("Headroom stops waiting immediately. The Terminal window may still be open; close it by hand if you no longer need it.")
         }
         // Commit a pending rename when the field loses focus — Enter-only commit
         // silently discarded renames while still displaying the draft (code-review
@@ -181,6 +197,9 @@ struct AccountsSettingsTile: View {
             if let capability, !accounts.isEmpty {
                 ProviderCapabilityRecoveryView(
                     presentation: capability,
+                    stopWaitingAccount: accounts.first {
+                        SetupSessions.hasActiveHandoff(for: $0)
+                    },
                     onPrimaryAction: {
                         AccountsSettingsInteractions.performCapabilityRecovery(
                             capability.recovery.primaryAction,
@@ -305,7 +324,11 @@ struct AccountsSettingsTile: View {
                         )
                     }
                 }
-                removalActions(for: account, removalState: removalState)
+                removalActions(
+                    for: account,
+                    removalState: removalState,
+                    setupState: setupState
+                )
             }
             if usesSecondLine {
                 HStack(spacing: 8) {
@@ -447,11 +470,21 @@ struct AccountsSettingsTile: View {
 
     @ViewBuilder private func removalActions(
         for account: ProviderAccount,
-        removalState: AccountRemovalState?
+        removalState: AccountRemovalState?,
+        setupState: SetupSessionState
     ) -> some View {
         // The trash slot is always laid out — hidden (not absent) on built-in rows —
         // so status text shares one right anchor down the whole list (audit P2).
-            if removalState == .failed || removalState == .setupActive {
+            if removalState == .setupActive || setupState == .blockedByOpenHandoff {
+                Button("Stop waiting") {
+                    removalOrigin = account.key
+                    forceCancelCandidate = account
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Stop waiting for setup for \(account.label)")
+                .focused($focusedRemovalAction, equals: account.key)
+            } else if removalState == .failed {
                 Button("Retry") {
                     Task { @MainActor in
                         _ = await AccountsSettingsInteractions.removeAccount(account, from: store)
@@ -715,9 +748,22 @@ struct AccountsSettingsTile: View {
         )
     }
 
+    private var forceCancelDialogPresented: Binding<Bool> {
+        Binding(
+            get: { forceCancelCandidate != nil },
+            set: {
+                if !$0 {
+                    forceCancelCandidate = nil
+                    restoreRemovalFocus()
+                }
+            }
+        )
+    }
+
     private func restoreRemovalFocus() {
         let key = removalOrigin
         removalCandidate = nil
+        forceCancelCandidate = nil
         Task { @MainActor in
             await Task.yield()
             focusedRemovalAction = key
