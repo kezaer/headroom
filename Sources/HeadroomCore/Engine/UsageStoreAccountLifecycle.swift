@@ -1,0 +1,162 @@
+import Foundation
+
+@MainActor
+extension UsageStore {
+    /// Preset failure for a just-added account so its row appears instantly instead of
+    /// waiting out a full (possibly 20–30s) probe of an account that isn't signed in yet.
+    public nonisolated static let finishSignInMessage = "Finish sign-in to add this account"
+
+    /// Accounts for a provider in display order: built-in first, extras after.
+    public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
+        accountsByProvider[providerID] ?? []
+    }
+
+    /// The account compact surfaces (menu bar, widgets) follow for a provider.
+    public func primaryAccount(for providerID: ProviderID) -> ProviderAccount? {
+        accounts(for: providerID).first
+    }
+
+    public func attachSetupCoordinator(_ coordinator: SetupSessionCoordinator) {
+        setupCoordinator = coordinator
+    }
+
+    public func canAddAccount(for providerID: ProviderID) -> Bool {
+        guard let accountRegistry, providerFactory != nil,
+              accounts(for: providerID).count < accountCapacity(for: providerID)
+        else { return false }
+        return accountRegistry.canAddAccount(for: providerID)
+    }
+
+    public func accountCapacity(for providerID: ProviderID) -> Int {
+        providers.first(where: { $0.id == providerID })?.accountCapacity ?? 1
+    }
+
+    @discardableResult
+    public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
+        guard canAddAccount(for: providerID),
+              let accountRegistry, let providerFactory,
+              let account = accountRegistry.addAccount(for: providerID, label: label)
+        else { return nil }
+        guard case .success = accountStorage.ensureDirectories(for: account) else {
+            accountRegistry.removeAccount(account.key)
+            return nil
+        }
+        providers.append(providerFactory(account))
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        snapshots[account.key] = .stale(
+            for: providerID,
+            reason: .notLoggedIn(Self.finishSignInMessage)
+        )
+        return account
+    }
+
+    public func renameAccount(_ key: AccountKey, to label: String) {
+        guard let accountRegistry else { return }
+        accountRegistry.renameAccount(key, to: label)
+        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+    }
+
+    @discardableResult
+    public func removeAccount(_ key: AccountKey) async -> AccountRemovalResult {
+        guard let accountRegistry,
+              let account = accounts(for: key.providerID).first(where: { $0.key == key }),
+              !account.isBuiltIn
+        else { return .notAllowed }
+        if let blocked = await setupHandoffBlock(for: account) { return blocked }
+        removingAccounts.insert(key)
+        pendingAccountRefreshes.remove(key)
+        accountRemovalStates[key] = .removing
+        setupCoordinator?.markRemoving(key)
+        let removal = await accountStorage.removeDirectories(for: account)
+        guard case .success = removal else {
+            removingAccounts.remove(key)
+            if case .failure(.setupActive) = removal {
+                accountRemovalStates[key] = .setupActive
+                setupCoordinator?.markRemovalFailed(key)
+                return .setupActive
+            }
+            accountRemovalStates[key] = .failed
+            setupCoordinator?.markRemovalFailed(key)
+            return .failed
+        }
+        accountRegistry.removeAccount(key)
+        detachAccount(key)
+        return .removed
+    }
+
+    public func isBuiltInTrackingStopped(for providerID: ProviderID) -> Bool {
+        accountRegistry?.isBuiltInHidden(for: providerID) ?? false
+    }
+
+    public func canStopTrackingBuiltInAccount(for providerID: ProviderID) -> Bool {
+        guard providerFactory != nil else { return false }
+        return accountRegistry?.canStopTrackingBuiltIn(for: providerID) ?? false
+    }
+
+    @discardableResult
+    public func stopTrackingBuiltInAccount(for providerID: ProviderID) async -> AccountRemovalResult {
+        let key = AccountKey(providerID: providerID, accountID: .primary)
+        guard canStopTrackingBuiltInAccount(for: providerID),
+              let accountRegistry,
+              let account = accounts(for: providerID).first(where: { $0.key == key })
+        else { return .notAllowed }
+        if let blocked = await setupHandoffBlock(for: account) { return blocked }
+        guard accountRegistry.stopTrackingBuiltIn(for: providerID) else { return .notAllowed }
+        pendingAccountRefreshes.remove(key)
+        detachAccount(key)
+        return .removed
+    }
+
+    @discardableResult
+    public func resumeTrackingBuiltInAccount(for providerID: ProviderID) -> ProviderAccount? {
+        guard let accountRegistry, providerFactory != nil,
+              accountRegistry.resumeTrackingBuiltIn(for: providerID),
+              let account = accountRegistry.accounts(for: providerID).first(where: { $0.isBuiltIn })
+        else { return nil }
+        attachBuiltInProvider(account)
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+        return account
+    }
+
+    private func setupHandoffBlock(for account: ProviderAccount) async -> AccountRemovalResult? {
+        guard await accountStorage.setupHandoffIsActive(for: account) else { return nil }
+        accountRemovalStates[account.key] = .setupActive
+        return .setupActive
+    }
+
+    func detachAccount(_ key: AccountKey) {
+        attachmentGenerations[key, default: 0] &+= 1
+        providers.removeAll { $0.accountKey == key }
+        snapshots.removeValue(forKey: key)
+        continuityCache?.remove(for: key)
+        accountsByProvider[key.providerID] = accountRegistry?.accounts(for: key.providerID) ?? []
+        reinstateBuiltInIfResurfaced(for: key.providerID)
+        removingAccounts.remove(key)
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.markRemoved(key)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+    }
+
+    private func attachBuiltInProvider(_ account: ProviderAccount) {
+        guard let providerFactory else { return }
+        providers.append(providerFactory(account))
+        snapshots[account.key] = .pending(for: account.providerID)
+        setupCoordinator?.markReinstated(account.key)
+    }
+
+    private func reinstateBuiltInIfResurfaced(for providerID: ProviderID) {
+        guard let builtIn = accounts(for: providerID).first(where: { $0.isBuiltIn }),
+              !providers.contains(where: { $0.accountKey == builtIn.key })
+        else { return }
+        attachBuiltInProvider(builtIn)
+    }
+
+    public func cancelAccountRemoval(_ key: AccountKey) {
+        guard accountRemovalStates[key] == .failed || accountRemovalStates[key] == .setupActive else { return }
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.cancelRemoval(key)
+    }
+}

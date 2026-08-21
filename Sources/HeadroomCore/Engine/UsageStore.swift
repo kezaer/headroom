@@ -90,8 +90,8 @@ public enum AccountRemovalResult: Sendable, Equatable {
 @MainActor
 @Observable
 public final class UsageStore {
-    public private(set) var snapshots: [AccountKey: UsageSnapshot]
-    public private(set) var accountsByProvider: [ProviderID: [ProviderAccount]]
+    public internal(set) var snapshots: [AccountKey: UsageSnapshot]
+    public internal(set) var accountsByProvider: [ProviderID: [ProviderAccount]]
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
@@ -101,7 +101,7 @@ public final class UsageStore {
     public private(set) var showCodexSparkCountersInWidgets: Bool
     public private(set) var enabledSurfaces: Set<UsageSurface>
     public private(set) var providerCapabilities: [ProviderID: ProviderCapabilityStatus]
-    public private(set) var accountRemovalStates: [AccountKey: AccountRemovalState] = [:]
+    public internal(set) var accountRemovalStates: [AccountKey: AccountRemovalState] = [:]
     public let displayNames: [ProviderID: String]
     public let apiSpendDisplayNames: [ProviderID: String]
 
@@ -111,31 +111,31 @@ public final class UsageStore {
     /// coalesces overlapping triggers into one cycle.
     public private(set) var isRefreshing = false
 
-    private var providers: [any UsageProvider]
+    var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
     private let preferences: Preferences
-    private let accountRegistry: AccountRegistry?
-    private let accountStorage: any AccountStorageManaging
-    private let continuityCache: (any UsageContinuityCaching)?
+    let accountRegistry: AccountRegistry?
+    let accountStorage: any AccountStorageManaging
+    let continuityCache: (any UsageContinuityCaching)?
     private let now: @Sendable () -> Date
     /// Counts timer-driven cycles for the not-signed-in poll backoff.
     private var timerCycleCount = 0
     /// Builds the concrete provider for a newly added account. Lives in the composition
     /// root (R13) and is injected so the store never names concrete provider types.
-    private let providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)?
-    private let widgetExporter: (any WidgetSnapshotExporting)?
-    private let phoneSyncExporter: (any WidgetSnapshotExporting)?
+    let providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)?
+    let widgetExporter: (any WidgetSnapshotExporting)?
+    let phoneSyncExporter: (any WidgetSnapshotExporting)?
     private var engine: PollingEngine?
     private var isStarting = false
-    @ObservationIgnored private var pendingAccountRefreshes: Set<AccountKey> = []
-    @ObservationIgnored private var removingAccounts: Set<AccountKey> = []
+    @ObservationIgnored var pendingAccountRefreshes: Set<AccountKey> = []
+    @ObservationIgnored var removingAccounts: Set<AccountKey> = []
     @ObservationIgnored private var capabilityGenerations: [ProviderID: UInt64] = [:]
     /// Per-key attach/detach epoch. A fetch result is only merged when the attachment
     /// it started against is still current; a stop-track/remove bumps the epoch so a
     /// late pre-detach result can't overwrite a reattached row's fresh pending state
     /// or repopulate the continuity cache the detach cleared (code-review finding).
-    @ObservationIgnored private var attachmentGenerations: [AccountKey: UInt64] = [:]
-    @ObservationIgnored private var setupCoordinator: SetupSessionCoordinator?
+    @ObservationIgnored var attachmentGenerations: [AccountKey: UInt64] = [:]
+    @ObservationIgnored var setupCoordinator: SetupSessionCoordinator?
     /// Provider-ID order fixed at composition time. Account add/detach mutates the
     /// instance array at arbitrary positions, so deriving group order from instance
     /// order would demote a provider whose built-in was stop-tracked (code-review
@@ -280,201 +280,6 @@ public final class UsageStore {
 
     public var registeredAPISpendProviderOrder: [ProviderID] {
         apiSpendProviders.map(\.id).uniqued()
-    }
-
-    // MARK: - Accounts
-
-    /// Accounts for a provider in display order: built-in first, extras after.
-    public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
-        accountsByProvider[providerID] ?? []
-    }
-
-    /// The account compact surfaces (menu bar, widgets) follow for a provider.
-    public func primaryAccount(for providerID: ProviderID) -> ProviderAccount? {
-        accounts(for: providerID).first
-    }
-
-    public func attachSetupCoordinator(_ coordinator: SetupSessionCoordinator) {
-        setupCoordinator = coordinator
-    }
-
-    public func canAddAccount(for providerID: ProviderID) -> Bool {
-        // Delegate the cap rule to the registry — one source of truth for the same
-        // gate `addAccount` enforces (code-review finding).
-        guard let accountRegistry, providerFactory != nil,
-              accounts(for: providerID).count < accountCapacity(for: providerID)
-        else { return false }
-        return accountRegistry.canAddAccount(for: providerID)
-    }
-
-    public func accountCapacity(for providerID: ProviderID) -> Int {
-        providers.first(where: { $0.id == providerID })?.accountCapacity ?? 1
-    }
-
-    /// Create a new account: registry entry, on-disk config home, provider instance,
-    /// and an immediate "finish sign-in" snapshot so the UI reflects it without waiting
-    /// for a poll. Returns nil at the per-provider cap.
-    @discardableResult
-    public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
-        guard canAddAccount(for: providerID),
-              let accountRegistry, let providerFactory,
-              let account = accountRegistry.addAccount(for: providerID, label: label)
-        else { return nil }
-        guard case .success = accountStorage.ensureDirectories(for: account) else {
-            accountRegistry.removeAccount(account.key)
-            return nil
-        }
-        providers.append(providerFactory(account))
-        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
-        snapshots[account.key] = .stale(
-            for: providerID,
-            reason: .notLoggedIn(Self.finishSignInMessage)
-        )
-        return account
-    }
-
-    /// Preset failure for a just-added account so its row appears instantly instead of
-    /// waiting out a full (possibly 20–30s) probe of an account that isn't signed in yet.
-    // `nonisolated`: an immutable Sendable constant with no isolation needs, so the shared
-    // demo fixtures (`DemoFixture.multiFixture`, demo mode Jul 2026) can reference it off the
-    // main actor without pulling the whole builder onto `@MainActor`.
-    public nonisolated static let finishSignInMessage = "Finish sign-in to add this account"
-
-    public func renameAccount(_ key: AccountKey, to label: String) {
-        guard let accountRegistry else { return }
-        accountRegistry.renameAccount(key, to: label)
-        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
-    }
-
-    /// Remove an extra account: registry entry, provider instance, snapshot, and its
-    /// on-disk config home (the account's CLI session with it). Built-ins are kept —
-    /// they are the user's own CLI login; hide the provider via its surface instead.
-    @discardableResult
-    public func removeAccount(_ key: AccountKey) async -> AccountRemovalResult {
-        guard let accountRegistry,
-              let account = accounts(for: key.providerID).first(where: { $0.key == key }),
-              !account.isBuiltIn
-        else { return .notAllowed }
-        if let blocked = await setupHandoffBlock(for: account) { return blocked }
-        removingAccounts.insert(key)
-        pendingAccountRefreshes.remove(key)
-        accountRemovalStates[key] = .removing
-        setupCoordinator?.markRemoving(key)
-        let removal = await accountStorage.removeDirectories(for: account)
-        guard case .success = removal else {
-            removingAccounts.remove(key)
-            if case .failure(.setupActive) = removal {
-                accountRemovalStates[key] = .setupActive
-                setupCoordinator?.markRemovalFailed(key)
-                return .setupActive
-            }
-            accountRemovalStates[key] = .failed
-            setupCoordinator?.markRemovalFailed(key)
-            return .failed
-        }
-        accountRegistry.removeAccount(key)
-        detachAccount(key)
-        return .removed
-    }
-
-    // MARK: - Built-in tracking (stop/resume)
-
-    public func isBuiltInTrackingStopped(for providerID: ProviderID) -> Bool {
-        accountRegistry?.isBuiltInHidden(for: providerID) ?? false
-    }
-
-    public func canStopTrackingBuiltInAccount(for providerID: ProviderID) -> Bool {
-        guard providerFactory != nil else { return false } // resume needs the factory
-        return accountRegistry?.canStopTrackingBuiltIn(for: providerID) ?? false
-    }
-
-    /// Stop showing the provider's built-in account: registry tombstone plus in-memory
-    /// detach only. Unlike `removeAccount`, nothing on disk is touched — the built-in's
-    /// config home *is* the user's own CLI login (`~/.claude`, `~/.codex`, …), which
-    /// Headroom must never delete or sign out.
-    @discardableResult
-    public func stopTrackingBuiltInAccount(for providerID: ProviderID) async -> AccountRemovalResult {
-        let key = AccountKey(providerID: providerID, accountID: .primary)
-        guard canStopTrackingBuiltInAccount(for: providerID),
-              let accountRegistry,
-              let account = accounts(for: providerID).first(where: { $0.key == key })
-        else { return .notAllowed }
-        if let blocked = await setupHandoffBlock(for: account) { return blocked }
-        guard accountRegistry.stopTrackingBuiltIn(for: providerID) else { return .notAllowed }
-        pendingAccountRefreshes.remove(key)
-        detachAccount(key)
-        return .removed
-    }
-
-    /// Bring a stop-tracked built-in back into the tracked list. Leaves the follow-up
-    /// refresh to the caller (mirrors `addAccount`), so the pending row is deterministic.
-    @discardableResult
-    public func resumeTrackingBuiltInAccount(for providerID: ProviderID) -> ProviderAccount? {
-        guard let accountRegistry, providerFactory != nil,
-              accountRegistry.resumeTrackingBuiltIn(for: providerID),
-              let account = accountRegistry.accounts(for: providerID).first(where: { $0.isBuiltIn })
-        else { return nil }
-        attachBuiltInProvider(account)
-        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
-        return account
-    }
-
-    /// Both removal flavors refuse while the account's official-CLI sign-in handoff
-    /// is still open in Terminal.
-    private func setupHandoffBlock(for account: ProviderAccount) async -> AccountRemovalResult? {
-        guard await accountStorage.setupHandoffIsActive(for: account) else { return nil }
-        accountRemovalStates[account.key] = .setupActive
-        return .setupActive
-    }
-
-    /// Shared in-memory detach once the registry no longer lists `key`: provider
-    /// instance, snapshot, continuity record, row list, removal bookkeeping, and the
-    /// compact-surface exports. Also reinstates a tombstoned built-in whose removal
-    /// of the last extra just cleared its tombstone (no-op in every other case).
-    private func detachAccount(_ key: AccountKey) {
-        // Invalidate in-flight fetches captured against the detached instance; the
-        // built-in's `.primary` key is reused on resume, so registry membership alone
-        // can't reject a late pre-detach result.
-        attachmentGenerations[key, default: 0] &+= 1
-        providers.removeAll { $0.accountKey == key }
-        snapshots.removeValue(forKey: key)
-        continuityCache?.remove(for: key)
-        accountsByProvider[key.providerID] = accountRegistry?.accounts(for: key.providerID) ?? []
-        reinstateBuiltInIfResurfaced(for: key.providerID)
-        removingAccounts.remove(key)
-        accountRemovalStates.removeValue(forKey: key)
-        setupCoordinator?.markRemoved(key)
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
-    }
-
-    /// Recreate a built-in account's provider instance with a fresh pending row.
-    private func attachBuiltInProvider(_ account: ProviderAccount) {
-        guard let providerFactory else { return }
-        providers.append(providerFactory(account))
-        snapshots[account.key] = .pending(for: account.providerID)
-        // The reused `.primary` key must leave the coordinator's `.removed` sentinel,
-        // or the resurfaced row's Sign In / guided setup silently no-ops (code-review
-        // finding). Covers both the resume path and the last-extra-removal reinstate.
-        setupCoordinator?.markReinstated(account.key)
-    }
-
-    /// Removing the last extra clears the provider's tombstone in the registry; the
-    /// store must then recreate the built-in's provider instance so the resurfaced
-    /// row actually polls again.
-    private func reinstateBuiltInIfResurfaced(for providerID: ProviderID) {
-        guard let builtIn = accounts(for: providerID).first(where: { $0.isBuiltIn }),
-              !providers.contains(where: { $0.accountKey == builtIn.key })
-        else { return }
-        attachBuiltInProvider(builtIn)
-    }
-
-    public func cancelAccountRemoval(_ key: AccountKey) {
-        guard accountRemovalStates[key] == .failed || accountRemovalStates[key] == .setupActive else { return }
-        accountRemovalStates.removeValue(forKey: key)
-        setupCoordinator?.cancelRemoval(key)
     }
 
     /// Begin polling: an immediate refresh, then the interval loop. Idempotent — a
@@ -984,12 +789,12 @@ public final class UsageStore {
         )
     }
 
-    private func exportWidgetSnapshot(generatedAt: Date = .now) {
+    func exportWidgetSnapshot(generatedAt: Date = .now) {
         guard let widgetExporter else { return }
         widgetExporter.export(widgetSnapshot(widgetsEnabled: preferences.widgetsEnabled, generatedAt: generatedAt))
     }
 
-    private func exportPhoneSyncSnapshot(generatedAt: Date = .now) {
+    func exportPhoneSyncSnapshot(generatedAt: Date = .now) {
         guard let phoneSyncExporter else { return }
         phoneSyncExporter.export(widgetSnapshot(widgetsEnabled: preferences.syncToIPhoneEnabled, generatedAt: generatedAt))
     }
