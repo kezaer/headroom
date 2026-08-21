@@ -632,7 +632,7 @@ private struct AccountSectionView: View {
     let providerDisplayName: String
     let percentageMode: UsagePercentageMode
     let now: Date
-    /// H3a: the built-in `.primary` account (`entries.first`) is the one the menu bar and
+    /// H3a: the selected primary account (`entries.first`) is the one the menu bar and
     /// widgets follow; its band carries a "menubar.rectangle" mark so the popover explains
     /// which login drives the always-visible glyph.
     let isMenuBarAccount: Bool

@@ -213,7 +213,7 @@ enum AccountsSettingsInteractions {
     }
 
     /// Provider capability belongs to the shared executable, so the notice always binds
-    /// its recovery to the built-in/primary account. Check Again's callback consequently
+    /// its recovery to the selected primary account. Check Again's callback consequently
     /// refreshes one account after forced discovery instead of sweeping every configured login.
     @discardableResult
     static func performCapabilityRecovery(

@@ -85,8 +85,8 @@ public enum AccountRemovalResult: Sendable, Equatable {
 ///
 /// Multi-account (Jul 2026): snapshots are keyed by `AccountKey` — one provider can
 /// carry up to `AccountRegistry.maxPerProvider` signed-in accounts. The menu bar and
-/// widgets follow each provider's *primary* (built-in) account so those compact
-/// surfaces keep meaning one thing; the popover shows every account.
+/// widgets follow each provider's selected primary account so those compact surfaces
+/// keep meaning one thing; the popover shows every account.
 @MainActor
 @Observable
 public final class UsageStore {
