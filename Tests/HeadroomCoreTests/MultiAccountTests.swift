@@ -378,6 +378,51 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(registry.accounts(for: .codex).first?.id == .primary)
     }
 
+    @Test func promotedPrimaryIsFirstAndPersistsAcrossRegistryRecreation() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+
+        #expect(registry.promote(extra.key))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id, .primary])
+        #expect(AccountRegistry(defaults: defaults).accounts(for: .claude).map(\.id) == [extra.id, .primary])
+    }
+
+    @Test func danglingPrimaryPointerFallsBackWithoutWritingDefaults() throws {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        let survivor = registry.addAccount(for: .claude)!
+        #expect(registry.promote(extra.key))
+        registry.removeAccount(extra.key)
+        let before = try #require(defaults.data(forKey: "primaryAccounts.v1"))
+
+        #expect(registry.accounts(for: .claude).map(\.id) == [.primary, survivor.id])
+        #expect(defaults.data(forKey: "primaryAccounts.v1") == before)
+    }
+
+    @Test func promotedExtraStaysPrimaryAcrossBuiltInStopAndResume() {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.promote(extra.key))
+
+        #expect(registry.stopTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id])
+        #expect(registry.resumeTrackingBuiltIn(for: .claude))
+        #expect(registry.accounts(for: .claude).map(\.id) == [extra.id, .primary])
+    }
+
+    @Test func primaryPointerDoesNotChangeCapacityAndCannotPromoteUnknownAccount() throws {
+        let registry = AccountRegistry(defaults: freshDefaults())
+        var last: ProviderAccount?
+        for _ in 0..<4 { last = registry.addAccount(for: .claude) }
+        let promoted = try #require(last)
+
+        #expect(registry.promote(promoted.key))
+        #expect(!registry.canAddAccount(for: .claude))
+        #expect(!registry.promote(AccountKey(providerID: .claude, accountID: AccountID("missing"))))
+    }
+
     @Test func storageComponentsCannotTraverseOutOfAccountRoot() {
         #expect(AccountStorage.safePathComponent("../victim") == "%2E%2E%2Fvictim")
         #expect(AccountStorage.safePathComponent("normal-id_1") == "normal-id_1")
