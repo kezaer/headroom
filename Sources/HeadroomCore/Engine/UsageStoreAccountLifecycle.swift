@@ -6,7 +6,7 @@ extension UsageStore {
     /// waiting out a full (possibly 20–30s) probe of an account that isn't signed in yet.
     public nonisolated static let finishSignInMessage = "Finish sign-in to add this account"
 
-    /// Accounts for a provider in display order: built-in first, extras after.
+    /// Accounts for a provider in display order, with its selected primary first.
     public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
         accountsByProvider[providerID] ?? []
     }

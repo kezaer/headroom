@@ -238,11 +238,10 @@ public final class UsageStore {
             } else {
                 known = []
             }
-            var seenInstanceIDs = Set<AccountID>()
             let instanceIDs = providers
                 .filter { $0.id == id }
                 .map(\.accountID)
-                .filter { seenInstanceIDs.insert($0).inserted }
+                .uniqued()
             let instanceIDSet = Set(instanceIDs)
             let orderedKnown = known.filter { instanceIDSet.contains($0.id) }
             let knownIDs = Set(orderedKnown.map(\.id))
@@ -959,11 +958,10 @@ public final class UsageStore {
 
 }
 
-private extension Array where Element == ProviderID {
-    /// Order-preserving de-dupe: multiple accounts of one provider collapse to one
-    /// entry wherever the UI iterates providers.
-    func uniqued() -> [ProviderID] {
-        var seen = Set<ProviderID>()
+private extension Array where Element: Hashable {
+    /// Order-preserving de-dupe for provider and account identity lists.
+    func uniqued() -> [Element] {
+        var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
     }
 }
