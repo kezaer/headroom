@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source Scripts/macos-compatibility.sh
+source Scripts/sparkle-release-notes.sh
 
 APP="Headroom.app"
 WIDGET_APPEX="${APP}/Contents/PlugIns/HeadroomWidgets.appex"
@@ -13,6 +14,7 @@ ARCHIVE_PATH="${WORK_DIR}/Headroom.xcarchive"
 EXPORT_DIR="${WORK_DIR}/export"
 EXPORT_OPTIONS_PLIST="${WORK_DIR}/ExportOptions-DeveloperID.plist"
 DEFAULT_SPARKLE_UPDATES_DIR="${DIST_DIR}/headroom.zantos.co"
+SPARKLE_RELEASE_NOTES_DIR="docs/release/sparkle"
 LATEST_DMG_NAME="Headroom.dmg"
 LATEST_JSON_NAME="latest.json"
 SPARKLE_VERSION="2.9.4"
@@ -38,6 +40,7 @@ Usage: ./Scripts/release-app.sh
 
 Required:
   - A Developer ID Application certificate installed in Keychain.
+  - Versioned release notes at docs/release/sparkle/Headroom-<version>-<build>.html.
   - Notary credentials, provided either as:
       HEADROOM_NOTARY_PROFILE=<keychain-profile>
     or:
@@ -332,47 +335,17 @@ write_minimal_appcast() {
     exit 65
   fi
 
-  cat > "${appcast_path}" <<EOF
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>Headroom Updates</title>
-    <link>${HEADROOM_SPARKLE_FEED_URL}</link>
-    <description>Headroom release feed</description>
-    <item>
-      <title>Headroom ${VERSION}</title>
-      <pubDate>${pub_date}</pubDate>
-      <sparkle:version>${BUILD}</sparkle:version>
-      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>${sparkle_minimum}</sparkle:minimumSystemVersion>
-      <enclosure url="${download_url}" sparkle:edSignature="${ed_signature}" length="${archive_length}" type="application/octet-stream" />
-    </item>
-  </channel>
-</rss>
-EOF
-}
-
-run_generate_appcast_with_timeout() {
-  local pid
-  local elapsed=0
-  local timeout_seconds=120
-
-  "${SPARKLE_GENERATE_APPCAST}" \
-    --download-url-prefix "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" \
-    "${HEADROOM_SPARKLE_UPDATES_DIR}" &
-  pid="$!"
-
-  while kill -0 "${pid}" 2>/dev/null; do
-    if (( elapsed >= timeout_seconds )); then
-      kill -TERM "${pid}" 2>/dev/null || true
-      wait "${pid}" 2>/dev/null || true
-      return 124
-    fi
-    sleep 2
-    elapsed=$((elapsed + 2))
-  done
-
-  wait "${pid}"
+  headroom_write_minimal_sparkle_appcast \
+    "${appcast_path}" \
+    "${HEADROOM_SPARKLE_FEED_URL}" \
+    "${VERSION}" \
+    "${BUILD}" \
+    "${pub_date}" \
+    "${sparkle_minimum}" \
+    "${download_url}" \
+    "${ed_signature}" \
+    "${archive_length}" \
+    "${RELEASE_NOTES_URL}"
 }
 
 write_sha256_file() {
@@ -508,6 +481,7 @@ fi
 if [[ -z "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" ]]; then
   HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX="${HEADROOM_SPARKLE_FEED_URL%/*}/"
 fi
+headroom_validate_sparkle_url_prefix "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}"
 
 notary_args=()
 if [[ "${HEADROOM_RELEASE_BUILD_ONLY}" == "1" ]]; then
@@ -544,12 +518,23 @@ fi
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${APP}/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${APP}/Contents/Info.plist")"
 DMG_NAME="Headroom-${VERSION}-${BUILD}.dmg"
+RELEASE_NOTES_NAME="$(headroom_sparkle_release_notes_filename "${VERSION}" "${BUILD}")"
+RELEASE_NOTES_URL="${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}${RELEASE_NOTES_NAME}"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
 DMG_RW_PATH="${WORK_DIR}/Headroom-${VERSION}-${BUILD}-rw.dmg"
 DMG_MOUNT_DIR="${WORK_DIR}/dmg-mount"
 STAGING_DIR="${WORK_DIR}/dmg-root"
 
 mkdir -p "${WORK_DIR}" "${STAGING_DIR}" "${DIST_DIR}"
+
+if [[ -n "${HEADROOM_SPARKLE_UPDATES_DIR}" ]]; then
+  echo "→ validating Sparkle release notes"
+  headroom_stage_sparkle_release_notes \
+    "${VERSION}" \
+    "${BUILD}" \
+    "${SPARKLE_RELEASE_NOTES_DIR}" \
+    "${HEADROOM_SPARKLE_UPDATES_DIR}"
+fi
 
 echo "→ creating app notarization archive"
 ditto -c -k --keepParent "${APP}" "${APP_ZIP}"
@@ -591,14 +576,30 @@ if [[ -n "${HEADROOM_SPARKLE_UPDATES_DIR}" ]]; then
   mkdir -p "${HEADROOM_SPARKLE_UPDATES_DIR}"
   rm -f "${LATEST_DMG_PATH}"
   ditto "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${DMG_NAME}"
-  if ! run_generate_appcast_with_timeout; then
+  generate_appcast_status=0
+  headroom_generate_appcast_with_timeout \
+    "${SPARKLE_GENERATE_APPCAST}" \
+    "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" \
+    "${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}" \
+    "${HEADROOM_SPARKLE_UPDATES_DIR}" \
+    "120" || generate_appcast_status="$?"
+  if (( generate_appcast_status == 124 )); then
     echo "→ Sparkle generate_appcast timed out; writing minimal signed appcast"
     write_minimal_appcast
+  elif (( generate_appcast_status != 0 )); then
+    echo "Sparkle generate_appcast failed with status ${generate_appcast_status}; refusing to replace the feed." >&2
+    exit "${generate_appcast_status}"
   fi
   headroom_verify_appcast_minimum \
     "${HEADROOM_SPARKLE_UPDATES_DIR}/appcast.xml" \
     "${APP}" \
     "${BUILD}"
+  headroom_verify_appcast_release_notes \
+    "${HEADROOM_SPARKLE_UPDATES_DIR}/appcast.xml" \
+    "${HEADROOM_SPARKLE_UPDATES_DIR}" \
+    "${BUILD}" \
+    "${RELEASE_NOTES_NAME}" \
+    "${RELEASE_NOTES_URL}"
   ditto "${DMG_PATH}" "${LATEST_DMG_PATH}"
   write_sha256_file "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${DMG_NAME}.sha256"
   write_sha256_file "${DMG_PATH}" "${HEADROOM_SPARKLE_UPDATES_DIR}/${LATEST_DMG_NAME}.sha256"

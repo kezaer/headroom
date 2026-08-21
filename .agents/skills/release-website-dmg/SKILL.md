@@ -41,23 +41,26 @@ each platform runbook as a separate release lane. Report their states separately
 ## Required release sequence
 
 1. Identify the target marketing version and monotonically increasing build. Update the version
-   fields together in `project.yml`, run `xcodegen generate` and `swift test`, and merge the
-   release bump to `main` before generating public artifacts.
+   fields together in `project.yml`, add the required non-empty
+   `docs/release/sparkle/Headroom-<version>-<build>.html`, run `xcodegen generate` and
+   `swift test` plus `bash Tests/ReleaseScripts/sparkle-release-notes-tests.sh`, and merge the
+   release bump and notes to `main` before generating public artifacts.
 2. Seed `dist/headroom.zantos.co` from the current `kz-portfolio/public` using the runbook's
    non-destructive staging step. This retains the current appcast history so Sparkle can produce
    deltas; the latest full versioned DMG remains the fallback for all older installations.
 3. Run `HEADROOM_NOTARY_PROFILE=headroom-notary ./Scripts/release-app.sh`. Do not echo,
    inspect, or commit credentials, signing keys, auth files, or generated secret values.
-4. Validate notarization, Gatekeeper, checksums, `latest.json`, and every appcast enclosure
-   before copying release outputs. Confirm the app has `SUFeedURL`, `SUPublicEDKey`, and the
-   new `CFBundleVersion` stamped.
+4. Validate notarization, Gatekeeper, checksums, `latest.json`, every appcast enclosure, and the
+   target build's versioned release-note link and staged HTML before copying release outputs.
+   Confirm the app has `SUFeedURL`, `SUPublicEDKey`, and the new `CFBundleVersion` stamped.
 5. Create a normal branch and PR in `kz-portfolio`; copy the versioned DMG and checksum, stable
-   DMG and checksum, `appcast.xml`, `latest.json`, and every delta referenced by the new feed.
-   Preserve every existing versioned asset. Build, preview, merge, then use the portfolio's
-   documented `pnpm ship` path.
+   DMG and checksum, versioned release-note HTML, `appcast.xml`, `latest.json`, and every delta
+   referenced by the new feed. Preserve every existing versioned asset. Build, preview, merge,
+   then use the portfolio's documented `pnpm ship` path.
 6. Validate the live manifest, appcast, stable-DMG checksum, mounted DMG signature, and public
    diagnostic. Then run the runbook's installed-app update test from an older public release in
-   its isolated installation. The release is not complete until Sparkle upgrades it to the new
+   its isolated installation. Confirm the update prompt visibly renders the target notes before
+   accepting the update. The release is not complete until Sparkle upgrades it to the new
    version/build.
 
 ## Status discipline
