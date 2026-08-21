@@ -244,6 +244,54 @@ import Testing
         #expect(harness.resetBoundaryCalls == [account.key, account.key])
     }
 
+    @Test func ordinaryBeginDuringActiveResetDoesNotClearResetSettlementGuard() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+        coordinator.begin(for: account)
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .blockedByOpenHandoff)
+        #expect(coordinator.hasActiveHandoff(for: account.key))
+    }
+
+    @Test func refusedResetDoesNotInvalidateUsageOrArmResetSettlement() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        coordinator.beginReset(for: account)
+
+        #expect(coordinator.state(for: account.key) == .connected)
+        #expect(harness.resetBoundaryCalls.isEmpty)
+    }
+
+    @Test func providerBlockedResetKeepsItsResetIntentWhenContinued() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let first = ProviderAccount(id: AccountID("codex-one"), providerID: .codex, label: "One", isBuiltIn: false)
+        let second = ProviderAccount(id: AccountID("codex-two"), providerID: .codex, label: "Two", isBuiltIn: false)
+
+        coordinator.begin(for: first)
+        await settleTasks()
+        coordinator.beginReset(for: second)
+        #expect(harness.resetBoundaryCalls.isEmpty)
+
+        coordinator.forceCancel(first.key)
+        coordinator.continueSetup(for: second)
+        await settleTasks()
+        coordinator.receive(.live(.codex, windows: []), for: second.key)
+
+        #expect(coordinator.state(for: second.key) == .waiting(attempt: 0))
+        #expect(harness.resetBoundaryCalls == [second.key])
+    }
+
     @Test func forceCancelResetLeavesSessionCancelledAndAllowsOrdinaryPolling() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()

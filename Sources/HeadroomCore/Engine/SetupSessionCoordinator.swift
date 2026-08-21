@@ -122,6 +122,7 @@ public final class SetupSessionCoordinator {
     @ObservationIgnored private var verificationCapabilityFailures: [AccountKey: ProviderCapabilityState] = [:]
     @ObservationIgnored private var sessionModes: [AccountKey: SetupHandoffMode] = [:]
     @ObservationIgnored private var resetSessions: Set<AccountKey> = []
+    @ObservationIgnored private var blockedResetSessions: Set<AccountKey> = []
 
     @ObservationIgnored private let scheduler: any SetupRetryScheduling
     @ObservationIgnored private let retryDelays: [Duration]
@@ -170,25 +171,32 @@ public final class SetupSessionCoordinator {
     }
 
     public func begin(for account: ProviderAccount, mode: SetupHandoffMode = .standard) {
-        resetSessions.remove(account.key)
-        start(account, mode: mode, allowBlocked: false)
+        start(account, mode: mode, allowBlocked: false, isReset: false)
     }
 
     /// Reset differs from ordinary setup only in settlement: existing live usage is
     /// ignored until the external handoff ends and a post-handoff capture arrives.
     public func beginReset(for account: ProviderAccount) {
-        resetSessions.insert(account.key)
-        resetBoundary(account.key)
-        start(account, mode: .standard, allowBlocked: false)
+        start(account, mode: .standard, allowBlocked: false, isReset: true)
     }
 
     /// A blocked request never starts on its own when the previous provider slot clears.
     /// This method is the fresh, account-specific user action required to continue.
     public func continueSetup(for account: ProviderAccount, mode: SetupHandoffMode? = nil) {
-        start(account, mode: mode ?? sessionModes[account.key] ?? .standard, allowBlocked: true)
+        start(
+            account,
+            mode: mode ?? sessionModes[account.key] ?? .standard,
+            allowBlocked: true,
+            isReset: blockedResetSessions.contains(account.key)
+        )
     }
 
-    private func start(_ account: ProviderAccount, mode: SetupHandoffMode, allowBlocked: Bool) {
+    private func start(
+        _ account: ProviderAccount,
+        mode: SetupHandoffMode,
+        allowBlocked: Bool,
+        isReset: Bool
+    ) {
         let key = account.key
         // The Terminal wrapper can outlive the retry ladder. Make a second start
         // observable instead of silently ignoring it, while preserving the original
@@ -214,12 +222,24 @@ public final class SetupSessionCoordinator {
                 active: activeLogin
             )
             sessionModes[key] = mode
+            if isReset {
+                blockedResetSessions.insert(key)
+            } else {
+                blockedResetSessions.remove(key)
+            }
             return
         }
         if Self.requiresExclusiveLoginSlot(account.providerID) {
             activeLogins[account.providerID] = key
         }
 
+        blockedResetSessions.remove(key)
+        if isReset {
+            resetSessions.insert(key)
+            resetBoundary(key)
+        } else {
+            resetSessions.remove(key)
+        }
         invalidateWork(for: key, finalState: nil, releaseLoginSlot: false)
         sessionModes[key] = mode
         let generation = generations[key] ?? 0
@@ -490,6 +510,7 @@ public final class SetupSessionCoordinator {
             case .connected, .cancelled, .removing, .removed:
                 sessionModes.removeValue(forKey: key)
                 resetSessions.remove(key)
+                blockedResetSessions.remove(key)
             default:
                 break
             }
