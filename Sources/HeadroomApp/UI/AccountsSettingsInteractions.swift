@@ -53,6 +53,11 @@ struct CapabilityAnnouncementDedupe {
 /// official-CLI handoff, while persistence and cleanup stay owned by `UsageStore`.
 @MainActor
 enum AccountsSettingsInteractions {
+    enum BuiltInRowActions: Equatable {
+        case unavailable
+        case resetOnly
+        case resetAndStopTracking
+    }
     struct RecoveryRowActions: Equatable {
         let presentation: ProviderRecoveryPresentation
         let accountLabel: String
@@ -138,6 +143,31 @@ enum AccountsSettingsInteractions {
     ) {
         forceCancel(account)
         store.cancelAccountRemoval(account.key)
+    }
+
+    static func builtInRowActions(
+        for account: ProviderAccount,
+        in store: UsageStore
+    ) -> BuiltInRowActions {
+        guard account.isBuiltIn,
+              store.canResetBuiltInAccount(for: account.providerID)
+        else { return .unavailable }
+        return store.canStopTrackingBuiltInAccount(for: account.providerID)
+            ? .resetAndStopTracking
+            : .resetOnly
+    }
+
+    @discardableResult
+    static func resetBuiltIn(
+        _ account: ProviderAccount,
+        in store: UsageStore,
+        beginReset: @MainActor (ProviderAccount) -> Void = SetupSessions.resetSetup(for:)
+    ) -> Bool {
+        guard account.isBuiltIn,
+              store.canResetBuiltInAccount(for: account.providerID)
+        else { return false }
+        beginReset(account)
+        return true
     }
 
     /// Undo for stop-tracking: resurface the CLI's own login and fetch it right away.

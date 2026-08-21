@@ -303,6 +303,61 @@ struct AccountsSettingsInteractionTests {
         #expect(!SetupSessions.hasActiveHandoff(for: account))
     }
 
+    @Test func builtInResetPresentationCoversLoneExtraAndDemoStores() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let builtIn = ProviderAccount.builtIn(for: .claude)
+        #expect(AccountsSettingsInteractions.builtInRowActions(
+            for: builtIn,
+            in: fixture.store
+        ) == .resetOnly)
+
+        _ = fixture.store.addAccount(for: .claude)
+        #expect(AccountsSettingsInteractions.builtInRowActions(
+            for: builtIn,
+            in: fixture.store
+        ) == .resetAndStopTracking)
+
+        let demoStore = UsageStore(
+            providers: [
+                DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
+            ],
+            accounts: [builtIn]
+        )
+        #expect(AccountsSettingsInteractions.builtInRowActions(
+            for: builtIn,
+            in: demoStore
+        ) == .unavailable)
+    }
+
+    @Test func builtInResetRoutesOnlyConfiguredBuiltInAccountToCoordinatorEntryPoint() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let builtIn = ProviderAccount.builtIn(for: .codex)
+        let extra = ProviderAccount(
+            id: AccountID("extra"),
+            providerID: .codex,
+            label: "Extra",
+            isBuiltIn: false
+        )
+        var resetKeys: [AccountKey] = []
+
+        let resetBuiltIn = AccountsSettingsInteractions.resetBuiltIn(
+            builtIn,
+            in: fixture.store,
+            beginReset: { resetKeys.append($0.key) }
+        )
+        let resetExtra = AccountsSettingsInteractions.resetBuiltIn(
+            extra,
+            in: fixture.store,
+            beginReset: { resetKeys.append($0.key) }
+        )
+
+        #expect(resetBuiltIn)
+        #expect(!resetExtra)
+        #expect(resetKeys == [builtIn.key])
+    }
+
     @Test func checkNowForcesClaudeDiscoveryBeforeRefreshingOnlyTheSelectedAccount() async {
         let fixture = makeFixture()
         defer { fixture.cleanup() }

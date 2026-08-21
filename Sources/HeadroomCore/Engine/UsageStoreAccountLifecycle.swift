@@ -100,6 +100,10 @@ extension UsageStore {
         return accountRegistry?.canStopTrackingBuiltIn(for: providerID) ?? false
     }
 
+    public func canResetBuiltInAccount(for providerID: ProviderID) -> Bool {
+        providerFactory != nil && accounts(for: providerID).contains(where: { $0.isBuiltIn })
+    }
+
     @discardableResult
     public func stopTrackingBuiltInAccount(for providerID: ProviderID) async -> AccountRemovalResult {
         let key = AccountKey(providerID: providerID, accountID: .primary)
