@@ -54,8 +54,8 @@ import Testing
             )
         )
         #expect(script.contains("'/opt/homebrew/bin/codex' -c cli_auth_credentials_store=file login"))
-        #expect(script.contains("complete:${setup_status}"))
-        #expect(script.contains("print -r -- \"standard:$$\""))
+        #expect(script.contains("complete:${setup_purpose}:${handoff_generation}:${setup_status}"))
+        #expect(script.contains("HEADROOM_SETUP_OWNER=\"${setup_purpose}:standard:${handoff_generation}:$$\""))
 
         let process = Process()
         let input = Pipe()
@@ -86,6 +86,11 @@ import Testing
             completionMarker: marker
         )
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try AccountStorage.prepareSetupCompletionMarker(
+            marker,
+            mode: .standard,
+            purpose: .setup
+        )
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -99,6 +104,7 @@ import Testing
         #expect(process.terminationStatus == 0)
         #expect(!FileManager.default.fileExists(atPath: marker.pendingPath))
         #expect(!FileManager.default.fileExists(atPath: scriptURL.path))
-        #expect(try String(contentsOfFile: marker.completedPath, encoding: .utf8) == "complete:0\n")
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .succeeded)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .setup)
     }
 }

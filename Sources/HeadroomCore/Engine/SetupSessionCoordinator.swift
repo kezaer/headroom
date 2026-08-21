@@ -6,6 +6,14 @@ public enum SetupHandoffMode: Sendable, Equatable {
     case deviceCode
 }
 
+/// Why Headroom opened the official CLI. Purpose stays separate from login mode:
+/// a reset currently uses standard login, while Codex/Grok can use device-code mode
+/// for either ordinary setup or a future reset flow.
+public enum SetupHandoffPurpose: String, Sendable, Equatable {
+    case setup
+    case reset
+}
+
 /// Redaction-safe outcome from the official CLI wrapper. Headroom keeps only whether
 /// the process reported success; provider output and authentication details never
 /// cross the Terminal handoff boundary.
@@ -46,9 +54,15 @@ public enum SetupSessionState: Sendable, Equatable {
 public struct PreparedSetupHandoff: Sendable, Equatable {
     public let accountKey: AccountKey
     public let mode: SetupHandoffMode
-    public init(accountKey: AccountKey, mode: SetupHandoffMode = .standard) {
+    public let purpose: SetupHandoffPurpose
+    public init(
+        accountKey: AccountKey,
+        mode: SetupHandoffMode = .standard,
+        purpose: SetupHandoffPurpose = .setup
+    ) {
         self.accountKey = accountKey
         self.mode = mode
+        self.purpose = purpose
     }
 }
 
@@ -104,26 +118,28 @@ private final class TaskSetupRetryCancellation: SetupRetryCancellation {
 @MainActor
 @Observable
 public final class SetupSessionCoordinator {
-    private enum StartIntent {
-        case beginStandard
-        case beginReset
-        case continueBlocked(isReset: Bool)
+    private struct StartIntent {
+        let purpose: SetupHandoffPurpose
+        let allowsBlocked: Bool
 
-        var allowsBlocked: Bool {
-            if case .continueBlocked = self { return true }
-            return false
+        static func begin(_ purpose: SetupHandoffPurpose) -> Self {
+            Self(purpose: purpose, allowsBlocked: false)
         }
 
-        var isReset: Bool {
-            switch self {
-            case .beginStandard: false
-            case .beginReset: true
-            case .continueBlocked(let isReset): isReset
-            }
+        static func continueBlocked(_ purpose: SetupHandoffPurpose) -> Self {
+            Self(purpose: purpose, allowsBlocked: true)
         }
     }
 
-    public typealias Prepare = @MainActor @Sendable (ProviderAccount, SetupHandoffMode) async -> SetupPreparationResult
+    public typealias Prepare = @MainActor @Sendable (
+        ProviderAccount,
+        SetupHandoffMode,
+        SetupHandoffPurpose
+    ) async -> SetupPreparationResult
+    public typealias LegacyPrepare = @MainActor @Sendable (
+        ProviderAccount,
+        SetupHandoffMode
+    ) async -> SetupPreparationResult
     public typealias Open = @MainActor @Sendable (PreparedSetupHandoff) async -> SetupOpenResult
     public typealias Discard = @MainActor @Sendable (PreparedSetupHandoff) async -> Void
     public typealias AccountExists = @MainActor @Sendable (AccountKey) -> Bool
@@ -140,8 +156,8 @@ public final class SetupSessionCoordinator {
     @ObservationIgnored private var handoffsAwaitingFinalRefresh: [AccountKey: SetupHandoffCompletion] = [:]
     @ObservationIgnored private var verificationCapabilityFailures: [AccountKey: ProviderCapabilityState] = [:]
     @ObservationIgnored private var sessionModes: [AccountKey: SetupHandoffMode] = [:]
-    @ObservationIgnored private var resetSessions: Set<AccountKey> = []
-    @ObservationIgnored private var blockedResetSessions: Set<AccountKey> = []
+    @ObservationIgnored private var sessionPurposes: [AccountKey: SetupHandoffPurpose] = [:]
+    @ObservationIgnored private var blockedSessionPurposes: [AccountKey: SetupHandoffPurpose] = [:]
 
     @ObservationIgnored private let scheduler: any SetupRetryScheduling
     @ObservationIgnored private let retryDelays: [Duration]
@@ -177,6 +193,41 @@ public final class SetupSessionCoordinator {
         self.resetBoundary = resetBoundary
     }
 
+    /// Source compatibility for test and preview harnesses that do not need to inspect
+    /// purpose during preparation. The coordinator still stamps the requested typed
+    /// purpose onto the returned handoff before opening it.
+    public convenience init(
+        scheduler: any SetupRetryScheduling = TaskSetupRetryScheduler(),
+        retryDelays: [Duration] = [.seconds(3), .seconds(7), .seconds(15), .seconds(30)],
+        verificationStopLoss: Duration = .seconds(240),
+        prepare legacyPrepare: @escaping LegacyPrepare,
+        open: @escaping Open,
+        discard: @escaping Discard = { _ in },
+        accountExists: @escaping AccountExists,
+        requestRefresh: @escaping RequestRefresh,
+        resetBoundary: @escaping ResetBoundary = { _ in }
+    ) {
+        self.init(
+            scheduler: scheduler,
+            retryDelays: retryDelays,
+            verificationStopLoss: verificationStopLoss,
+            prepare: { account, mode, purpose in
+                await legacyPrepare(account, mode).map { handoff in
+                    PreparedSetupHandoff(
+                        accountKey: handoff.accountKey,
+                        mode: handoff.mode,
+                        purpose: purpose
+                    )
+                }
+            },
+            open: open,
+            discard: discard,
+            accountExists: accountExists,
+            requestRefresh: requestRefresh,
+            resetBoundary: resetBoundary
+        )
+    }
+
     public func state(for key: AccountKey) -> SetupSessionState {
         states[key] ?? .idle
     }
@@ -185,18 +236,22 @@ public final class SetupSessionCoordinator {
         sessionModes[key]
     }
 
+    public func sessionPurpose(for key: AccountKey) -> SetupHandoffPurpose? {
+        sessionPurposes[key]
+    }
+
     public func hasActiveHandoff(for key: AccountKey) -> Bool {
         activeHandoffs.contains(key)
     }
 
     public func begin(for account: ProviderAccount, mode: SetupHandoffMode = .standard) {
-        start(account, mode: mode, intent: .beginStandard)
+        start(account, mode: mode, intent: .begin(.setup))
     }
 
     /// Reset differs from ordinary setup only in settlement: existing live usage is
     /// ignored until the external handoff ends and a post-handoff capture arrives.
     public func beginReset(for account: ProviderAccount) {
-        start(account, mode: .standard, intent: .beginReset)
+        start(account, mode: .standard, intent: .begin(.reset))
     }
 
     /// A blocked request never starts on its own when the previous provider slot clears.
@@ -205,7 +260,7 @@ public final class SetupSessionCoordinator {
         start(
             account,
             mode: mode ?? sessionModes[account.key] ?? .standard,
-            intent: .continueBlocked(isReset: blockedResetSessions.contains(account.key))
+            intent: .continueBlocked(blockedSessionPurposes[account.key] ?? .setup)
         )
     }
 
@@ -239,23 +294,17 @@ public final class SetupSessionCoordinator {
                 active: activeLogin
             )
             sessionModes[key] = mode
-            if intent.isReset {
-                blockedResetSessions.insert(key)
-            } else {
-                blockedResetSessions.remove(key)
-            }
+            blockedSessionPurposes[key] = intent.purpose
             return
         }
         if Self.requiresExclusiveLoginSlot(account.providerID) {
             activeLogins[account.providerID] = key
         }
 
-        blockedResetSessions.remove(key)
-        if intent.isReset {
-            resetSessions.insert(key)
+        blockedSessionPurposes.removeValue(forKey: key)
+        sessionPurposes[key] = intent.purpose
+        if intent.purpose == .reset {
             resetBoundary(key)
-        } else {
-            resetSessions.remove(key)
         }
         invalidateWork(for: key, finalState: nil, releaseLoginSlot: false)
         sessionModes[key] = mode
@@ -268,7 +317,7 @@ public final class SetupSessionCoordinator {
                     self.preparationTasks[key] = nil
                 }
             }
-            let result = await self.prepare(account, mode)
+            let result = await self.prepare(account, mode, intent.purpose)
             guard self.isCurrent(key, generation: generation), self.accountExists(key) else {
                 if case .success(let handoff) = result {
                     await self.discard(handoff)
@@ -330,10 +379,14 @@ public final class SetupSessionCoordinator {
     /// wrapper exits or a live provider result proves the callback completed.
     public func restoreActiveHandoff(
         _ key: AccountKey,
-        mode: SetupHandoffMode = .standard
+        mode: SetupHandoffMode = .standard,
+        purpose: SetupHandoffPurpose = .setup
     ) {
         activeHandoffs.insert(key)
         sessionModes[key] = mode
+        sessionPurposes[key] = purpose
+        blockedSessionPurposes.removeValue(forKey: key)
+        if purpose == .reset { resetBoundary(key) }
         if Self.requiresExclusiveLoginSlot(key.providerID) {
             activeLogins[key.providerID] = key
         }
@@ -342,13 +395,18 @@ public final class SetupSessionCoordinator {
 
     public func handoffDidEnd(
         _ key: AccountKey,
-        completion: SetupHandoffCompletion = .unknown
+        completion: SetupHandoffCompletion = .unknown,
+        purpose: SetupHandoffPurpose? = nil
     ) {
+        if let purpose {
+            sessionPurposes[key] = purpose
+            blockedSessionPurposes.removeValue(forKey: key)
+        }
         activeHandoffs.remove(key)
         if activeLogins[key.providerID] == key { activeLogins.removeValue(forKey: key.providerID) }
         switch state(for: key) {
         case .idle, .waiting, .blockedByOpenHandoff, .failed(.retryExhausted):
-            if resetSessions.contains(key) { resetBoundary(key) }
+            if sessionPurposes[key] == .reset { resetBoundary(key) }
             invalidateWork(for: key, finalState: nil, releaseLoginSlot: false)
             handoffsAwaitingFinalRefresh[key] = completion
             states[key] = .verifying
@@ -388,7 +446,7 @@ public final class SetupSessionCoordinator {
     public func receive(_ snapshot: UsageSnapshot, for key: AccountKey) {
         guard state(for: key) != .removed, state(for: key) != .cancelled else { return }
         if snapshot.freshness == .live {
-            if resetSessions.contains(key), handoffsAwaitingFinalRefresh[key] == nil {
+            if sessionPurposes[key] == .reset, handoffsAwaitingFinalRefresh[key] == nil {
                 return
             }
             // Live data is a setup payoff only when this account already has setup
@@ -526,8 +584,14 @@ public final class SetupSessionCoordinator {
             switch finalState {
             case .connected, .cancelled, .removing, .removed:
                 sessionModes.removeValue(forKey: key)
-                resetSessions.remove(key)
-                blockedResetSessions.remove(key)
+                sessionPurposes.removeValue(forKey: key)
+                blockedSessionPurposes.removeValue(forKey: key)
+            case .failed where !activeHandoffs.contains(key):
+                // A wrapper that is still open can rescue a retry failure later. Once
+                // no external handoff remains, a terminal failure must disarm reset so
+                // ordinary future polling can recover instead of being suppressed.
+                sessionPurposes.removeValue(forKey: key)
+                blockedSessionPurposes.removeValue(forKey: key)
             default:
                 break
             }

@@ -244,6 +244,82 @@ import Testing
         #expect(harness.resetBoundaryCalls == [account.key, account.key])
     }
 
+    @Test func resetPurposeReachesPreparationAndRestoresAcrossActiveAndCompletedHandoffs() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+
+        #expect(harness.prepareCalls == [
+            .init(key: account.key, mode: .standard, purpose: .reset),
+        ])
+        #expect(harness.openedHandoffs == [
+            .init(accountKey: account.key, mode: .standard, purpose: .reset),
+        ])
+
+        let restoredHarness = SetupCoordinatorHarness()
+        restoredHarness.existingAccounts.insert(account.key)
+        let restored = restoredHarness.makeCoordinator()
+        restored.restoreActiveHandoff(account.key, mode: .deviceCode, purpose: .reset)
+
+        #expect(restored.sessionPurpose(for: account.key) == .reset)
+        #expect(restored.sessionMode(for: account.key) == .deviceCode)
+        #expect(restoredHarness.resetBoundaryCalls == [account.key])
+
+        restored.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(restoredHarness.resetBoundaryCalls == [account.key, account.key])
+        #expect(restored.state(for: account.key) == .verifying)
+
+        let completedHarness = SetupCoordinatorHarness()
+        completedHarness.existingAccounts.insert(account.key)
+        let completed = completedHarness.makeCoordinator()
+        completed.handoffDidEnd(account.key, completion: .succeeded, purpose: .reset)
+
+        #expect(completed.sessionPurpose(for: account.key) == .reset)
+        #expect(completedHarness.resetBoundaryCalls == [account.key])
+        #expect(completed.state(for: account.key) == .verifying)
+    }
+
+    @Test func terminalResetFailureClearsPurposeAndAllowsLaterLiveRecovery() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator(verificationStopLoss: .seconds(100))
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        harness.scheduler.fireNext()
+
+        #expect(coordinator.state(for: account.key) == .failed(.retryExhausted))
+        #expect(coordinator.sessionPurpose(for: account.key) == nil)
+
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .connected)
+    }
+
+    @Test func retryFailureKeepsResetPurposeWhileWrapperCanStillRescueSession() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator(retryDelays: [.seconds(1)])
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+        harness.scheduler.fireNext()
+
+        #expect(coordinator.state(for: account.key) == .failed(.retryExhausted))
+        #expect(coordinator.sessionPurpose(for: account.key) == .reset)
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        #expect(coordinator.state(for: account.key) == .failed(.retryExhausted))
+
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .connected)
+    }
+
     @Test func ordinaryBeginDuringActiveResetDoesNotClearResetSettlementGuard() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()
@@ -769,10 +845,22 @@ private final class SetupCoordinatorHarness {
     struct PrepareCall: Equatable {
         let key: AccountKey
         let mode: SetupHandoffMode
+        let purpose: SetupHandoffPurpose
+
+        init(
+            key: AccountKey,
+            mode: SetupHandoffMode,
+            purpose: SetupHandoffPurpose = .setup
+        ) {
+            self.key = key
+            self.mode = mode
+            self.purpose = purpose
+        }
     }
 
     var prepareCalls: [PrepareCall] = []
     var openCalls: [AccountKey] = []
+    var openedHandoffs: [PreparedSetupHandoff] = []
     var discardCalls: [AccountKey] = []
     var refreshCalls: [AccountKey] = []
     var resetBoundaryCalls: [AccountKey] = []
@@ -789,17 +877,22 @@ private final class SetupCoordinatorHarness {
             scheduler: scheduler,
             retryDelays: retryDelays,
             verificationStopLoss: verificationStopLoss,
-            prepare: { [weak self] account, mode in
+            prepare: { [weak self] account, mode, purpose in
                 guard let self else { return .failure(.stagingFailed) }
-                self.prepareCalls.append(.init(key: account.key, mode: mode))
+                self.prepareCalls.append(.init(key: account.key, mode: mode, purpose: purpose))
                 self.existingAccounts.insert(account.key)
                 if self.suspendPreparation {
                     return await withCheckedContinuation { self.preparationContinuation = $0 }
                 }
-                return .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+                return .success(PreparedSetupHandoff(
+                    accountKey: account.key,
+                    mode: mode,
+                    purpose: purpose
+                ))
             },
             open: { [weak self] handoff in
                 self?.openCalls.append(handoff.accountKey)
+                self?.openedHandoffs.append(handoff)
                 return self?.openResult ?? .failure(.stagingFailed)
             },
             discard: { [weak self] handoff in self?.discardCalls.append(handoff.accountKey) },
@@ -812,7 +905,8 @@ private final class SetupCoordinatorHarness {
     func resumePreparation() {
         preparationContinuation?.resume(returning: .success(PreparedSetupHandoff(
             accountKey: prepareCalls.last?.key ?? AccountKey(providerID: .claude, accountID: .primary),
-            mode: prepareCalls.last?.mode ?? .standard
+            mode: prepareCalls.last?.mode ?? .standard,
+            purpose: prepareCalls.last?.purpose ?? .setup
         )))
         preparationContinuation = nil
     }

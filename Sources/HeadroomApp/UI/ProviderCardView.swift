@@ -10,11 +10,22 @@ struct ProviderAccountEntry: Identifiable {
 }
 
 @MainActor
+func providerCardStopWaitingAccount(
+    entries: [ProviderAccountEntry],
+    hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
+) -> ProviderAccount? {
+    entries.map(\.account).first(where: hasActiveHandoff)
+}
+
+@MainActor
 func providerCardHasActiveSetupSession(
     entries: [ProviderAccountEntry],
     hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
 ) -> Bool {
-    entries.contains { hasActiveHandoff($0.account) }
+    providerCardStopWaitingAccount(
+        entries: entries,
+        hasActiveHandoff: hasActiveHandoff
+    ) != nil
 }
 
 func setupHandoffRefusalMessage(for state: SetupSessionState) -> String? {
@@ -71,7 +82,7 @@ struct ProviderCardView: View {
         providerCardHasActiveSetupSession(entries: entries)
     }
     private var activeSetupAccount: ProviderAccount? {
-        entries.map(\.account).first { SetupSessions.hasActiveHandoff(for: $0) }
+        providerCardStopWaitingAccount(entries: entries)
     }
 
     var body: some View {
@@ -146,6 +157,7 @@ struct ProviderCardView: View {
                             percentageMode: percentageMode,
                             now: now,
                             isMenuBarAccount: entry.id == entries.first?.id,
+                            showsStopWaiting: false,
                             onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
                         )
                     }
@@ -156,7 +168,19 @@ struct ProviderCardView: View {
         }
     }
 
-    @ViewBuilder private var singleAccountBody: some View {
+    private var singleAccountBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            singleAccountContent
+            if let activeSetupAccount {
+                HStack {
+                    Spacer(minLength: 0)
+                    StopWaitingButton(account: activeSetupAccount)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var singleAccountContent: some View {
         if let outcome = claudeGuidedSetupOutcome {
             if SetupSessions.isWaiting(for: primaryAccount) {
                 ClaudeWaitingCard(
@@ -310,6 +334,7 @@ struct ProviderCardView: View {
                         percentageMode: percentageMode,
                         now: now,
                         isMenuBarAccount: entry.id == entries.first?.id,
+                        showsStopWaiting: activeSetupAccount?.key == entry.account.key,
                         onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
                     )
                 }
@@ -611,6 +636,7 @@ private struct AccountSectionView: View {
     /// widgets follow; its band carries a "menubar.rectangle" mark so the popover explains
     /// which login drives the always-visible glyph.
     let isMenuBarAccount: Bool
+    let showsStopWaiting: Bool
     let onRetry: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -627,6 +653,13 @@ private struct AccountSectionView: View {
         VStack(alignment: .leading, spacing: 7) {
             identityRow
             stateContent
+            if showsStopWaiting,
+               SetupSessions.state(for: account) != .blockedByOpenHandoff {
+                HStack {
+                    Spacer(minLength: 0)
+                    StopWaitingButton(account: account)
+                }
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(account.label) account")

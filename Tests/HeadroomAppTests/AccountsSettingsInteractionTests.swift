@@ -83,6 +83,31 @@ struct AccountsSettingsInteractionTests {
         #expect(await locator.forceRefreshes == [true])
     }
 
+    @Test func guidedClaudeResetPreparesResetPurposeAndOfficialAuthCommands() async throws {
+        let workspace = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-reset-preparation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        let result = await SetupSessions.prepareHandoff(
+            for: account,
+            mode: .standard,
+            purpose: .reset,
+            builtInClaudeWorkspace: workspace,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true")
+        )
+        guard case .success(let handoff) = result else {
+            Issue.record("Expected reset preparation to succeed")
+            return
+        }
+        let prepared = try #require(SetupSessions.stagedHandoff(for: account.key))
+        let script = try String(contentsOf: prepared.scriptURL, encoding: .utf8)
+
+        #expect(handoff.purpose == .reset)
+        #expect(script.contains("'/usr/bin/true' auth logout && '/usr/bin/true' auth login"))
+        await SetupSessions.discardPreparedHandoff(handoff)
+    }
+
     @Test func addFlowReachesPreparingWaitingAndLiveForEachProviderWithoutMountedViews() async {
         for providerID in [ProviderID.claude, .codex] {
             let fixture = makeFixture()
@@ -301,6 +326,74 @@ struct AccountsSettingsInteractionTests {
         )
         #expect(SetupSessions.state(for: account) == .idle)
         #expect(!SetupSessions.hasActiveHandoff(for: account))
+    }
+
+    @Test func lateCompletionAfterForceCancelDoesNotRestoreGhostSessionOnRelaunch() throws {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let supportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-force-cancel-late-completion-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: supportRoot) }
+        let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        let account = ProviderAccount.builtIn(for: .claude)
+        let marker = AccountStorage.setupCompletionMarker(
+            for: account,
+            builtInClaudeWorkspace: workspace
+        )
+        try AccountStorage.prepareSetupCompletionMarker(marker)
+
+        // Deterministically model the wrapper's EXIT trap after it has accepted the
+        // pending owner but before it publishes completion.
+        #expect(AccountStorage.setupHandoffIsActive(marker: marker))
+        SetupSessions.configure(
+            store: fixture.store,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true"),
+            builtInClaudeWorkspace: workspace
+        )
+        SetupSessions.forceCancel(for: account)
+        try Data("complete:setup:0\n".utf8)
+            .write(to: URL(fileURLWithPath: marker.completedPath))
+
+        SetupSessions.configure(
+            store: fixture.store,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true"),
+            builtInClaudeWorkspace: workspace
+        )
+
+        #expect(SetupSessions.state(for: account) == .idle)
+        #expect(!SetupSessions.hasActiveHandoff(for: account))
+    }
+
+    @Test func relaunchRestoresResetPurposeFromCompletedMarkerBeforeVerification() async throws {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        await fixture.store.refreshAll()
+        let supportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-reset-relaunch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: supportRoot) }
+        let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        let account = ProviderAccount.builtIn(for: .claude)
+        let marker = AccountStorage.setupCompletionMarker(
+            for: account,
+            builtInClaudeWorkspace: workspace
+        )
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: marker.completedPath).deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("complete:reset:0\n".utf8)
+            .write(to: URL(fileURLWithPath: marker.completedPath))
+        #expect(fixture.store.snapshot(for: account.key).freshness == .live)
+
+        SetupSessions.configure(
+            store: fixture.store,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true"),
+            builtInClaudeWorkspace: workspace
+        )
+
+        #expect(SetupSessions.state(for: account) == .verifying)
+        #expect(fixture.store.snapshot(for: account.key).freshness == .pending)
+        #expect(!FileManager.default.fileExists(atPath: marker.completedPath))
     }
 
     @Test func builtInResetPresentationCoversLoneExtraAndDemoStores() {
@@ -848,6 +941,81 @@ private final class GrokDeviceCodeSetupHarness {
 }
 
 @Suite struct ProviderCardCapabilityTests {
+    @MainActor @Test func ordinaryWaitingHandoffExposesStopActionOnSettingsAndPopover() async {
+        let account = ProviderAccount.builtIn(for: .claude)
+        let coordinator = SetupSessionCoordinator(
+            retryDelays: [.seconds(60)],
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { $0 == account.key },
+            requestRefresh: { _ in }
+        )
+
+        coordinator.beginReset(for: account)
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        let hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = {
+            coordinator.hasActiveHandoff(for: $0.key)
+        }
+        #expect(settingsStopWaitingAccount(
+            account,
+            removalState: nil,
+            setupState: coordinator.state(for: account.key),
+            hasActiveHandoff: hasActiveHandoff
+        ) == account)
+
+        // A built-in reset can retain live usage while Terminal is still open. The
+        // popover action therefore keys off handoff ownership, not snapshot freshness.
+        let liveSnapshot = UsageSnapshot(
+            providerID: .claude,
+            windows: [],
+            planLabel: nil,
+            capturedAt: Date(),
+            freshness: .live
+        )
+        #expect(providerCardStopWaitingAccount(
+            entries: [ProviderAccountEntry(account: account, snapshot: liveSnapshot)],
+            hasActiveHandoff: hasActiveHandoff
+        ) == account)
+    }
+
+    @MainActor @Test func providerBlockedRowDoesNotOwnStopWaitingAction() async {
+        let active = ProviderAccount.builtIn(for: .codex)
+        let blocked = ProviderAccount(
+            id: AccountID("codex-extra"),
+            providerID: .codex,
+            label: "Work",
+            isBuiltIn: false
+        )
+        let coordinator = SetupSessionCoordinator(
+            retryDelays: [.seconds(60)],
+            prepare: { account, mode in
+                .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            },
+            open: { _ in .success(()) },
+            accountExists: { $0 == active.key || $0 == blocked.key },
+            requestRefresh: { _ in }
+        )
+
+        coordinator.begin(for: active)
+        for _ in 0..<20 { await Task.yield() }
+        coordinator.begin(for: blocked)
+
+        guard case .blockedByProviderLogin = coordinator.state(for: blocked.key) else {
+            Issue.record("Expected the second Codex account to be provider-blocked")
+            return
+        }
+        #expect(settingsStopWaitingAccount(
+            blocked,
+            removalState: nil,
+            setupState: coordinator.state(for: blocked.key),
+            hasActiveHandoff: { coordinator.hasActiveHandoff(for: $0.key) }
+        ) == nil)
+    }
+
     @MainActor @Test func capabilityRefusalEndsWhenWrapperClosesAndVerificationBegins() async {
         let account = ProviderAccount(
             id: AccountID("claude-extra"),

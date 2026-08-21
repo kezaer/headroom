@@ -24,7 +24,10 @@ extension UsageStore {
     /// so the next accepted result cannot merge windows from the previous login.
     public func invalidateUsageForAccountReset(_ key: AccountKey) {
         attachmentGenerations[key, default: 0] &+= 1
+        snapshots[key] = .pending(for: key.providerID)
         continuityCache?.remove(for: key)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
     }
 
     public func canAddAccount(for providerID: ProviderID) -> Bool {

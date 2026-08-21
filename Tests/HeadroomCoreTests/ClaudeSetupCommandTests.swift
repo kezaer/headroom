@@ -105,6 +105,41 @@ import Testing
         }
     }
 
+    @Test func resetUsesOfficialLogoutThenLoginWithTheSameSafeAccountRouting() throws {
+        let descriptor = ClaudeSetupDescriptor(
+            accountKey: account,
+            executablePath: "/Users/Test User/.npm-global/o'brien/bin/claude",
+            loginPath: "/Users/Test User/.npm-global/bin:/usr/bin:/bin",
+            workspaceDirectory: "/tmp/work space",
+            configDirectory: "/tmp/config space",
+            purpose: .reset
+        )
+
+        let script = ClaudeSetupCommand.script(for: descriptor)
+        let manual = try #require(ClaudeSetupCommand.manualCommand(for: descriptor))
+        let executable = "'/Users/Test User/.npm-global/o'\\''brien/bin/claude'"
+
+        #expect(script.contains("\(executable) auth logout && \(executable) auth login"))
+        #expect(manual.contains("\(executable) auth logout && \(executable) auth login"))
+        #expect(script.contains("export CLAUDE_CONFIG_DIR='/tmp/config space'"))
+        #expect(manual.contains("export CLAUDE_CONFIG_DIR='/tmp/config space'"))
+        #expect(!script.contains("api.anthropic.com"))
+        #expect(!manual.contains("api.anthropic.com"))
+
+        let builtIn = ClaudeSetupDescriptor(
+            accountKey: AccountKey(providerID: .claude, accountID: .primary),
+            executablePath: "/opt/homebrew/bin/claude",
+            loginPath: "/opt/homebrew/bin:/usr/bin:/bin",
+            workspaceDirectory: "/tmp/built-in work",
+            configDirectory: nil,
+            purpose: .reset
+        )
+        let builtInScript = ClaudeSetupCommand.script(for: builtIn)
+        let builtInManual = try #require(ClaudeSetupCommand.manualCommand(for: builtIn))
+        #expect(builtInScript.contains("unset CLAUDE_CONFIG_DIR"))
+        #expect(builtInManual.contains("(unset CLAUDE_CONFIG_DIR && '/opt/homebrew/bin/claude' auth logout && '/opt/homebrew/bin/claude' auth login)"))
+    }
+
     // AE6: an npm-derived launcher reaches the staged handoff with the account's
     // isolated config home, workspace, completion marker, and one-token quoting.
     @Test func npmDerivedLauncherKeepsExtraAccountIsolationInTheStagedScript() throws {
@@ -166,8 +201,8 @@ import Testing
             completionMarker: marker
         )
         let script = ClaudeSetupCommand.script(for: descriptor)
-        #expect(script.contains("print -r -- \"standard:$$\""))
-        #expect(script.contains("complete:${setup_status}"))
+        #expect(script.contains("HEADROOM_SETUP_OWNER=\"${setup_purpose}:standard:${handoff_generation}:$$\""))
+        #expect(script.contains("complete:${setup_purpose}:${handoff_generation}:${setup_status}"))
         #expect(!script.contains(account.accountID.raw))
 
         let process = Process()
@@ -199,9 +234,15 @@ import Testing
             loginPath: "/usr/bin:/bin",
             workspaceDirectory: directory.path,
             configDirectory: directory.path,
+            purpose: .reset,
             completionMarker: marker
         ))
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try AccountStorage.prepareSetupCompletionMarker(
+            marker,
+            mode: .standard,
+            purpose: .reset
+        )
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -215,7 +256,8 @@ import Testing
         #expect(process.terminationStatus == 0)
         #expect(!FileManager.default.fileExists(atPath: marker.pendingPath))
         #expect(!FileManager.default.fileExists(atPath: scriptURL.path))
-        #expect(try String(contentsOfFile: marker.completedPath, encoding: .utf8) == "complete:0\n")
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .succeeded)
+        #expect(AccountStorage.setupHandoffPurpose(marker: marker) == .reset)
     }
 }
 

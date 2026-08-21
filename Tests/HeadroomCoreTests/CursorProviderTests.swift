@@ -146,7 +146,7 @@ private struct StubCursorSource: CursorUsageSource {
             )
         )
         #expect(script.contains("'/Users/test/.local/bin/cursor-agent' login"))
-        #expect(script.contains("complete:${setup_status}"))
+        #expect(script.contains("complete:${setup_purpose}:${handoff_generation}:${setup_status}"))
         #expect(!script.localizedCaseInsensitiveContains("token"))
 
         let process = Process()

@@ -1170,6 +1170,141 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(continuityCache.load()[key]?.windows.first?.utilization == 20)
     }
 
+    @Test func resetBoundaryDoesNotRetainOldLoginWindowInPartialLiveCapture() async {
+        let defaults = freshDefaults()
+        let preferences = Preferences(defaults: defaults)
+        preferences.widgetsEnabled = true
+        preferences.syncToIPhoneEnabled = true
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        continuityCache.save(
+            UsageSnapshot(
+                providerID: .claude,
+                windows: [
+                    window(.weekly, used: 41),
+                    window(.other("Weekly (Fable)"), used: 73),
+                ],
+                planLabel: "Old Max",
+                accountEmail: "old@example.com",
+                capturedAt: Date(timeIntervalSince1970: 1_000_000),
+                freshness: .live
+            ),
+            for: key
+        )
+        let newSnapshot = UsageSnapshot(
+            providerID: .claude,
+            windows: [window(.weekly, used: 12)],
+            planLabel: "New Pro",
+            accountEmail: "new@example.com",
+            capturedAt: now,
+            freshness: .live
+        )
+        let widgetExporter = SpyWidgetExporter()
+        let phoneExporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: newSnapshot
+                ),
+            ],
+            preferences: preferences,
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .pending(for: account.providerID)
+                )
+            },
+            continuityCache: continuityCache,
+            now: { now },
+            widgetExporter: widgetExporter,
+            phoneSyncExporter: phoneExporter
+        )
+
+        #expect(store.snapshot(for: key).windows.count == 2)
+        store.invalidateUsageForAccountReset(key)
+
+        let resetSnapshot = store.snapshot(for: key)
+        #expect(resetSnapshot.freshness == .pending)
+        #expect(resetSnapshot.windows.isEmpty)
+        #expect(resetSnapshot.planLabel == nil)
+        #expect(resetSnapshot.accountEmail == nil)
+        #expect(store.accounts(for: .claude).map(\.key) == [key])
+        #expect(widgetExporter.exports.last?.providers.first?.windows.isEmpty == true)
+        #expect(widgetExporter.exports.last?.providers.first?.planLabel == nil)
+        #expect(phoneExporter.exports.last?.providers.first?.windows.isEmpty == true)
+        #expect(phoneExporter.exports.last?.providers.first?.planLabel == nil)
+
+        await store.refreshAll()
+
+        let refreshed = store.snapshot(for: key)
+        #expect(refreshed.windows.map(\.kind) == [.weekly])
+        #expect(refreshed.planLabel == "New Pro")
+        #expect(refreshed.accountEmail == "new@example.com")
+        #expect(continuityCache.load()[key]?.windows.map(\.kind) == [.weekly])
+    }
+
+    @Test func resetBoundaryDoesNotRetainOldLoginDataInTransientFirstCapture() async {
+        let defaults = freshDefaults()
+        let continuityCache = UsageContinuityCache(defaults: defaults)
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        let now = Date(timeIntervalSince1970: 2_000_000)
+        continuityCache.save(
+            UsageSnapshot(
+                providerID: .claude,
+                windows: [
+                    window(.weekly, used: 41),
+                    window(.other("Weekly (Fable)"), used: 73),
+                ],
+                planLabel: "Old Max",
+                accountEmail: "old@example.com",
+                capturedAt: Date(timeIntervalSince1970: 1_000_000),
+                freshness: .live
+            ),
+            for: key
+        )
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(
+                    id: .claude,
+                    accountID: .primary,
+                    displayName: "Claude",
+                    snapshot: .stale(for: .claude, reason: .transient("Try again"))
+                ),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    displayName: "Claude",
+                    snapshot: .pending(for: account.providerID)
+                )
+            },
+            continuityCache: continuityCache,
+            now: { now }
+        )
+
+        store.invalidateUsageForAccountReset(key)
+        await store.refreshAll()
+
+        let refreshed = store.snapshot(for: key)
+        #expect(refreshed.windows.isEmpty)
+        #expect(refreshed.planLabel == nil)
+        #expect(refreshed.accountEmail == nil)
+        #expect(store.accounts(for: .claude).map(\.key) == [key])
+        #expect(continuityCache.load()[key] == nil)
+    }
+
     @Test func forceCancelledResetKeepsAccountVisibleAndPollable() async {
         let defaults = freshDefaults()
         let account = ProviderAccount.builtIn(for: .claude)

@@ -15,6 +15,20 @@ func settingsRecoveryActions(
     )
 }
 
+@MainActor
+func settingsStopWaitingAccount(
+    _ account: ProviderAccount,
+    removalState: AccountRemovalState?,
+    setupState: SetupSessionState,
+    hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
+) -> ProviderAccount? {
+    guard hasActiveHandoff(account)
+            || removalState == .setupActive
+            || setupState == .blockedByOpenHandoff
+    else { return nil }
+    return account
+}
+
 /// Settings → Accounts (multi-account, Jul 2026): one tile managing every configured
 /// subscription account. Grouped per provider — brand row with a live "n of 5" count
 /// and an Add button, then one row per account: an editable label, a plain-language
@@ -477,10 +491,14 @@ struct AccountsSettingsTile: View {
     ) -> some View {
         // The trash slot is always laid out — hidden (not absent) on built-in rows —
         // so status text shares one right anchor down the whole list (audit P2).
-            if removalState == .setupActive || setupState == .blockedByOpenHandoff {
+            if let stopWaitingAccount = settingsStopWaitingAccount(
+                account,
+                removalState: removalState,
+                setupState: setupState
+            ) {
                 StopWaitingButton(
-                    account: account,
-                    onConfirmationPresented: { removalOrigin = account.key },
+                    account: stopWaitingAccount,
+                    onConfirmationPresented: { removalOrigin = stopWaitingAccount.key },
                     onStop: { AccountsSettingsInteractions.stopWaiting(for: $0, in: store) },
                     onDismiss: restoreRemovalFocus
                 )

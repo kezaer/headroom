@@ -71,10 +71,11 @@ enum SetupSessions {
         self.claudeExecutableLocator = claudeExecutableLocator
         self.builtInClaudeWorkspace = builtInClaudeWorkspace
         let coordinator = SetupSessionCoordinator(
-            prepare: { account, mode in
+            prepare: { account, mode, purpose in
                 await prepareHandoff(
                     for: account,
                     mode: mode,
+                    purpose: purpose,
                     builtInClaudeWorkspace: builtInClaudeWorkspace,
                     claudeExecutableLocator: claudeExecutableLocator
                 )
@@ -98,15 +99,20 @@ enum SetupSessions {
                 if AccountStorage.setupHandoffIsActive(marker: marker) {
                     coordinator.restoreActiveHandoff(
                         account.key,
-                        mode: AccountStorage.setupHandoffMode(marker: marker) ?? .standard
+                        mode: AccountStorage.setupHandoffMode(marker: marker) ?? .standard,
+                        purpose: AccountStorage.setupHandoffPurpose(marker: marker) ?? .setup
                     )
                     monitorCompletion(marker, for: account.key)
                 } else {
                     let completion = AccountStorage.setupHandoffCompletion(marker: marker)
                     if completion != .unknown {
-                        coordinator.handoffDidEnd(account.key, completion: completion)
-                        try? FileManager.default.removeItem(atPath: marker.completedPath)
+                        coordinator.handoffDidEnd(
+                            account.key,
+                            completion: completion,
+                            purpose: AccountStorage.setupHandoffPurpose(marker: marker) ?? .setup
+                        )
                     }
+                    AccountStorage.clearFinishedSetupCompletionMarkers(marker)
                 }
             }
         }
@@ -316,8 +322,8 @@ enum SetupSessions {
     }
 
     /// Stop waiting for an external CLI handoff without attempting to terminate its
-    /// user-visible Terminal process. Marker deletion is synchronous so the wrapper's
-    /// PID guard observes the cancellation before it can publish a late completion.
+    /// user-visible Terminal process. Cancellation is tombstoned synchronously before
+    /// the generation's files are removed, so a late wrapper stays ignored on relaunch.
     static func forceCancel(for account: ProviderAccount) {
         completionTasks.removeValue(forKey: account.key)?.cancel()
         let prepared = preparedScripts.removeValue(forKey: account.key)
@@ -338,6 +344,7 @@ enum SetupSessions {
     static func prepareHandoff(
         for account: ProviderAccount,
         mode: SetupHandoffMode,
+        purpose: SetupHandoffPurpose = .setup,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
         claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
     ) async -> SetupPreparationResult {
@@ -395,6 +402,7 @@ enum SetupSessions {
                         loginPath: CLIExecutableResolver.resolveLoginPath(fallback: fallback),
                         workspaceDirectory: workspace.path,
                         configDirectory: configuration.claudeConfigDirectory?.path,
+                        purpose: purpose,
                         completionMarker: completionMarker
                     )
                     script = ClaudeSetupCommand.script(for: descriptor)
@@ -458,7 +466,11 @@ enum SetupSessions {
         switch preparation {
         case .success(let preparedScript):
             preparedScripts[account.key] = preparedScript
-            return .success(PreparedSetupHandoff(accountKey: account.key, mode: mode))
+            return .success(PreparedSetupHandoff(
+                accountKey: account.key,
+                mode: mode,
+                purpose: purpose
+            ))
         case .failure(let failure):
             return .failure(failure)
         }
@@ -469,7 +481,11 @@ enum SetupSessions {
             return .failure(.stagingFailed)
         }
         do {
-            try AccountStorage.prepareSetupCompletionMarker(prepared.completionMarker)
+            try AccountStorage.prepareSetupCompletionMarker(
+                prepared.completionMarker,
+                mode: handoff.mode,
+                purpose: handoff.purpose
+            )
         } catch {
             try? FileManager.default.removeItem(at: prepared.scriptURL)
             return .failure(.stagingFailed)
@@ -517,9 +533,10 @@ enum SetupSessions {
             guard !Task.isCancelled else { return }
             coordinator?.handoffDidEnd(
                 key,
-                completion: AccountStorage.setupHandoffCompletion(marker: marker)
+                completion: AccountStorage.setupHandoffCompletion(marker: marker),
+                purpose: AccountStorage.setupHandoffPurpose(marker: marker)
             )
-            try? FileManager.default.removeItem(atPath: marker.completedPath)
+            AccountStorage.clearFinishedSetupCompletionMarkers(marker)
             activeScripts.removeValue(forKey: key)
             completionTasks[key] = nil
         }
