@@ -562,10 +562,16 @@ struct ProviderCapabilityRecoveryView: View {
 
 struct StopWaitingButton: View {
     let account: ProviderAccount
+    var onConfirmationPresented: () -> Void = {}
+    var onStop: ((ProviderAccount) -> Void)? = nil
+    var onDismiss: () -> Void = {}
     @State private var isConfirming = false
 
     var body: some View {
-        Button("Stop waiting") { isConfirming = true }
+        Button("Stop waiting") {
+            onConfirmationPresented()
+            isConfirming = true
+        }
             .buttonStyle(.bordered)
             .controlSize(.small)
             .accessibilityLabel("Stop waiting for setup for \(account.label)")
@@ -574,8 +580,15 @@ struct StopWaitingButton: View {
                 isPresented: $isConfirming,
                 titleVisibility: .visible
             ) {
-                Button("Stop Waiting") { SetupSessions.forceCancel(for: account) }
-                Button("Keep Waiting", role: .cancel) {}
+                Button("Stop Waiting") {
+                    if let onStop {
+                        onStop(account)
+                    } else {
+                        SetupSessions.forceCancel(for: account)
+                    }
+                    onDismiss()
+                }
+                Button("Keep Waiting", role: .cancel, action: onDismiss)
             } message: {
                 Text("Headroom stops waiting immediately. The Terminal window may still be open; close it by hand if you no longer need it.")
             }

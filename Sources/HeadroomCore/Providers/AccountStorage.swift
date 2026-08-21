@@ -136,9 +136,8 @@ public enum AccountStorage {
     /// Tear down all durable state for a handoff that Headroom has explicitly
     /// abandoned. Missing markers are already-clean success.
     public static func clearSetupCompletionMarkers(_ marker: SetupCompletionMarker) {
-        let manager = FileManager.default
-        try? manager.removeItem(atPath: marker.pendingPath)
-        try? manager.removeItem(atPath: marker.completedPath)
+        clearPreparedSetupCompletionMarker(marker)
+        try? FileManager.default.removeItem(atPath: marker.completedPath)
     }
 
     /// Read only the wrapper's allowlisted `complete:<status>` marker. Missing,

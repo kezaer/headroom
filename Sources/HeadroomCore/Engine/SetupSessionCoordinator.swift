@@ -104,6 +104,25 @@ private final class TaskSetupRetryCancellation: SetupRetryCancellation {
 @MainActor
 @Observable
 public final class SetupSessionCoordinator {
+    private enum StartIntent {
+        case beginStandard
+        case beginReset
+        case continueBlocked(isReset: Bool)
+
+        var allowsBlocked: Bool {
+            if case .continueBlocked = self { return true }
+            return false
+        }
+
+        var isReset: Bool {
+            switch self {
+            case .beginStandard: false
+            case .beginReset: true
+            case .continueBlocked(let isReset): isReset
+            }
+        }
+    }
+
     public typealias Prepare = @MainActor @Sendable (ProviderAccount, SetupHandoffMode) async -> SetupPreparationResult
     public typealias Open = @MainActor @Sendable (PreparedSetupHandoff) async -> SetupOpenResult
     public typealias Discard = @MainActor @Sendable (PreparedSetupHandoff) async -> Void
@@ -171,13 +190,13 @@ public final class SetupSessionCoordinator {
     }
 
     public func begin(for account: ProviderAccount, mode: SetupHandoffMode = .standard) {
-        start(account, mode: mode, allowBlocked: false, isReset: false)
+        start(account, mode: mode, intent: .beginStandard)
     }
 
     /// Reset differs from ordinary setup only in settlement: existing live usage is
     /// ignored until the external handoff ends and a post-handoff capture arrives.
     public func beginReset(for account: ProviderAccount) {
-        start(account, mode: .standard, allowBlocked: false, isReset: true)
+        start(account, mode: .standard, intent: .beginReset)
     }
 
     /// A blocked request never starts on its own when the previous provider slot clears.
@@ -186,16 +205,14 @@ public final class SetupSessionCoordinator {
         start(
             account,
             mode: mode ?? sessionModes[account.key] ?? .standard,
-            allowBlocked: true,
-            isReset: blockedResetSessions.contains(account.key)
+            intent: .continueBlocked(isReset: blockedResetSessions.contains(account.key))
         )
     }
 
     private func start(
         _ account: ProviderAccount,
         mode: SetupHandoffMode,
-        allowBlocked: Bool,
-        isReset: Bool
+        intent: StartIntent
     ) {
         let key = account.key
         // The Terminal wrapper can outlive the retry ladder. Make a second start
@@ -209,7 +226,7 @@ public final class SetupSessionCoordinator {
         switch state(for: key) {
         case .preparing, .waiting, .verifying, .connected, .removing, .removed:
             return
-        case .blockedByProviderLogin where !allowBlocked:
+        case .blockedByProviderLogin where !intent.allowsBlocked:
             return
         default:
             break
@@ -222,7 +239,7 @@ public final class SetupSessionCoordinator {
                 active: activeLogin
             )
             sessionModes[key] = mode
-            if isReset {
+            if intent.isReset {
                 blockedResetSessions.insert(key)
             } else {
                 blockedResetSessions.remove(key)
@@ -234,7 +251,7 @@ public final class SetupSessionCoordinator {
         }
 
         blockedResetSessions.remove(key)
-        if isReset {
+        if intent.isReset {
             resetSessions.insert(key)
             resetBoundary(key)
         } else {

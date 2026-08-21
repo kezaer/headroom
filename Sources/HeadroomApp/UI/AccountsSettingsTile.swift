@@ -38,7 +38,6 @@ struct AccountsSettingsTile: View {
     @State private var duplicateLoginLabels: [AccountKey: String] = [:]
     @State private var labelDrafts: [AccountKey: String] = [:]
     @State private var removalCandidate: ProviderAccount?
-    @State private var forceCancelCandidate: ProviderAccount?
     @State private var resetCandidate: ProviderAccount?
     @State private var removalOrigin: AccountKey?
     @State private var removalInProgress: AccountKey?
@@ -99,21 +98,6 @@ struct AccountsSettingsTile: View {
             Text(account.isBuiltIn
                  ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
                  : "Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
-        }
-        .confirmationDialog(
-            "Stop waiting for setup?",
-            isPresented: forceCancelDialogPresented,
-            titleVisibility: .visible,
-            presenting: forceCancelCandidate
-        ) { account in
-            Button("Stop Waiting") {
-                AccountsSettingsInteractions.stopWaiting(for: account, in: store)
-                forceCancelCandidate = nil
-                restoreRemovalFocus()
-            }
-            Button("Keep Waiting", role: .cancel) { restoreRemovalFocus() }
-        } message: { _ in
-            Text("Headroom stops waiting immediately. The Terminal window may still be open; close it by hand if you no longer need it.")
         }
         .confirmationDialog(
             "Sign out and set up again?",
@@ -494,13 +478,12 @@ struct AccountsSettingsTile: View {
         // The trash slot is always laid out — hidden (not absent) on built-in rows —
         // so status text shares one right anchor down the whole list (audit P2).
             if removalState == .setupActive || setupState == .blockedByOpenHandoff {
-                Button("Stop waiting") {
-                    removalOrigin = account.key
-                    forceCancelCandidate = account
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Stop waiting for setup for \(account.label)")
+                StopWaitingButton(
+                    account: account,
+                    onConfirmationPresented: { removalOrigin = account.key },
+                    onStop: { AccountsSettingsInteractions.stopWaiting(for: $0, in: store) },
+                    onDismiss: restoreRemovalFocus
+                )
                 .focused($focusedRemovalAction, equals: account.key)
             } else if removalState == .failed {
                 Button("Retry") {
@@ -836,18 +819,6 @@ struct AccountsSettingsTile: View {
         )
     }
 
-    private var forceCancelDialogPresented: Binding<Bool> {
-        Binding(
-            get: { forceCancelCandidate != nil },
-            set: {
-                if !$0 {
-                    forceCancelCandidate = nil
-                    restoreRemovalFocus()
-                }
-            }
-        )
-    }
-
     private var resetDialogPresented: Binding<Bool> {
         Binding(
             get: { resetCandidate != nil },
@@ -889,7 +860,6 @@ struct AccountsSettingsTile: View {
     private func restoreRemovalFocus() {
         let key = removalOrigin
         removalCandidate = nil
-        forceCancelCandidate = nil
         resetCandidate = nil
         Task { @MainActor in
             await Task.yield()
