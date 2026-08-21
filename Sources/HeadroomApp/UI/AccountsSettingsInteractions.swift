@@ -53,6 +53,17 @@ struct CapabilityAnnouncementDedupe {
 /// official-CLI handoff, while persistence and cleanup stay owned by `UsageStore`.
 @MainActor
 enum AccountsSettingsInteractions {
+    enum PromotionState: Equatable {
+        case unavailable
+        case primary
+        case available
+    }
+
+    struct PromotionFeedback: Equatable {
+        let accountKey: AccountKey
+        let announcement: String
+    }
+
     enum BuiltInRowActions: Equatable {
         case unavailable
         case resetOnly
@@ -168,6 +179,26 @@ enum AccountsSettingsInteractions {
         else { return false }
         beginReset(account)
         return true
+    }
+
+    static func promotionState(
+        for account: ProviderAccount,
+        in store: UsageStore
+    ) -> PromotionState {
+        if store.primaryAccount(for: account.providerID)?.key == account.key { return .primary }
+        return store.canPromoteAccount(account.key) ? .available : .unavailable
+    }
+
+    @discardableResult
+    static func makeMain(
+        _ account: ProviderAccount,
+        in store: UsageStore
+    ) -> PromotionFeedback? {
+        guard store.promoteAccount(account.key) else { return nil }
+        return PromotionFeedback(
+            accountKey: account.key,
+            announcement: "\(account.label) is now Main"
+        )
     }
 
     /// Undo for stop-tracking: resurface the CLI's own login and fetch it right away.

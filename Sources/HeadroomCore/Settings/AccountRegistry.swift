@@ -109,7 +109,8 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
         return true
     }
 
-    /// Clear the tombstone; the built-in resurfaces first with its persisted label.
+    /// Clear the tombstone; the built-in resurfaces with its persisted label while
+    /// the provider's retained primary selection continues to determine row order.
     @discardableResult
     public func resumeTrackingBuiltIn(for providerID: ProviderID) -> Bool {
         guard isBuiltInHidden(for: providerID) else { return false }

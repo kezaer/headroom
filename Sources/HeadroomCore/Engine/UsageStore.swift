@@ -238,8 +238,16 @@ public final class UsageStore {
             } else {
                 known = []
             }
-            let instanceIDs = providers.filter { $0.id == id }.map(\.accountID)
-            index[id] = instanceIDs.map { accountID in
+            var seenInstanceIDs = Set<AccountID>()
+            let instanceIDs = providers
+                .filter { $0.id == id }
+                .map(\.accountID)
+                .filter { seenInstanceIDs.insert($0).inserted }
+            let instanceIDSet = Set(instanceIDs)
+            let orderedKnown = known.filter { instanceIDSet.contains($0.id) }
+            let knownIDs = Set(orderedKnown.map(\.id))
+            let orderedIDs = orderedKnown.map(\.id) + instanceIDs.filter { !knownIDs.contains($0) }
+            index[id] = orderedIDs.map { accountID in
                 known.first(where: { $0.id == accountID })
                     ?? ProviderAccount(id: accountID, providerID: id, label: "Main", isBuiltIn: accountID == .primary)
             }
@@ -570,22 +578,35 @@ public final class UsageStore {
         }
     }
 
-    /// Timer backoff for never-signed-in *extra* accounts: each one costs a full
+    /// Timer backoff for never-signed-in non-primary accounts: each one costs a full
     /// 20–30s Claude CLI session per probe, so an abandoned Add Account must not burn
     /// a session every cycle forever. Probed every 4th timer cycle; manual refreshes
-    /// and the per-account retry path always probe. The built-in account is exempt —
-    /// its `.notLoggedIn` can also mean "CLI missing", where fast detection matters
-    /// and the probe short-circuits cheaply anyway.
+    /// and the per-account retry path always probe. Whichever row the user selected
+    /// as primary is exempt so its compact surfaces recover promptly.
     private func shouldSkipOnTimer(provider: any UsageProvider, source: RefreshSource) -> Bool {
-        guard source == .timer,
-              provider.accountID != .primary,
-              case .stale(let reason) = snapshots[provider.accountKey]?.freshness,
-              isNeverSignedIn(reason)
-        else { return false }
-        return timerCycleCount % 4 != 0
+        guard source == .timer else { return false }
+        return Self.shouldBackOffNeverSignedInAccount(
+            provider.accountKey,
+            primary: primaryAccount(for: provider.id)?.key,
+            timerCycle: timerCycleCount,
+            freshness: snapshots[provider.accountKey]?.freshness
+        )
     }
 
-    private func isNeverSignedIn(_ reason: FailureReason) -> Bool {
+    static func shouldBackOffNeverSignedInAccount(
+        _ key: AccountKey,
+        primary: AccountKey?,
+        timerCycle: Int,
+        freshness: Freshness?
+    ) -> Bool {
+        guard key != primary,
+              case .stale(let reason) = freshness,
+              isNeverSignedIn(reason)
+        else { return false }
+        return timerCycle % 4 != 0
+    }
+
+    private static func isNeverSignedIn(_ reason: FailureReason) -> Bool {
         if case .notLoggedIn = reason { return true }
         guard case .providerSetup(let outcome) = reason else { return false }
         return outcome.isNeverSignedIn

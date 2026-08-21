@@ -358,6 +358,53 @@ struct AccountsSettingsInteractionTests {
         #expect(resetKeys == [builtIn.key])
     }
 
+    @Test func promotionPresentationDistinguishesPrimaryAvailableAndDemoRows() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let builtIn = ProviderAccount.builtIn(for: .claude)
+        let extra = try! #require(fixture.store.addAccount(for: .claude))
+
+        #expect(AccountsSettingsInteractions.promotionState(for: builtIn, in: fixture.store) == .primary)
+        #expect(AccountsSettingsInteractions.promotionState(for: extra, in: fixture.store) == .available)
+
+        let demoStore = UsageStore(
+            providers: [
+                DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
+                DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot, accountID: extra.id),
+            ],
+            accounts: [builtIn, extra]
+        )
+        #expect(AccountsSettingsInteractions.promotionState(for: extra, in: demoStore) == .unavailable)
+    }
+
+    @Test func makeMainReturnsFocusAndVoiceOverContextForTheMovedRow() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let extra = try! #require(fixture.store.addAccount(for: .codex))
+
+        let feedback = AccountsSettingsInteractions.makeMain(extra, in: fixture.store)
+
+        #expect(feedback?.accountKey == extra.key)
+        #expect(feedback?.announcement == "\(extra.label) is now Main")
+        #expect(fixture.store.primaryAccount(for: .codex)?.key == extra.key)
+    }
+
+    @Test func capabilityRecoveryTargetsPromotedPrimary() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let extra = try! #require(fixture.store.addAccount(for: .claude))
+        _ = AccountsSettingsInteractions.makeMain(extra, in: fixture.store)
+        var routed: [AccountKey] = []
+
+        #expect(AccountsSettingsInteractions.performCapabilityRecovery(
+            .openClaudeSetup,
+            for: .claude,
+            in: fixture.store,
+            perform: { _, account, _ in routed.append(account.key) }
+        ))
+        #expect(routed == [extra.key])
+    }
+
     @Test func checkNowForcesClaudeDiscoveryBeforeRefreshingOnlyTheSelectedAccount() async {
         let fixture = makeFixture()
         defer { fixture.cleanup() }

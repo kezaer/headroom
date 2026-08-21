@@ -63,6 +63,30 @@ extension UsageStore {
         accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
     }
 
+    public func canPromoteAccount(_ key: AccountKey) -> Bool {
+        guard providerFactory != nil,
+              accountRegistry != nil,
+              primaryAccount(for: key.providerID)?.key != key
+        else { return false }
+        return accounts(for: key.providerID).contains(where: { $0.key == key })
+    }
+
+    /// Make this row the provider's primary consumer immediately. The targeted
+    /// refresh updates its usage without fanning out into the full account fleet;
+    /// current snapshots are exported first so compact surfaces flip synchronously.
+    @discardableResult
+    public func promoteAccount(_ key: AccountKey) -> Bool {
+        guard canPromoteAccount(key),
+              let accountRegistry,
+              accountRegistry.promote(key)
+        else { return false }
+        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+        refreshAccountNow(key)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+        return true
+    }
+
     @discardableResult
     public func removeAccount(_ key: AccountKey) async -> AccountRemovalResult {
         guard let accountRegistry,

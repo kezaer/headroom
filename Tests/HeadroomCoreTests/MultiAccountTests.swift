@@ -646,6 +646,111 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(store.menuBarSummary.text == "70%")
     }
 
+    @Test func promotionReordersPrimaryConsumersAndExportsImmediately() async {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        let widgetExporter = SpyWidgetExporter()
+        let phoneExporter = SpyWidgetExporter()
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 30)])),
+                AccountStubProvider(id: .claude, accountID: extra.id, displayName: "Claude",
+                                    snapshot: .live(.claude, windows: [window(.weekly, used: 95)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: account.providerID))
+            },
+            widgetExporter: widgetExporter,
+            phoneSyncExporter: phoneExporter
+        )
+        await store.refreshAll()
+        let widgetBaseline = widgetExporter.exports.count
+        let phoneBaseline = phoneExporter.exports.count
+
+        #expect(store.promoteAccount(extra.key))
+        #expect(store.primaryAccount(for: .claude)?.key == extra.key)
+        #expect(store.snapshot(for: .claude).windows.first?.utilization == 95)
+        #expect(store.menuBarSummary.text == "5%")
+        #expect(widgetExporter.exports.count == widgetBaseline + 1)
+        #expect(phoneExporter.exports.count == phoneBaseline + 1)
+    }
+
+    @Test func storeRestoresPersistedPrimaryOrderRegardlessOfProviderConstructionOrder() {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extra = registry.addAccount(for: .claude)!
+        #expect(registry.promote(extra.key))
+
+        let store = UsageStore(
+            providers: [
+                AccountStubProvider(id: .claude, accountID: .primary, displayName: "Claude",
+                                    snapshot: .pending(for: .claude)),
+                AccountStubProvider(id: .claude, accountID: extra.id, displayName: "Claude",
+                                    snapshot: .pending(for: .claude)),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: account.providerID))
+            }
+        )
+
+        #expect(store.accounts(for: .claude).map(\.id) == [extra.id, .primary])
+        #expect(store.primaryAccount(for: .claude)?.key == extra.key)
+    }
+
+    @Test func promotionRefreshesOnlyThePromotedAccount() async {
+        let defaults = freshDefaults()
+        let registry = AccountRegistry(defaults: defaults)
+        let extraAccount = registry.addAccount(for: .claude)!
+        let builtIn = SuspendedAccountProvider(id: .claude, accountID: .primary)
+        let extra = SuspendedAccountProvider(id: .claude, accountID: extraAccount.id)
+        let store = UsageStore(
+            providers: [builtIn, extra],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: registry,
+            accountStorage: NoopAccountStorage(),
+            providerFactory: { account in
+                AccountStubProvider(id: account.providerID, accountID: account.id, displayName: "Claude",
+                                    snapshot: .pending(for: account.providerID))
+            }
+        )
+
+        #expect(store.promoteAccount(extraAccount.key))
+        await extra.waitUntilStarted()
+        #expect(builtIn.fetchCount == 0)
+        #expect(extra.fetchCount == 1)
+        extra.releaseFetches()
+        for _ in 0..<5 { await Task.yield() }
+    }
+
+    @Test func timerBackoffFollowsPrimaryPositionInsteadOfBuiltInIdentity() {
+        let neverSignedIn = Freshness.stale(.notLoggedIn("sign in"))
+        let builtIn = AccountKey(providerID: .claude, accountID: .primary)
+        let promoted = AccountKey(providerID: .claude, accountID: AccountID("work"))
+
+        #expect(!UsageStore.shouldBackOffNeverSignedInAccount(
+            promoted,
+            primary: promoted,
+            timerCycle: 1,
+            freshness: neverSignedIn
+        ))
+        #expect(UsageStore.shouldBackOffNeverSignedInAccount(
+            builtIn,
+            primary: promoted,
+            timerCycle: 1,
+            freshness: neverSignedIn
+        ))
+    }
+
     @Test func anyAccountNeedingReauthFlagsMenuBarAttention() async {
         let store = twoAccountStore(
             workSnapshot: .stale(for: .claude, reason: .needsReauth("sign in"))
