@@ -131,6 +131,25 @@ headroom_sparkle_minimum_from_app() {
   headroom_normalize_macos_version "${minimum}"
 }
 
+headroom_appcast_item_for_build() {
+  local appcast="$1"
+  local build="$2"
+
+  awk -v build="${build}" '
+    /<item>/ { in_item = 1; item = "" }
+    in_item { item = item $0 "\n" }
+    /<\/item>/ && in_item {
+      element = "<sparkle:version>" build "</sparkle:version>"
+      attribute = "sparkle:version=\"" build "\""
+      if (index(item, element) || index(item, attribute)) {
+        printf "%s", item
+        exit
+      }
+      in_item = 0
+    }
+  ' "${appcast}"
+}
+
 headroom_verify_appcast_minimum() {
   local appcast="$1"
   local app="$2"
@@ -143,19 +162,7 @@ headroom_verify_appcast_minimum() {
     echo "Missing Sparkle appcast: ${appcast}" >&2
     return 65
   }
-  item="$(awk -v build="${build}" '
-    /<item>/ { in_item = 1; item = "" }
-    in_item { item = item $0 "\n" }
-    /<\/item>/ && in_item {
-      element = "<sparkle:version>" build "</sparkle:version>"
-      attribute = "sparkle:version=\"" build "\""
-      if (index(item, element) || index(item, attribute)) {
-        printf "%s", item
-        exit
-      }
-      in_item = 0
-    }
-  ' "${appcast}")"
+  item="$(headroom_appcast_item_for_build "${appcast}" "${build}")"
   [[ -n "${item}" ]] || {
     echo "Sparkle appcast has no item for build ${build}: ${appcast}" >&2
     return 65

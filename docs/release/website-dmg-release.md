@@ -21,6 +21,8 @@ new Vercel project.
 - A Developer ID Application certificate installed locally.
 - Working notarization credentials, normally the `headroom-notary` keychain profile.
 - The Sparkle private signing key available in the login Keychain.
+- A non-empty `docs/release/sparkle/Headroom-<version>-<build>.html` file for the target
+  macOS marketing version and build.
 - `xcodegen`, Xcode, `gh`, `pnpm`, and the Vercel CLI installed and authenticated.
 - A VM/dedicated Mac, or a dedicated macOS test user with a user-local `~/Applications` install,
   with the previous public DMG ready for the installed Sparkle update test. A separate user does
@@ -47,10 +49,17 @@ Regenerate the Xcode project, test the bump, and merge it before creating the pu
 ```bash
 xcodegen generate
 swift test
+bash Tests/ReleaseScripts/sparkle-release-notes-tests.sh
 ```
 
 The generated `Headroom.xcodeproj/project.pbxproj` must be committed with `project.yml`.
 Release from `main`, never from an unmerged feature branch.
+
+Write the user-facing Sparkle notes for the exact macOS version/build at
+`docs/release/sparkle/Headroom-<version>-<build>.html`. Use a short heading and concise HTML body
+that make sense inside Sparkle's standard update prompt. Do not add scripts, tracking, or external
+assets. The release script fails if this exact file is missing or empty; a note for another build
+does not satisfy the gate.
 
 ## 2. Seed the release staging folder from production
 
@@ -88,6 +97,7 @@ Gatekeeper, signs the Sparkle archive, then updates these local outputs:
 
 - `dist/Headroom-<version>-<build>.dmg`
 - `dist/headroom.zantos.co/Headroom-<version>-<build>.dmg`
+- `dist/headroom.zantos.co/Headroom-<version>-<build>.html`
 - `dist/headroom.zantos.co/Headroom.dmg`
 - checksums, `appcast.xml`, `latest.json`, and any deltas referenced by the appcast
 
@@ -149,7 +159,10 @@ iCloud KVS provides no writer fence.
 Check that the first appcast item names the new version and build, retains the current
 production item, and references only files present in `dist/headroom.zantos.co/`. Its full
 versioned DMG enclosure is the universal fallback for every older installed app; deltas only
-optimize matching older builds.
+optimize matching older builds. The target item must also contain a
+`sparkle:releaseNotesLink` ending in `Headroom-<version>-<build>.html`, and that local HTML file
+must be non-empty. `Scripts/release-app.sh` validates this after both normal `generate_appcast`
+output and the timeout fallback.
 
 ## 4. Publish assets through the portfolio repository
 
@@ -162,6 +175,7 @@ TARGET='/Users/kylezantos/App Development/Manual Library/kz-portfolio/public'
 
 ditto "$SOURCE/Headroom-<version>-<build>.dmg" "$TARGET/Headroom-<version>-<build>.dmg"
 ditto "$SOURCE/Headroom-<version>-<build>.dmg.sha256" "$TARGET/Headroom-<version>-<build>.dmg.sha256"
+ditto "$SOURCE/Headroom-<version>-<build>.html" "$TARGET/Headroom-<version>-<build>.html"
 ditto "$SOURCE/Headroom.dmg" "$TARGET/Headroom.dmg"
 ditto "$SOURCE/Headroom.dmg.sha256" "$TARGET/Headroom.dmg.sha256"
 ditto "$SOURCE/appcast.xml" "$TARGET/appcast.xml"
@@ -195,10 +209,13 @@ Confirm the Vercel deployment aliases `headroom.zantos.co`, then check the live 
 ```bash
 curl --fail --silent https://headroom.zantos.co/latest.json
 curl --fail --silent https://headroom.zantos.co/appcast.xml
+curl --fail --silent https://headroom.zantos.co/Headroom-<version>-<build>.html
 curl --fail --silent --location https://headroom.zantos.co/Headroom.dmg | shasum -a 256
 ```
 
 The live DMG hash must equal `latest.json`'s `sha256` and `Headroom.dmg.sha256`. For the final
+release-note check, confirm the target appcast item links the exact live HTML URL above and that
+the response contains the target release heading and body. For the final
 download-style smoke test, mount a fresh public download, validate its signature, and run the
 diagnostic without launching the menu bar UI:
 
@@ -236,8 +253,11 @@ does not replace a working development install. A separate user alone does not i
    Do not overwrite a working development installation. If the user explicitly authorizes the
    primary-account fallback, back up the existing bundle recoverably and record that this is
    weaker than an isolated acceptance pass.
-4. Open Headroom Settings, select **Check for Updates…**, accept the Sparkle prompt, and let it
-   relaunch. Do not test against a locally built app; it lacks the production feed configuration.
+4. Open Headroom Settings and select **Check for Updates…**. Before accepting the update, confirm
+   Sparkle's prompt visibly renders the target release heading and body from the versioned notes;
+   blank content, notes for another build, or a load error blocks acceptance. Accept the prompt
+   only after this check, then let Headroom relaunch. Do not test against a locally built app; it
+   lacks the production feed configuration.
    If the menu-bar UI is not exposed after one fresh accessibility query, stop automation and ask
    the tester to make this exact click. Do not keyboard-scan the menu bar or try hidden positions.
 5. Confirm the installed app's version and build equal the new release, then repeat the normal
@@ -286,8 +306,9 @@ does not replace a working development install. A separate user alone does not i
    require destructive credential recreation. Record only typed outcomes, permission modes, and
    pass/fail decisions—never emails, tokens, auth contents, callback URLs, or raw provider panels.
 
-Record the starting and ending versions in the release PR. A rejected signature, missing
-enclosure, or no-update result is a release blocker: stop before announcing the download.
+Record the starting and ending versions plus the visible release-note result in the release PR.
+A rejected signature, missing enclosure, missing/unreadable release notes, or no-update result is
+a release blocker: stop before announcing the download.
 If the dedicated environment was unavailable before publishing, proceed only after the user
 explicitly authorizes that residual. Report the macOS lane as **published; Sparkle acceptance
 pending/waived**, never simply “complete.”
