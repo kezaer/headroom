@@ -32,36 +32,38 @@ func setupHandoffRefusalMessage(for state: SetupSessionState) -> String? {
     state == .blockedByOpenHandoff ? "Close setup, then retry" : nil
 }
 
+func providerCardHasTransientStaleState(_ snapshot: UsageSnapshot) -> Bool {
+    guard case .stale(let reason) = snapshot.freshness else { return false }
+    return !reason.isPermanent
+}
+
 /// One provider's card (U7). Renders the explicit states off `snapshot.freshness`:
 /// `.pending` first-run skeleton, `.live`, transient stale (last data kept, marked with
 /// a "Stale" pill), permanent needs-reauth (actionable command), and — for Claude's
 /// trust-required first run and Codex credential recovery — guided Connect/Waiting
 /// cards that hand control to each provider's official CLI.
 ///
-/// Multi-account (Jul 2026): the card takes one `ProviderAccountEntry` per configured
-/// account. A single account renders exactly the pre-multi-account layout (no labels,
-/// no bands — nothing changed for the common case). Two or more accounts stack labeled
-/// sections inside the one provider card. G1 (Jul 2026 multi-account design review)
-/// replaced the uppercase eyebrow + hairline dividers with a plain bold identity row per
-/// account, grouped by an 18pt proximity gap — a filled band variant (H3a) was built and
-/// reverted after live review: on the real glass card it read as slabs and zoned Claude
-/// into sections while sibling cards stayed open (PRODUCT.md #1). The compact meter
-/// recipe is dropped — every section renders at the regular scale, with the 640pt
-/// popover scroll cap absorbing taller five-account stacks.
+/// Multi-account (Jul/Sep 2026): the card takes one `ProviderAccountEntry` per configured
+/// account. KTD9 gives single providers and account sections one 15pt neutral identity
+/// row, while the popover-wide flip decides whether a lone row names its provider or its
+/// account. G3 (R18) groups accounts with a 22pt gap and indents meters under the title.
+/// The earlier eyebrow, hairline, filled H3a band, 21pt tinted provider header, and
+/// account counter are all retired; the 640pt popover scroll cap absorbs taller stacks.
 /// The guided full-size Connect/Waiting cards stay reserved for the single-account
 /// first run — extra accounts get a compact inline sign-in row instead, since the
 /// user explicitly created them from Settings and just needs the Terminal handoff.
 ///
-/// Type + spacing were tuned in the mockup: 16pt bold card titles, 14pt vertical rhythm
-/// between rows, 20pt card padding. Plan pills return in multi-account mode as the
-/// natural differentiator ("Max" vs "Pro"); they stay hidden with one account
-/// (density audit).
+/// Card padding remains the live-tuned 13pt on every side. KTD11 keeps email tooltip-only
+/// unless a provider-local label is ambiguous, and KTD18 places plan, stale, menu-bar,
+/// and Connected state on the relevant identity row.
 struct ProviderCardView: View {
     let providerID: ProviderID
     let displayName: String
     let entries: [ProviderAccountEntry]
     let capabilityStatus: ProviderCapabilityStatus?
     let percentageMode: UsagePercentageMode
+    let meterStyle: MeterStyle
+    let anyProviderMultiAccount: Bool
     let now: Date
     let onRetrySetup: () -> Void
     /// Retry scoped to one account — the multi-account rows use this so watching one
@@ -84,7 +86,6 @@ struct ProviderCardView: View {
     private var activeSetupAccount: ProviderAccount? {
         providerCardStopWaitingAccount(entries: entries)
     }
-
     var body: some View {
         Group {
             if let presentation = capabilityRecoveryPresentation(
@@ -130,8 +131,18 @@ struct ProviderCardView: View {
     // MARK: - Single account (unchanged pre-multi-account layout)
 
     private func capabilityBody(_ presentation: CapabilityRecoveryPresentation) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
+        let providerAccounts = entries.map(\.account)
+        return VStack(alignment: .leading, spacing: 10) {
+            IdentityRow(
+                providerID: providerID,
+                title: displayName,
+                planLabel: nil,
+                isMenuBarAccount: false,
+                isStale: false,
+                email: nil,
+                showsPersistentEmail: false,
+                showsConnectedChip: false
+            )
             ProviderCapabilityRecoveryView(
                 presentation: presentation,
                 stopWaitingAccount: activeSetupAccount,
@@ -149,16 +160,12 @@ struct ProviderCardView: View {
                 }
             )
             if isMultiAccount {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 22) {
                     ForEach(entries.filter { $0.snapshot.freshness != .pending }) { entry in
-                        AccountSectionView(
-                            entry: entry,
-                            providerDisplayName: displayName,
-                            percentageMode: percentageMode,
-                            now: now,
-                            isMenuBarAccount: entry.id == entries.first?.id,
-                            showsStopWaiting: false,
-                            onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
+                        accountSection(
+                            for: entry,
+                            providerAccounts: providerAccounts,
+                            showsStopWaiting: false
                         )
                     }
                 }
@@ -293,8 +300,8 @@ struct ProviderCardView: View {
                 }
             )
         } else {
-            VStack(alignment: .leading, spacing: 9) {
-                header
+            VStack(alignment: .leading, spacing: 7) {
+                accountIdentityRow(for: primaryEntry)
                 content
             }
         }
@@ -322,24 +329,44 @@ struct ProviderCardView: View {
     // MARK: - Multi-account
 
     private var multiAccountBody: some View {
-        // G1: sections stack at 18pt with no dividers — a real gap step above the 7pt
-        // header-to-meters bind, so proximity alone carries the account grouping.
-        VStack(alignment: .leading, spacing: 10) {
-            header
-            VStack(alignment: .leading, spacing: 18) {
-                ForEach(entries) { entry in
-                    AccountSectionView(
-                        entry: entry,
-                        providerDisplayName: displayName,
-                        percentageMode: percentageMode,
-                        now: now,
-                        isMenuBarAccount: entry.id == entries.first?.id,
-                        showsStopWaiting: activeSetupAccount?.key == entry.account.key,
-                        onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
-                    )
-                }
+        let providerAccounts = entries.map(\.account)
+        // G3: the 22pt gap chunks accounts without adding chrome; each section owns its
+        // identity, so row mode has no separate provider header or account counter.
+        return VStack(alignment: .leading, spacing: 22) {
+            ForEach(entries) { entry in
+                accountSection(
+                    for: entry,
+                    providerAccounts: providerAccounts,
+                    showsStopWaiting: activeSetupAccount?.key == entry.account.key
+                )
             }
         }
+    }
+
+    private func accountSection(
+        for entry: ProviderAccountEntry,
+        providerAccounts: [ProviderAccount],
+        showsStopWaiting: Bool
+    ) -> some View {
+        AccountSectionView(
+            entry: entry,
+            providerDisplayName: displayName,
+            identityTitle: rowTitle(
+                for: entry.account,
+                in: providerAccounts,
+                providerDisplayName: displayName
+            ),
+            showsPersistentEmail: showsPersistentEmail(
+                for: entry.account,
+                in: providerAccounts
+            ),
+            percentageMode: percentageMode,
+            meterStyle: meterStyle,
+            now: now,
+            isMenuBarAccount: isMultiAccount && entry.id == entries.first?.id,
+            showsStopWaiting: showsStopWaiting,
+            onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
+        )
     }
 
     /// The guided-setup payoff: when either provider goes live after its Terminal handoff,
@@ -384,42 +411,24 @@ struct ProviderCardView: View {
         SetupSessions.performRecovery(action, for: account, onRetry: onRetry)
     }
 
-    /// The per-card "Updated N min ago" was removed here — both providers poll on one
-    /// cycle, so it reads once in the popover header (PopoverView) instead of twice.
-    /// Header mirrors the large widget's recipe (icon ≈ 1.33× the title size, title in
-    /// the shared brand text-accent) so popover and widgets read as one family.
-    private var header: some View {
-        HStack(spacing: 6) {
-            ProviderLogoView(providerID: providerID, size: 21)
-            Text(displayName)
-                .font(.system(size: 16, weight: .semibold))
-                .kerning(-0.2)
-                .foregroundStyle(ProviderStyle.textAccent(for: providerID, scheme: scheme))
-            if isMultiAccount {
-                // Quiet count so a five-account stack announces its size up front.
-                Text("\(entries.count) accounts")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 2)
-            }
-            Spacer(minLength: 6)
-            if showsConnectedChip {
-                connectedChip
-                    .transition(.opacity)
-            }
-        }
-    }
-
-    private var connectedChip: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
-            Text("Connected")
-                .font(.system(size: 11, weight: .semibold))
-        }
-        .foregroundStyle(ClaudeSetupStyle.connectedInk(dark: scheme == .dark))
-        .padding(.horizontal, 8).padding(.vertical, 2.5)
-        .background(ClaudeSetupStyle.connectedBackground(dark: scheme == .dark), in: Capsule())
+    private func accountIdentityRow(for entry: ProviderAccountEntry?) -> some View {
+        let account = entry?.account ?? primaryAccount
+        let providerAccounts = entries.map(\.account)
+        let rowName = anyProviderMultiAccount
+            ? rowTitle(for: account, in: providerAccounts, providerDisplayName: displayName)
+            : displayName
+        let persistentEmail = anyProviderMultiAccount
+            && showsPersistentEmail(for: account, in: providerAccounts)
+        return IdentityRow(
+            providerID: providerID,
+            title: rowName,
+            planLabel: entry?.snapshot.planLabel,
+            isMenuBarAccount: false,
+            isStale: entry.map { providerCardHasTransientStaleState($0.snapshot) } ?? false,
+            email: entry?.snapshot.accountEmail,
+            showsPersistentEmail: persistentEmail,
+            showsConnectedChip: showsConnectedChip
+        )
     }
 
     @ViewBuilder private var content: some View {
@@ -442,7 +451,6 @@ struct ProviderCardView: View {
             if !snapshot.windows.isEmpty { bars(for: snapshot, dimmed: true) }
         } else {
             bars(for: snapshot, dimmed: true)
-            stalePill(reason)
         }
     }
 
@@ -452,8 +460,10 @@ struct ProviderCardView: View {
             windows: snapshot.windows,
             percentageMode: percentageMode,
             now: now,
-            dimmed: dimmed
+            dimmed: dimmed,
+            meterStyle: meterStyle
         )
+        .padding(.leading, IdentityRowMetrics.meterContentInset)
     }
 
     /// Varied widths (audit UI-13): real content isn't two identical bars, so the
@@ -461,11 +471,12 @@ struct ProviderCardView: View {
     /// the ~20–30s first Claude poll so the delay feels intentional, not hung.
     private var pendingSkeleton: some View {
         VStack(alignment: .leading, spacing: 9) {
-            SkeletonMeter(labelWidth: 72, valueWidth: 42)
-            SkeletonMeter(labelWidth: 86, valueWidth: 36)
+            SkeletonMeter(labelWidth: 72, valueWidth: 42, format: meterStyle.format)
+            SkeletonMeter(labelWidth: 86, valueWidth: 36, format: meterStyle.format)
             Text("Fetching usage…")
                 .font(.caption2).foregroundStyle(.tertiary)
         }
+        .padding(.leading, IdentityRowMetrics.meterContentInset)
     }
 
     /// Permanent failure the user can fix (UI-05) that is not one of the guided setup
@@ -478,20 +489,6 @@ struct ProviderCardView: View {
             if let command = recoveryCommand {
                 CommandRecoveryRow(command: command)
             }
-        }
-    }
-
-    /// Small "Stale" flag + the transient reason, so a network blip is explicit rather
-    /// than communicated only by a faint bar (which also reads as "disabled").
-    private func stalePill(_ reason: FailureReason) -> some View {
-        HStack(spacing: 6) {
-            Text("Stale")
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(Color.secondary.opacity(0.20), in: Capsule())
-            Text(reason.message)
-                .font(.caption2).foregroundStyle(.secondary)
-                .lineLimit(1)
         }
     }
 
@@ -620,289 +617,6 @@ struct StopWaitingButton: View {
     }
 }
 
-// MARK: - Account section (multi-account rows)
-
-/// One account's section inside a multi-account provider card (H3a, Jul 2026 multi-account
-/// design review): a full-bleed band header (account name + plan pill + optional menu-bar
-/// mark) fencing the account's meters, with per-account failure affordances below. The band
-/// replaced the earlier uppercase eyebrow + hairline divider — a filled strip reads as a
-/// stronger group boundary while still sitting one hierarchy step below the brand row.
-private struct AccountSectionView: View {
-    let entry: ProviderAccountEntry
-    let providerDisplayName: String
-    let percentageMode: UsagePercentageMode
-    let now: Date
-    /// H3a: the selected primary account (`entries.first`) is the one the menu bar and
-    /// widgets follow; its band carries a "menubar.rectangle" mark so the popover explains
-    /// which login drives the always-visible glyph.
-    let isMenuBarAccount: Bool
-    let showsStopWaiting: Bool
-    let onRetry: () -> Void
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var scheme
-
-    private var snapshot: UsageSnapshot { entry.snapshot }
-    private var account: ProviderAccount { entry.account }
-
-    var body: some View {
-        // G1: 7pt binds the header to its meters; the 18pt inter-section gap in
-        // `multiAccountBody` does the separating (proximity, not chrome). The whole section
-        // is one VoiceOver container so the rotor can jump account-to-account instead of
-        // the meters floating free of their identity row.
-        VStack(alignment: .leading, spacing: 7) {
-            identityRow
-            stateContent
-            if showsStopWaiting,
-               SetupSessions.state(for: account) != .blockedByOpenHandoff {
-                HStack {
-                    Spacer(minLength: 0)
-                    StopWaitingButton(account: account)
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(account.label) account")
-        .animation(reduceMotion ? nil : HeadroomMotion.valueSpring, value: snapshot.freshness)
-        .onChange(of: snapshot.freshness) { settleSetupIfLive() }
-        .onAppear {
-            settleSetupIfLive()
-            SetupSessions.announceFailureIfNeeded(for: account)
-        }
-        .onChange(of: SetupSessions.state(for: account)) {
-            SetupSessions.announceFailureIfNeeded(for: account)
-        }
-    }
-
-    /// Identity header row (G1, Jul 2026 — supersedes the H3a band, which read as slabs on
-    /// the live glass and zoned Claude into sections while sibling cards stayed open,
-    /// PRODUCT.md #1). Set in the popover's one section-header register — the exact
-    /// "API Spend" recipe (11pt bold uppercase, +0.5 tracking) — so account headers and
-    /// the spend header speak the same grammar; a 13pt bold mixed-case pass (live review)
-    /// sat too close to the meter labels' own register to separate. Secondary ink keeps it
-    /// a header, not a peer of the bright numerals; grouping stays proximity-only via the
-    /// inter-section gap in `multiAccountBody`.
-    private var identityRow: some View {
-        HStack(spacing: 6) {
-            Text(account.label)
-                .font(.system(size: 11, weight: .bold))
-                // Primary ink, not the API Spend header's secondary (live review): the
-                // account name is the section's identity anchor and reads washed-out at
-                // .secondary on the glass card; size + case keep it a header regardless.
-                .foregroundStyle(.primary)
-                .textCase(.uppercase)
-                .tracking(0.5)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            if let plan = snapshot.planLabel, !plan.isEmpty {
-                Text(plan.capitalized)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(ClaudeSetupStyle.stepBackground(dark: scheme == .dark), in: Capsule())
-            }
-            if isMenuBarAccount {
-                Image(systemName: "menubar.rectangle")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Shown in the menu bar")
-            }
-            if let email = accountEmail {
-                // Identity check (Aug 2026): the label is user-chosen and can drift from
-                // the login it names, so the signed-in address rides beside it in the plan
-                // pill's tertiary register — metadata, not a second label. Inline rather
-                // than a subordinate line so a five-account stack costs no extra height.
-                // Negative layout priority yields width to the account name first, and
-                // middle truncation keeps the domain visible on long addresses.
-                Text(email)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(-1)
-                    .help(email)
-            }
-            Spacer(minLength: 6)
-            if case .stale(let reason) = snapshot.freshness, !reason.isPermanent {
-                staleTag
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityIdentity)
-    }
-
-    /// Nil whenever the account has no known address yet (pre-first-poll, or a source
-    /// without the claim) — a normal state, so the row simply collapses. Gated on
-    /// non-nil, never on `.live`: the last-known address persists across stale
-    /// refreshes exactly like the plan pill.
-    private var accountEmail: String? {
-        guard let email = snapshot.accountEmail, !email.isEmpty else { return nil }
-        return email
-    }
-
-    private var accessibilityIdentity: String {
-        // Explicit label replaces the band's combined child labels, so re-state the
-        // menu-bar mark here (H3a) — otherwise its "Shown in the menu bar" is dropped.
-        var parts = ["\(account.label) account"]
-        if let email = accountEmail { parts.append("signed in as \(email)") }
-        if let plan = snapshot.planLabel, !plan.isEmpty { parts.append("\(plan) plan") }
-        if isMenuBarAccount { parts.append("Shown in the menu bar") }
-        return parts.joined(separator: ", ")
-    }
-
-    @ViewBuilder private var stateContent: some View {
-        Group {
-            switch snapshot.freshness {
-            case .pending:
-                accountSkeleton
-            case .live:
-                bars(dimmed: false)
-            case .stale(let reason):
-                if reason.isPermanent {
-                    signInContent(reason)
-                } else {
-                    bars(dimmed: true)
-                }
-            }
-        }
-        .transition(.opacity)
-    }
-
-    private func bars(dimmed: Bool) -> some View {
-        // H3a: multi-account meters go chipless — critical windows paint the numeral instead
-        // of stacking a "Low" chip under the band that already fences the account.
-        UsageBarsStack(
-            windows: snapshot.windows,
-            percentageMode: percentageMode,
-            now: now,
-            dimmed: dimmed,
-            chiplessCriticalInk: true
-        )
-    }
-
-    /// Permanent failure on one account: a single compact row — the reason, then the
-    /// Terminal handoff — so one dead login never dominates its healthy siblings.
-    /// While the handoff Terminal is open it becomes a quiet waiting row with a
-    /// real-progress spinner (bound to the retry cycle, not decorative).
-    @ViewBuilder private func signInContent(_ reason: FailureReason) -> some View {
-        let recoveryPresentation = reason.providerSetupOutcome?.recoveryPresentation
-        let setupState = SetupSessions.state(for: account)
-        VStack(alignment: .leading, spacing: 7) {
-            if let refusalMessage = setupHandoffRefusalMessage(for: setupState) {
-                HStack(spacing: 7) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text(refusalMessage)
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
-                    Spacer(minLength: 6)
-                    StopWaitingButton(account: account)
-                }
-            } else if case .blockedByProviderLogin = setupState {
-                HStack(spacing: 7) {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text("Another \(providerDisplayName) sign-in is open")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 6)
-                    Button("Continue setup") { SetupSessions.continueSetup(for: account) }
-                        .buttonStyle(SetupChipButtonStyle())
-                        .accessibilityLabel("Continue \(providerDisplayName) setup for \(account.label)")
-                }
-            } else if isWaitingForSetup {
-                HStack(spacing: 7) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text(SetupSessions.mode(for: account) == .deviceCode
-                         ? "Waiting for device code…"
-                         : "Waiting for sign-in…")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 6)
-                    Button("Check now") { onRetry() }
-                        .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(ClaudeSetupStyle.accentText(dark: scheme == .dark))
-                }
-            } else {
-                HStack(spacing: 7) {
-                    Image(systemName: "person.crop.circle.badge.exclamationmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
-                    Text(SetupSessions.failureMessage(for: account) ?? reason.message)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 6)
-                    Button {
-                        if let recoveryPresentation {
-                            SetupSessions.performRecovery(
-                                recoveryPresentation.primaryAction,
-                                for: account,
-                                onRetry: onRetry
-                            )
-                        } else {
-                            SetupSessions.openSetup(for: account, onRetry: onRetry)
-                        }
-                    } label: {
-                        Label(recoveryPresentation?.primaryLabel ?? "Sign in", systemImage: "terminal")
-                            .font(.system(size: 11.5, weight: .semibold))
-                    }
-                    .buttonStyle(SetupChipButtonStyle())
-                    .accessibilityLabel("\(recoveryPresentation?.primaryLabel ?? "Sign in") for \(account.label)")
-                }
-                if let secondaryLabel = recoveryPresentation?.secondaryLabel,
-                   let secondaryAction = recoveryPresentation?.secondaryAction {
-                    Button(secondaryLabel) {
-                        SetupSessions.performRecovery(
-                            secondaryAction,
-                            for: account,
-                            onRetry: onRetry
-                        )
-                    }
-                    .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(ClaudeSetupStyle.accentText(dark: scheme == .dark))
-                } else if SetupSessions.failureMessage(for: account) != nil {
-                    Button("Check now", action: onRetry)
-                        .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(ClaudeSetupStyle.accentText(dark: scheme == .dark))
-                }
-            }
-            if !snapshot.windows.isEmpty {
-                bars(dimmed: true)
-            }
-        }
-    }
-
-    private var staleTag: some View {
-        Text("Stale")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Color.secondary.opacity(0.18), in: Capsule())
-    }
-
-    private var isWaitingForSetup: Bool {
-        SetupSessions.isWaiting(for: account)
-    }
-
-    /// An account going live ends its handoff session and pending retries so the
-    /// waiting row doesn't keep spinning (and retrying) after success.
-    private func settleSetupIfLive() {
-        guard case .live = snapshot.freshness, SetupSessions.isConnected(account) else { return }
-        SetupSessions.settle(for: account)
-    }
-
-    private var accountSkeleton: some View {
-        SkeletonMeter(labelWidth: 72, valueWidth: 38)
-    }
-}
 
 // MARK: - Shared meter building blocks
 
@@ -914,6 +628,7 @@ struct UsageBarsStack: View {
     let percentageMode: UsagePercentageMode
     let now: Date
     let dimmed: Bool
+    let meterStyle: MeterStyle
     /// H3a: multi-account sections opt into chipless critical numerals; single-account keeps
     /// the "Low" chip. Threaded down to every row so a stack renders one way.
     var chiplessCriticalInk: Bool = false
@@ -922,12 +637,13 @@ struct UsageBarsStack: View {
         if windows.isEmpty {
             Text("No usage data").font(.caption).foregroundStyle(.secondary)
         } else {
-            VStack(spacing: 9) {
+            VStack(spacing: meterStyle.format == .micro ? 12 : 9) {
                 ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
                     UsageBarView(
                         window: window,
                         percentageMode: percentageMode,
                         now: now,
+                        meterStyle: meterStyle,
                         dimmed: dimmed,
                         chiplessCriticalInk: chiplessCriticalInk
                     )
@@ -942,19 +658,53 @@ struct UsageBarsStack: View {
 struct SkeletonMeter: View {
     let labelWidth: CGFloat
     let valueWidth: CGFloat
+    let format: GaugeFormat
 
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: labelWidth, height: 13)
-                Spacer(minLength: 6)
-                RoundedRectangle(cornerRadius: 4).fill(ProviderStyle.barTrack(scheme: scheme)).frame(width: valueWidth, height: 13)
+        switch format {
+        case .full:
+            VStack(alignment: .leading, spacing: 5) {
+                skeletonTextRow
+                Capsule().fill(track).frame(height: MeterGeometry.fullTrackHeight)
             }
-            Capsule().fill(ProviderStyle.barTrack(scheme: scheme)).frame(height: 8)
+        case .micro:
+            HStack {
+                skeletonLabel
+                Spacer(minLength: 6)
+                Capsule()
+                    .fill(track)
+                    .frame(
+                        width: MeterGeometry.microChipWidth,
+                        height: MeterGeometry.microChipHeight
+                    )
+                skeletonValue
+            }
         }
     }
+
+    private var skeletonTextRow: some View {
+        HStack {
+            skeletonLabel
+            Spacer(minLength: 6)
+            skeletonValue
+        }
+    }
+
+    private var skeletonLabel: some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(track)
+            .frame(width: labelWidth, height: 13)
+    }
+
+    private var skeletonValue: some View {
+        RoundedRectangle(cornerRadius: 4)
+            .fill(track)
+            .frame(width: valueWidth, height: 13)
+    }
+
+    private var track: Color { ProviderStyle.barTrack(scheme: scheme) }
 }
 
 // MARK: - Shared command recovery row

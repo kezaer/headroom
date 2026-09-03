@@ -44,6 +44,14 @@ struct PopoverView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
+            let accountsByVisibleProvider = store.providerOrder.reduce(
+                into: [ProviderID: [ProviderAccount]]()
+            ) { accounts, providerID in
+                accounts[providerID] = store.accounts(for: providerID)
+            }
+            let anyProviderMultiAccount = surfaceUsesAccountRows(
+                accountsByProvider: accountsByVisibleProvider
+            )
             VStack(spacing: 20) {
                 header(now: context.date)
                     // Header sits 14pt above the first card (vs the 20pt tile gap) — the
@@ -67,6 +75,8 @@ struct PopoverView: View {
                                 },
                                 capabilityStatus: store.providerCapabilities[id],
                                 percentageMode: store.usagePercentageMode,
+                                meterStyle: store.meterStyle,
+                                anyProviderMultiAccount: anyProviderMultiAccount,
                                 now: context.date,
                                 onRetrySetup: { store.refreshNow() },
                                 onRetryAccount: { store.refreshAccountNow($0.key) }
