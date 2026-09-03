@@ -86,6 +86,105 @@ enum AccountsSettingsInteractions {
         }
     }
 
+    /// R9/R10 (KTD6): the provider group header's subscription switch. The switch is the
+    /// only thing "off" governs — it decides whether Headroom *fetches* the provider, so
+    /// its disabled state exists purely to stop a flip mid-handoff, never to lock the
+    /// group's account management.
+    struct SubscriptionSwitchPresentation: Equatable {
+        let isEnabled: Bool
+        /// Non-nil only while disabled: the tooltip that names the blocking sign-in (R10).
+        let helpText: String?
+        let accessibilityLabel: String
+    }
+
+    /// R11: "off" means "not fetched", never "unmanageable". Fetch-derived chrome (status
+    /// text, fetch-recovery buttons, the provider capability banner) disappears and the
+    /// rows dim, while Add Account, sign-in, rename, removal, stop-tracking and "Show CLI
+    /// Account" stay live — Grok and Cursor ship off, so a first account must be reachable
+    /// before the switch is ever turned on.
+    struct ProviderGroupPresentation: Equatable {
+        let subscriptionSwitch: SubscriptionSwitchPresentation
+        let isFetching: Bool
+        let showsAccountCounter: Bool
+        let showsAddAction: Bool
+
+        var dimsAccountRows: Bool { !isFetching }
+        /// R11: only *fetch-derived* status hides while the provider is off. Sign-in the
+        /// user starts anyway ("Waiting for sign-in…", setup failure, blocked, removal)
+        /// is management state and must stay visible, or the handoff looks like nothing
+        /// happened (code-review finding).
+        func hidesAccountStatus(isSetupState: Bool) -> Bool {
+            !isFetching && !isSetupState
+        }
+        var hidesFetchRecovery: Bool { !isFetching }
+        var hidesCapabilityBanner: Bool { !isFetching }
+        var offHelpText: String? {
+            isFetching ? nil : "Not fetched while this provider is off."
+        }
+    }
+
+    static func subscriptionSwitchPresentation(
+        providerDisplayName: String,
+        accounts: [ProviderAccount],
+        isSurfaceEnabled: Bool,
+        hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
+    ) -> SubscriptionSwitchPresentation {
+        let accessibilityLabel = "\(providerDisplayName) subscription"
+        guard accounts.contains(where: hasActiveHandoff) else {
+            return SubscriptionSwitchPresentation(
+                isEnabled: true,
+                helpText: nil,
+                accessibilityLabel: accessibilityLabel
+            )
+        }
+        // R10: an open Terminal handoff owns the provider until it resolves; flipping the
+        // switch under it would either drop the account it is about to produce or start
+        // polling a half-written config home.
+        let direction = isSurfaceEnabled ? "off" : "on"
+        return SubscriptionSwitchPresentation(
+            isEnabled: false,
+            helpText: "Finish or stop the sign-in in progress before turning \(providerDisplayName) \(direction)",
+            accessibilityLabel: accessibilityLabel
+        )
+    }
+
+    static func providerGroupPresentation(
+        providerDisplayName: String,
+        accounts: [ProviderAccount],
+        capacity: Int,
+        isSurfaceEnabled: Bool,
+        hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
+    ) -> ProviderGroupPresentation {
+        // Cursor is deliberately single-account (no config-home isolation), so its header
+        // carries the switch alone — a "1 of 1" counter and a permanently disabled Add
+        // would be noise.
+        let multiAccount = capacity > 1
+        return ProviderGroupPresentation(
+            subscriptionSwitch: subscriptionSwitchPresentation(
+                providerDisplayName: providerDisplayName,
+                accounts: accounts,
+                isSurfaceEnabled: isSurfaceEnabled,
+                hasActiveHandoff: hasActiveHandoff
+            ),
+            isFetching: isSurfaceEnabled,
+            showsAccountCounter: multiAccount,
+            showsAddAction: multiAccount
+        )
+    }
+
+    /// R12: leaving Accounts (pane switch or window close) must not silently discard a
+    /// typed rename. Uses the same rule as `commitLabel` so the caller commits exactly the
+    /// drafts that would change something, in the list's own order.
+    nonisolated static func pendingLabelCommits(
+        drafts: [AccountKey: String],
+        accounts: [ProviderAccount]
+    ) -> [ProviderAccount] {
+        accounts.filter { account in
+            guard let draft = drafts[account.key] else { return false }
+            return pendingRename(draft, for: account) != nil
+        }
+    }
+
     enum CapabilityRowPresentation: Equatable {
         case standard
         case waitingForClaudeCode
@@ -127,10 +226,18 @@ enum AccountsSettingsInteractions {
         for account: ProviderAccount,
         in store: UsageStore
     ) -> Bool {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != account.label else { return false }
+        guard let trimmed = pendingRename(draft, for: account) else { return false }
         store.renameAccount(account.key, to: trimmed)
         return true
+    }
+
+    /// The one rule for "this draft renames the account": trimmed, non-empty, and
+    /// different from the current label. Shared by the commit path and the
+    /// leave-Accounts sweep so the two can never disagree (R12).
+    nonisolated static func pendingRename(_ draft: String, for account: ProviderAccount) -> String? {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != account.label else { return nil }
+        return trimmed
     }
 
     /// Built-in rows route to the non-destructive stop-tracking path — their config

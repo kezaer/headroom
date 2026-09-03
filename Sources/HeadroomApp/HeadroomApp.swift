@@ -477,16 +477,28 @@ struct HeadroomApp: App {
                 store: store,
                 appearancePreference: $appearancePreference,
                 softwareUpdates: softwareUpdates,
-                preferences: preferences
+                preferences: preferences,
+                // Demo runs stay off the real Keychain: the unsigned debug binary would
+                // otherwise raise one prompt per API-key provider every time Settings opens.
+                credentialStore: DemoFixture.isEnabled
+                    ? CredentialStore(apiKeyStore: DemoAPIKeyStore())
+                    : CredentialStore()
             )
             .preferredColorScheme(resolvedScheme)
+            // KTD2: the sidebar window is fixed-width and opens at its 812pt default
+            // height, but resizing stays available on the vertical axis — the user can
+            // shrink it to `SettingsView.minimumWindowHeight` (600pt), at which point the
+            // panes scroll, and AppKit can constrain the window to a short screen. Only
+            // minimizing is withdrawn, since a settings sheet in the Dock is a dead end.
+            .windowMinimizeBehavior(.disabled)
         }
-        // Hidden title bar: the settings window draws its own header (logo + title) in
-        // content, so traffic lights float on a transparent strip. Avoids Tahoe wrapping a
-        // toolbar item in a Liquid Glass container. (Standard modern-macOS utility pattern.)
+        // Hidden title bar: the settings window draws its own identity block (icon, name,
+        // version) at the top of the sidebar, so traffic lights float on a transparent
+        // strip. Avoids Tahoe wrapping a toolbar item in a Liquid Glass container.
+        // (Standard modern-macOS utility pattern.)
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 460, height: 700)
+        .windowResizability(.contentSize)
+        .defaultSize(width: SettingsView.windowWidth, height: SettingsView.windowHeight)
         .defaultPosition(.center)
     }
 
@@ -526,9 +538,17 @@ struct HeadroomApp: App {
         let size = window.frame.size
         // Horizontally centered; nudged slightly above the vertical midpoint, matching the
         // weighting AppKit's own `NSWindow.center()` uses.
-        let origin = NSPoint(
+        let preferred = NSPoint(
             x: visible.midX - size.width / 2,
             y: visible.midY - size.height / 2 + size.height * 0.05
+        )
+        // The window is fixed-width and only shrinks to 600pt tall, so on a short or narrow
+        // screen the centered origin can push the title bar under the menu bar (or the edge
+        // off-screen); clamping into `visibleFrame` is what keeps the traffic lights
+        // reachable. The 5% upward weighting survives whenever it still fits.
+        let origin = NSPoint(
+            x: min(max(preferred.x, visible.minX), max(visible.minX, visible.maxX - size.width)),
+            y: min(max(preferred.y, visible.minY), max(visible.minY, visible.maxY - size.height))
         )
         window.setFrameOrigin(origin)
     }
