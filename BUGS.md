@@ -280,3 +280,98 @@ primary findings were applied; these are the demoted coverage/advisory notes):
   dies on SIGPIPE, so only a fully-hung, non-writing npm lingers; bounded to one process
   per user-triggered Check Again / uncached discovery. Deferred as low-impact vs. the risk
   of destabilizing the load-bearing shell probe.
+
+## Video-review round residuals (2026-09-03)
+
+- **Light-mode severity fills went vivid on 2026-09-03 (two-tier policy).** Meter fills now use
+  `HeadroomSeverityColorValues.fill(for:dark:increasedContrast:)`: vivid in the default light
+  appearance (amber 2.06:1 vs track, 2.71:1 vs card; green 2.26 / 2.97; red 3.11 / 4.09) on the
+  argument that the percent numeral beside every bar is the accessible carrier, with the old
+  3:1 text-safe tokens restored automatically under Increase Contrast. Text, pills, and icons
+  stay on the text tier. Residuals: the Ghost recipe's light separation band dropped from
+  1.38–1.63 to 1.26–1.55 and needs eyeballing; deepening the light track makes fill contrast
+  *worse* (fills are darker than the track) and is now asserted in
+  `noVividLightFillCanClearThreeToOneOnTheLightTrack`; `design/ridd-round4-meter-style.html`
+  carries a dated note but its CSS specimen vars still show the pre-change values.
+- **Unavailable rows are still narrower than live rows.** The percent column now reserves
+  three digits, but an `.unavailable` row hides the "left"/"used" term entirely, so a card that
+  mixes live and unavailable windows still won't share one gauge edge. Reserving the term's width
+  would fix it at the cost of a visible hole in an all-unavailable card.
+- **Rejected API key with a retained amount shows no CTA.** When continuity keeps a prior spend
+  total, the card shows the amount and the corrected "Key rejected" badge but no "Replace key…"
+  button; the button only appears when there is no amount to show. Decide whether the CTA should
+  also appear beside a retained amount.
+- **`APISpendPresentation.statusText` has no production callers** after the row-status refactor;
+  it is exercised only by tests and can likely be deleted.
+- ~~**Per-pane Settings heights are budgets, not measurements.**~~ Resolved by L9A: the window is
+  a single resizable 800 × 700 frame (min 720 × 600) and `SettingsPane.preferredContentHeight`
+  is gone. Verified live at 800 × 700, 1100 × 800 and the clamped floor.
+- **`supergrokheavy` → "SuperGrok Heavy" plan mapping is unconfirmed** against a live Grok tier
+  id; the fallback capitalization renders any real value sensibly either way.
+- **`CredentialStore` still says "xAI API API key".** `APIKeyProvider.displayName` for `.xAI`
+  is "xAI API", so the empty/unreadable-key messages double the word. The missing-key message
+  was fixed via `APISpendCredentialDescriptor`; the other two were left alone.
+- **Settings → API Spend guidance is stale.** The Anthropic field still warns of a "known
+  request-format issue" (resolved 2026-08-10, see above) and OpenAI says "not live-verified";
+  both undercut the now-precise failure copy on the popover card.
+- **xAI missing-key line says "spend" for a prepaid balance.** "Add a management key to see
+  xAI spend" follows the shared sentence shape; branching on `APISpendKind` would say "balance".
+
+## L4B's 34pt right edge stops at the card's transient recovery rows
+
+- **The Sep 2026 card margin (L4B) covers the identity rows, the meter rows and the pending
+  skeletons.** Those now end 34pt from the card's right edge, mirroring the 34pt label column.
+  The card's *transient* rows were deliberately left at the old 13pt: `StopWaitingButton`'s
+  trailing `HStack` in `AccountSectionView` and `ProviderCardView`, the compact inline sign-in
+  and "Check now" rows in `AccountSectionView.signInContent`, and the nested Connect/Waiting
+  tiles (`ClaudeConnectCard`, `CodexConnectCard`, `ProviderSetupRecoveryCard`,
+  `CodexAccessRecoveryCard`), which own their own backgrounds and would look shrunken inside
+  the card if inset. The nested tiles are almost certainly right to stay full-width; the bare
+  button rows are the open question — in a signed-out or waiting account they sit 21pt to the
+  right of every percentage above them. Decide once those states have been seen live.
+- **The L5D tooltip is unverified as rendered.** The main account's title carries
+  `.help("Main account — shown in the menu bar and widgets")` and the VoiceOver label still
+  says it, but AppKit's tooltip timer does not fire for synthetic (CGEvent-warped) pointer
+  moves, so the popup itself was never observed. Confirm it by hovering the first row of a
+  multi-account provider with a real pointer. **L11A's "Turn <Provider> on to add an account."
+  tooltip is unverified for the same reason** — it is the `.help(_:)` on the disabled
+  "Add Account…" button in a switched-off provider group header, and a disabled AppKit
+  control plus synthetic hover is exactly the combination that never fires the tooltip
+  timer, so it was never observed either. Confirm both in one real-pointer pass.
+
+## Settings window residuals (2026-09-04, W4a / L9A–L11A)
+
+- **A fresh worktree cannot run the `HeadroomAppTests` xcodebuild scheme without a manual
+  Sparkle fetch.** `project.yml` points the framework at
+  `.xcode-derived/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework`, which only
+  `Scripts/build-app.sh` creates (curl + ditto of the 2.9.4 release zip);
+  `-resolvePackageDependencies` does not produce it. Worse, once xcodebuild has cached a
+  "no XCFramework found" build description in the *shared* DerivedData it keeps failing even
+  after the framework exists — the run only succeeds with an explicit `-derivedDataPath`.
+  Either give `build-app.sh` a deps-only mode the documented test command can call, or move the
+  prefetch into the scheme's pre-action.
+- **The measured vertical resize floor is 632pt, not the declared 600.** `SettingsView` asks for
+  `minHeight: 600` and `.windowResizability(.contentSize)` clamps the live window at 632 — 32pt
+  more, exactly the hidden title bar's height. Harmless (the effective floor is still above the
+  600pt the sidebar column needs) but the constant reads 32pt lower than what ships.
+- **The sidebar's version stamp cannot be visually accepted under `swift run`.** It reads
+  `CFBundleShortVersionString`, which a SwiftPM binary has no Info.plist for, so L10A's 10.5pt
+  monospaced-digit line is absent from every `--demo` capture. Accept it on a
+  `Scripts/build-app.sh` bundle instead.
+- **The demo fixture gives Cursor an account capacity of 5.** `--demo multi-4` renders Cursor
+  with "1 of 5" and an "Add Account…" button, but the shipping Cursor provider is deliberately
+  single-account (no config-home isolation), so its real header carries the switch alone. The
+  fixture provider should declare a capacity of 1 or the demo misrepresents the pane.
+
+- **The Widgets & iPhone preview strip has no iPhone tile (L9P).** L9P asked for one "if a
+  shared, WidgetKit-free rendering path exists". None does: the companion tile lives in
+  `HeadroomIOS`/`HeadroomIOSWidgets` (`ProviderTileView`, `HeadroomTheme`, `Elevation`), neither
+  of which is in the SPM package or the macOS app target, so previewing it would mean either a
+  cross-platform move of the iOS design system or a hand-drawn mock — the exact drift cost the
+  options doc warned about. The strip therefore shows only the macOS small and medium widgets.
+  Revisit if the iOS tile ever lands in a shared, platform-neutral library.
+- **The preview strip cannot reflect "Show Codex Spark counters in widgets".** That switch adds
+  an `.other(…Spark weekly)` window, and `.other` windows are not `isSubscriptionWindow`, so
+  neither the small (`primarySubscriptionWindow`) nor the medium (`displaySubscriptionWindows`)
+  family ever draws one — only the large widget and iOS do. The switch therefore sits under a
+  preview that never responds to it. Either preview the large family too, or move the switch.

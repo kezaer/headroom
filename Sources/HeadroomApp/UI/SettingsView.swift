@@ -40,6 +40,9 @@ struct SettingsView: View {
     @State private var showCodexSparkCountersInWidgets = false
     @State private var syncToIPhoneEnabled = false
     @State private var launchAtLogin = false
+    /// L13: mirrors Sparkle's stored preference so the Updates switch repaints on
+    /// toggle; the updater stays the source of truth and is written on change.
+    @State private var automaticUpdateChecks = false
     @State private var apiSpendPeriod: APISpendPeriod = .currentMonth
     @State private var apiKeyDrafts: [APIKeyProvider: String] = [:]
     @State private var savedKeyProviders: Set<APIKeyProvider> = []
@@ -56,36 +59,76 @@ struct SettingsView: View {
     /// confirm the state change.
     private static let settleAnimation = HeadroomMotion.settle
 
-    /// The window uses one stable content size for every pane. Pane content scrolls when
-    /// it exceeds that frame, so changing destinations never makes the surrounding window
-    /// jump between each pane's intrinsic height.
+    /// L9A: one window for every destination, resizable on both axes, and the size the
+    /// user leaves it at is the size it keeps. Per-pane window heights are retired —
+    /// resizing the frame on every pane switch is what read as unfinished, and the real
+    /// squeeze in the review was horizontal (help text wrapping in a ~340pt content
+    /// column), not vertical. Every pane body is a `ScrollView`, so Appearance — the
+    /// tallest room at roughly 812pt of content — simply scrolls at the 700pt default
+    /// instead of dictating the window.
     ///
-    /// Appearance is the tallest pane (specimen + Theme + Meter style + In-app display):
-    /// about 805pt of content at default text size once the Fill swatches sit on one row.
-    /// The hidden title bar adds 32pt (measured live), so 812pt of content is an 844pt
-    /// window, which still clears a 13-inch MacBook Air's 931pt of usable height. Larger
-    /// text sizes scroll inside the pane instead of growing the frame.
-    static let windowWidth: CGFloat = 720
-    static let windowHeight: CGFloat = 812
+    /// 800 × 700 default, 720 × 600 floor, no ceiling. 800 keeps the Appearance Fill row
+    /// on one line: the row needs 392pt of grid (5 × 72pt swatches + 4 × 8pt gaps) beside
+    /// its 46pt label, and the detail column offers `width − sidebar − 124` — 460pt at
+    /// 800/216, against 380pt at the old 720. 600 tall is the floor because the sidebar's
+    /// identity block and six destinations need roughly 340pt before the list itself
+    /// scrolls. The scene declares these via `.windowResizability(.contentSize)`, which
+    /// reads the min and max off this frame; leaving max unset is what makes the window
+    /// resizable at all.
+    static let windowWidth: CGFloat = 800
+    static let windowHeight: CGFloat = 700
+    static let minimumWindowWidth: CGFloat = 720
+    static let minimumWindowHeight: CGFloat = 600
+    /// L9A: leading-aligned cap on a pane's content so a window dragged to 1200pt does
+    /// not run a help line to full measure. Sits inside the detail column, outside the
+    /// pane's own 20pt padding, and never bites at the default width (the detail column
+    /// is ~584pt there).
+    static let detailContentMaxWidth: CGFloat = 640
     /// Diagnostic seam: the render harness raises the frame for its multi-account capture
     /// so the whole account list is in the picture. The live window never sets this.
     var frameHeightOverride: CGFloat? = nil
-    private var frameHeight: CGFloat { frameHeightOverride ?? Self.windowHeight }
 
     var body: some View {
         NavigationSplitView {
             SettingsSidebar(selection: sidebarBinding)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 196, max: 250)
                 // KTD1: the removal must sit on the sidebar column's content — applied to
                 // the split view itself it is ignored and the toggle still renders.
+                //
+                // **Order is load-bearing on Tahoe (macOS 26).** This must come *before*
+                // `.navigationSplitViewColumnWidth`, not after it. `.toolbar(removing:)`
+                // wraps the content in a view whose column-width preference
+                // `NavigationSplitView` no longer reads, so a width declared underneath it
+                // is silently dropped and the column falls back to a 140pt intrinsic
+                // width — which clipped the longest destination to "Widgets &…".
+                // Measured on macOS 26.5 against the live window: with the removal applied
+                // last the column is 140pt at every window width and for *any* declared
+                // value (216, 250, even a fixed 400); applied first it is 216pt at 720,
+                // 800, and 1100 wide. Independent of the outer frame — the pre-L9A
+                // width-pinned frame reproduces 140pt just the same — and independent of
+                // the split-view style. If this ever has to move again, prove it by
+                // reading the sidebar column's accessibility frame, not by eye.
                 .toolbar(removing: .sidebarToggle)
+                // L9A: 216pt as the *floor* as well as the ideal — the sidebar can
+                // settle on its minimum, and 180pt clipped the longest destination to
+                // "Widgets & i…". 108pt of text at 13pt plus the icon column and the
+                // sidebar's row insets needs ~216pt. 250 caps how much of a widened
+                // window the navigation can claim; the extra width belongs to the panes.
+                .navigationSplitViewColumnWidth(min: 216, ideal: 216, max: 250)
         } detail: {
             detail
         }
         // KTD8: no `.navigationTitle` anywhere in the split view — the window title
         // string set in `HeadroomApp` is what `placeSettingsWindowOnActiveScreen()`
         // matches on, and a navigation title would replace it.
-        .frame(width: Self.windowWidth, height: frameHeight)
+        // L9A: no max on either axis — `.windowResizability(.contentSize)` derives the
+        // window's resize limits from this frame, so an unset max is what lets the user
+        // drag the window as large as they like. The ideal is only the opening size.
+        .frame(
+            minWidth: Self.minimumWindowWidth,
+            idealWidth: Self.windowWidth,
+            minHeight: Self.minimumWindowHeight,
+            idealHeight: frameHeightOverride ?? Self.windowHeight
+        )
         .onAppear { loadPreferences() }
         .task { await refreshSavedKeyPresence() }
         // KTD3: the scan lives on the root so revisiting Accounts keeps its badges, but it
@@ -148,6 +191,7 @@ struct SettingsView: View {
             GeneralSettingsPane(
                 intervalMinutes: $intervalMinutes,
                 launchAtLogin: $launchAtLogin,
+                automaticUpdateChecks: $automaticUpdateChecks,
                 softwareUpdates: softwareUpdates,
                 onIntervalChange: { newValue in
                     preferences.pollIntervalMinutes = newValue
@@ -155,6 +199,9 @@ struct SettingsView: View {
                 },
                 onLaunchAtLoginChange: { newValue in
                     try? launchControl.setEnabled(newValue)
+                },
+                onAutomaticUpdateChecksChange: { newValue in
+                    softwareUpdates.automaticallyChecksForUpdates = newValue
                 }
             )
         case .appearance:
@@ -282,6 +329,7 @@ struct SettingsView: View {
         syncToIPhoneEnabled = store.syncToIPhoneEnabled
         apiSpendPeriod = store.apiSpendPeriod
         launchAtLogin = launchControl.isEnabled
+        automaticUpdateChecks = softwareUpdates.automaticallyChecksForUpdates
     }
 
     /// Presence only (never the key material): selects the configured summary or the

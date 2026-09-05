@@ -452,10 +452,19 @@ struct HeadroomApp: App {
         } label: {
             MenuBarLabel(
                 meters: store.menuBarMeters,
-                showsPercentage: store.showMenuBarPercentage
+                showsPercentage: store.showMenuBarPercentage,
+                // L1A: only the real status item follows the live menu bar. The Settings
+                // specimens keep the default pinned-dark palette because they sit on a
+                // fixed dark plate.
+                appearance: .menuBar
             )
             .preferredColorScheme(resolvedScheme)
             .task { await store.start() }
+            // Attach to the status item's own window once the scene exists (L1A). The menu
+            // bar's appearance is not the process appearance: a light system appearance over
+            // a dark wallpaper still gets a dark menu bar, which is exactly the case the old
+            // dark pin got right by accident and a system-appearance check would get wrong.
+            .task { MenuBarAppearanceMonitor.shared.start() }
             // Track OS light/dark flips so `.system` content re-resolves live (chrome
             // follows the OS on its own via `NSApp.appearance == nil`). Attached to the
             // always-present label, not the on-demand popover, so it never misses a change.
@@ -463,11 +472,15 @@ struct HeadroomApp: App {
                 for: Notification.Name("AppleInterfaceThemeChangedNotification")
             )) { _ in
                 systemIsDark = SystemAppearance.isDark()
+                // An OS theme flip repaints the menu bar backplate; re-read it in case the
+                // status window was replaced and the KVO has nothing to fire from (L1A).
+                MenuBarAppearanceMonitor.shared.refresh()
             }
             // Re-read the OS truth on any theme switch so a Light→System flip resolves
             // against the live setting, not a possibly-stale mirror.
             .onChange(of: appearancePreference) { _, _ in
                 systemIsDark = SystemAppearance.isDark()
+                MenuBarAppearanceMonitor.shared.refresh()
             }
         }
         .menuBarExtraStyle(.window)
@@ -485,9 +498,12 @@ struct HeadroomApp: App {
                     : CredentialStore()
             )
             .preferredColorScheme(resolvedScheme)
-            // The Settings shell has one stable size across every destination; overflowing
-            // panes scroll internally instead of resizing the window around their content.
-            .windowResizeBehavior(.disabled)
+            // L9A (revising KTD2): the window opens at 800 × 700 and is resizable on
+            // both axes down to 720 × 600, with no ceiling. It no longer changes size
+            // with the selected pane — every pane body is a `ScrollView`, so the room
+            // scrolls inside whatever frame the user left the window at. Only minimizing
+            // is withdrawn, since a settings sheet in the Dock is a dead end;
+            // `windowResizeBehavior` is deliberately *not* disabled.
             .windowMinimizeBehavior(.disabled)
         }
         // Hidden title bar: the settings window draws its own identity block (icon, name,

@@ -11,6 +11,12 @@ struct MeterGauge: View {
     let freshness: UsageWindowFreshness
 
     @Environment(\.colorScheme) private var scheme
+    // Fill tier lookup: Increase Contrast swaps the vivid light bar fills back to the
+    // darker text-tier values that clear WCAG 1.4.11's 3:1 floor. Read here at the SwiftUI
+    // boundary so the Core tokens stay pure. See `HeadroomSeverityColorValues`.
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var increasedContrast: Bool { contrast == .increased }
 
     private var resolvedShape: GaugeShape { style.resolvedShape }
     private var clampedFraction: Double {
@@ -85,13 +91,15 @@ struct MeterGauge: View {
                 }
 
                 if fillLength > 0, fillRecipe != .none {
-                    continuousFill(shape: shape, recipe: fillRecipe)
-                        .frame(
-                            width: isVertical ? max(0, geometry.size.width - inset * 2) : fillLength,
-                            height: isVertical ? fillLength : max(0, geometry.size.height - inset * 2)
-                        )
-                        .padding(isVertical ? .horizontal : .vertical, inset)
-                        .padding(isVertical ? .bottom : .leading, inset)
+                    continuousFillLayer(shape: shape, recipe: fillRecipe, fillLength: fillLength)
+                }
+            }
+            // L7B: the cap is a separate marker, so it lives outside the fill's clip *and*
+            // outside the ZStack's sizing. An overlay never feeds the parent's layout, which
+            // is what keeps a 10pt cap from stretching an 8pt track.
+            .overlay(alignment: isVertical ? .bottom : .leading) {
+                if fillLength > 0, fillRecipe == .glass || fillRecipe == .ghost {
+                    capMarker(shape: shape, fillLength: fillLength, available: availableLength)
                 }
             }
         }
@@ -112,21 +120,55 @@ struct MeterGauge: View {
         }
     }
 
-    private func continuousFill(shape: GaugeShape, recipe: MeterFillRecipe) -> some View {
-        let radius = shape == .machined ? max(1, (gaugeHeight - 2 * continuousInset) / 2) : gaugeHeight / 2
-        return ZStack(alignment: shape == .tube ? .top : .trailing) {
-            continuousFillBody(shape: shape, recipe: recipe)
+    /// L8A: the menu bar vessel's recipe (`VesselGlyph.render`). The body is a plain rect of
+    /// `fillLength` and the *track's own shape* clips the whole layer, so the base inherits the
+    /// track's rounding while the trailing edge stays dead flat. The gradient fills still span
+    /// the body, not the track, because the clip sits outside the body's frame.
+    private func continuousFillLayer(
+        shape: GaugeShape,
+        recipe: MeterFillRecipe,
+        fillLength: CGFloat
+    ) -> some View {
+        let isVertical = shape == .tube
+        return continuousFillBody(shape: shape, recipe: recipe)
+            .frame(
+                width: isVertical ? nil : fillLength,
+                height: isVertical ? fillLength : nil
+            )
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: isVertical ? .bottom : .leading
+            )
+            .clipShape(continuousFillClip(shape: shape))
+            // Applied after the clip so the clip rect *is* the machined well's inner rect.
+            .padding(continuousInset)
+    }
 
-            if recipe == .glass || recipe == .ghost {
-                RoundedRectangle(cornerRadius: capThickness / 2, style: .continuous)
-                    .fill(ProviderStyle.severityColor(for: severity, scheme: scheme))
-                    .frame(
-                        width: shape == .tube ? nil : capThickness,
-                        height: shape == .tube ? capThickness : nil
-                    )
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+    private func continuousFillClip(shape: GaugeShape) -> AnyShape {
+        guard shape == .machined else { return AnyShape(Capsule(style: .continuous)) }
+        let radius = max(1, (gaugeHeight - 2 * continuousInset) / 2)
+        return AnyShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+
+    /// L7B: a standalone marker in the severity FILL tier, centered on the fill's flat trailing
+    /// edge and overlapping the track outline on both sides. The ZStack's leading/bottom
+    /// alignment supplies the cross-axis centering, so the overhang is symmetric by
+    /// construction; the offset only moves it along the travel axis.
+    private func capMarker(shape: GaugeShape, fillLength: CGFloat, available: CGFloat) -> some View {
+        let isVertical = shape == .tube
+        let axis: MeterFillAxis = isVertical ? .vertical : .horizontal
+        let cap = MeterGeometry.cap(for: style.format)
+        let center = continuousInset + CGFloat(MeterGeometry.capCenterOffset(
+            fillLength: Double(fillLength),
+            available: Double(available),
+            cap: cap
+        ))
+        let travel = center - CGFloat(cap.thickness) / 2
+        return RoundedRectangle(cornerRadius: CGFloat(cap.cornerRadius), style: .continuous)
+            .fill(severityFillColor)
+            .frame(width: CGFloat(cap.width(on: axis)), height: CGFloat(cap.height(on: axis)))
+            .offset(x: isVertical ? 0 : travel, y: isVertical ? -travel : 0)
     }
 
     @ViewBuilder
@@ -148,16 +190,21 @@ struct MeterGauge: View {
                 endPoint: .bottom
             )
         case .ghost:
-            ProviderStyle.meterGhostBody(for: severity, scheme: scheme)
+            ProviderStyle.meterGhostBody(
+                for: severity,
+                scheme: scheme,
+                increasedContrast: increasedContrast
+            )
         case .ramp:
             LinearGradient(
                 colors: [
                     ProviderStyle.meterRampStart(
                         for: severity,
                         surface: shape == .machined ? .well : .flat,
-                        scheme: scheme
+                        scheme: scheme,
+                        increasedContrast: increasedContrast
                     ),
-                    ProviderStyle.severityColor(for: severity, scheme: scheme),
+                    severityFillColor,
                 ],
                 startPoint: shape == .tube ? .bottom : .leading,
                 endPoint: shape == .tube ? .top : .trailing
@@ -180,7 +227,8 @@ struct MeterGauge: View {
             ? MeterRecipe.rampStops(
                 severity: severity,
                 scheme: scheme == .dark ? .dark : .light,
-                surface: .well
+                surface: .well,
+                increasedContrast: increasedContrast
             )
             : nil
 
@@ -235,17 +283,19 @@ struct MeterGauge: View {
     ) -> Color {
         switch fill {
         case .severity:
-            return isTip
-                ? ProviderStyle.severityColor(for: severity, scheme: scheme)
-                : flatSeverityColor
+            return isTip ? severityFillColor : flatSeverityColor
         case .glass:
             return isTip
                 ? ProviderStyle.meterTickGlassCap(scheme: scheme)
                 : ProviderStyle.meterTickGlass(scheme: scheme)
         case .ghost:
             return isTip
-                ? ProviderStyle.severityColor(for: severity, scheme: scheme)
-                : ProviderStyle.meterGhostBody(for: severity, scheme: scheme)
+                ? severityFillColor
+                : ProviderStyle.meterGhostBody(
+                    for: severity,
+                    scheme: scheme,
+                    increasedContrast: increasedContrast
+                )
         case .neutral:
             return isTip
                 ? ProviderStyle.meterTickGlassCap(scheme: scheme)
@@ -276,20 +326,27 @@ struct MeterGauge: View {
         return CGFloat(style.format == .micro ? MeterGeometry.microMachinedInset : MeterGeometry.fullTrackInset)
     }
 
-    private var capThickness: CGFloat {
-        CGFloat(style.format == .micro ? MeterGeometry.microCapThickness : MeterGeometry.fullCapThickness)
+    private var severityFillColor: Color {
+        ProviderStyle.severityFill(
+            for: severity,
+            scheme: scheme,
+            increasedContrast: increasedContrast
+        )
     }
 
     private var flatSeverityColor: Color {
         let opacity = scheme == .dark ? (severity == .critical ? 0.95 : 0.85) : 1
-        return ProviderStyle.severityColor(for: severity, scheme: scheme).opacity(opacity)
+        return severityFillColor.opacity(opacity)
     }
 
     private var staleColor: Color { Color.secondary.opacity(0.55) }
 
     private func continuousFillLength(available: CGFloat) -> CGFloat {
-        guard clampedFraction > 0, !freshness.isUnavailable else { return 0 }
-        let minimum: CGFloat = style.format == .micro ? 3 : 6
-        return min(available, max(minimum, available * clampedFraction))
+        guard !freshness.isUnavailable else { return 0 }
+        return CGFloat(MeterGeometry.continuousFillLength(
+            available: Double(available),
+            fraction: clampedFraction,
+            format: style.format
+        ))
     }
 }

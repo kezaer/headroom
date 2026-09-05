@@ -65,6 +65,23 @@ struct SavedCredentialStatus: View {
     }
 }
 
+/// The row-tag capsule: 10pt medium secondary ink on the step material. Shared so the
+/// Accounts tags ("CLI login", "Same login as X") and the Menu Bar pane's "Off" tag
+/// cannot drift into two badge styles for one role.
+struct SettingsPillBadge: View {
+    let text: String
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(ClaudeSetupStyle.stepBackground(dark: colorScheme == .dark), in: Capsule())
+    }
+}
+
 /// Shared metrics for the Settings window's panes.
 enum SettingsMetrics {
     /// One trailing-control width for every segmented picker (Theme / provider window /
@@ -175,10 +192,11 @@ struct MenuBarPreviewPill: View {
 }
 
 extension View {
-    /// The menu-bar specimen's dark plate. `MenuBarLabel` pins its palette to the dark
-    /// menu bar (white ink + dark severity colors), so on a light well that ink would
-    /// vanish; the plate keeps the preview faithful in both appearances. Shared by the
-    /// Menu Bar pane and the Appearance specimen so the two strips cannot drift.
+    /// The menu-bar specimen's dark plate. The specimens use `MenuBarLabel`'s default
+    /// `.pinnedDark` appearance (white ink + dark severity colors) rather than following the
+    /// live menu bar (L1A), so on a light well that ink would vanish; the plate keeps the
+    /// preview faithful in both appearances. Shared by the Menu Bar pane and the Appearance
+    /// specimen so the two strips cannot drift.
     func menuBarPreviewPlate() -> some View {
         self
             .padding(.horizontal, 7)
