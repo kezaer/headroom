@@ -375,3 +375,63 @@ primary findings were applied; these are the demoted coverage/advisory notes):
   neither the small (`primarySubscriptionWindow`) nor the medium (`displaySubscriptionWindows`)
   family ever draws one — only the large widget and iOS do. The switch therefore sits under a
   preview that never responds to it. Either preview the large family too, or move the switch.
+
+## Motion system residuals (2026-09-04, S1A–M11A)
+
+- **The live popover does not crossfade on a meter-style change.** M5A landed on the Appearance
+  specimen (`AppearanceSpecimen.swift`) and the swatch ring, but `PopoverView`/`ProviderCardView`
+  still hard-cut when `store.meterStyle` changes. Usually invisible (Settings is open, the popover
+  is closed); add the same `.id(recipeKey)` + `.transition(.opacity)` on the card list if it shows.
+- **The specimen's static-meter gate reuses `announcesAccessibilityEvents`.** `ProviderCardView`
+  derives `meterArrivalKey` from the KTD4 inert-preview flag so the M4A draw-in never fires in the
+  specimen. A dedicated `stagesArrival` parameter would be clearer; it was avoided only to keep the
+  W2 follow-up out of W4's file.
+- **M7A removals are instant under Reduce Motion, not faded.** The Accounts list is one `.movement`
+  scope on purpose (splitting the row fade from the tile contraction is what made the contraction
+  land late), so S2A's "crossfades survive" does not hold for that one list. Revisit only if a
+  Reduce Motion user reports the hard cut.
+- **M4A under Reduce Motion is not a true per-property split.** The skeleton → live body's
+  `.transition(.opacity)` and the resize it causes share one transaction, so the body-driven card
+  resize rides the crossfade scope; only the tile scope snaps. A ZStack crossfade slot would fix it
+  but `staleContent`'s two-view branch needs restructuring first.
+- **Unavailable → live rolls the numeral from "—".** The reverse direction is a crossfade. Forcing
+  a crossfade both ways needs an `.id()` swap on the numeral that risks the layout shift M4A
+  forbids; flag if it looks wrong in acceptance.
+
+## Round-2 residuals (2026-09-06, T1A–S5A)
+
+- **`ProviderSetupRecoveryCard`'s primary is still `.borderedProminent` beside a chip secondary.**
+  B3A reassigned every bare `HoverButtonStyle` text button to the chip, but no anchor covered
+  restyling a native prominent primary, so that one card foot still mixes languages. Decide
+  whether the popover's primaries become a filled chip variant or the card keeps AppKit's button.
+- **`APISpendPresentation.qualifier(kind:)` has no call sites.** S5A stopped drawing "remaining"
+  on macOS (the "Remaining balance" chip says it) and the widgets append " left" through
+  `amountText(_ summary:)`. Kept because it is public Core API; delete on the next Core sweep.
+- **The stale and balance spend rows have no fixture outside `--demo spend-states`.** Every
+  other scenario ships the same two live rows, so the state tags, wrapping message, and CTA row
+  are only reviewable there or against the round-2 options doc.
+
+## Round-3 residuals (2026-09-06, G1A–C6A)
+
+- **Demo mode reads the theme from the swift-run defaults domain, not the isolated suite.**
+  `HeadroomApp.init` builds its `Preferences()` on `.standard`, so `--demo` follows whatever
+  `appearancePreference` a previous `swift run` Settings session wrote to the `Headroom` domain
+  (it was `dark`, which is why flipping the OS appearance never changed a demo capture). Route
+  the App-level appearance read through the same suite `demoMultiAccountStore` uses, or clear
+  the key when demo mode starts.
+- **The Brand account-title ink has no sanctioned visual review path.** The demo's per-launch
+  prefs suite cannot be preset, the `MenuBarExtra` popover is not an accessibility window, and
+  AGENTS.md forbids brute-forcing the menu bar, so `AccountTitleInk.brand` was accepted on
+  code and tests only. Add a `--account-title-ink brand` launch token beside `--meter-style`.
+- **The spend card's action row is far from the row it answers.** P4C collects every CTA at
+  the card foot, so in a four-row spend card "Replace key" sits three rows below the rejected
+  Anthropic line (and past the 640pt scroll cap in `spend-states`). Decide whether spend CTAs
+  belong to the row or the card.
+- **The rejected spend row double-codes severity.** X5 (Kyle) put the "Rejected" tag on the
+  identity line and S2B inks the sentence, so that one row carries both. Drop one once Kyle
+  has seen it live.
+- **`StatusSentenceSeverity` has no `.quiet` / `.neutral` cases**, so `APISpendSectionView`
+  spells the same 11.5-medium sentence recipe out again for its four tones. Add the two cases
+  and fold the spend sentence into `StatusSentence`.
+- **`SetupChipButtonStyle.Size.regular` is unreferenced** after B3 moved every popover chip to
+  `.small`. Delete the case or keep it for a future card-foot primary — decide, don't drift.

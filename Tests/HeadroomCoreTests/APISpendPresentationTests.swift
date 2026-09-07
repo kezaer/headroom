@@ -25,6 +25,9 @@ struct APISpendPresentationTests {
         #expect(APISpendPresentation.addCreditsURL(for: .claude)?.absoluteString == "https://platform.claude.com/settings/billing")
         #expect(APISpendPresentation.addCreditsURL(for: .codex)?.absoluteString == "https://platform.openai.com/settings/organization/billing/overview")
         #expect(APISpendPresentation.addCreditsURL(for: .grok)?.absoluteString == "https://console.x.ai")
+        // S5A: Cursor has no billing page to open, which is what makes its spend row the
+        // one that draws the reserved-empty top-up slot in `--demo spend-states`.
+        #expect(APISpendPresentation.addCreditsURL(for: .cursor) == nil)
         #expect(APISpendPresentation.addCreditsURL(for: ProviderID("someday")) == nil)
     }
 
@@ -106,7 +109,7 @@ struct APISpendPresentationTests {
         #expect(status.badge == "Needs setup")
         #expect(status.tone == .warning)
         #expect(status.message == "Add an admin key to see Anthropic spend")
-        #expect(status.callToAction == "Add key…")
+        #expect(status.callToAction == "Add Key")
         #expect(status.remoteHint == "Set up on Mac")
     }
 
@@ -180,7 +183,7 @@ struct APISpendPresentationTests {
     }
 
     /// The reported contradiction: a saved key the provider rejected was badged
-    /// "Needs setup" next to an "Add key" button. Badge, message and CTA must all agree.
+    /// "Needs setup" next to an "Add Key" button. Badge, message and CTA must all agree.
     @Test func rejectedKeyReadsAsRejectedNotAsMissing() {
         let status = APISpendPresentation.rowStatus(
             freshness: .stale(.needsReauth("Anthropic admin key rejected")),
@@ -191,7 +194,7 @@ struct APISpendPresentationTests {
         #expect(status.badge == "Key rejected")
         #expect(status.tone == .critical)
         #expect(status.message == "Anthropic didn't accept the saved admin key")
-        #expect(status.callToAction == "Replace key…")
+        #expect(status.callToAction == "Replace Key")
     }
 
     @Test func rejectedKeyCopyNamesEachProvider() {
@@ -218,7 +221,7 @@ struct APISpendPresentationTests {
         #expect(status.badge == "Key lacks access")
         #expect(status.tone == .warning)
         #expect(status.message == "Key can't read the cost report")
-        #expect(status.callToAction == "Fix key…")
+        #expect(status.callToAction == "Fix Key")
     }
 
     /// The 403 line names the surface each vendor actually refused.
@@ -269,6 +272,80 @@ struct APISpendPresentationTests {
         #expect(live.badge == nil)
         #expect(live.message == nil)
         #expect(live.callToAction == nil)
+    }
+
+    // MARK: - Identity-line short forms (X5)
+
+    /// X5 (Kyle): the popover's identity line puts the tag where the period chip stands, and
+    /// the measured 320pt line cannot hold "Needs setup" (−15pt) or "Key lacks access". Each
+    /// attention state therefore carries a short form alongside its full badge — and the full
+    /// badge, which every other surface reads, must not move.
+    @Test func everyAttentionCarriesAnIdentityLineShortForm() {
+        let expected: [(reason: FailureReason, badge: String, shortBadge: String)] = [
+            (.notLoggedIn("Add an admin key in Settings"), "Needs setup", "Setup"),
+            (.needsReauth("Anthropic admin key rejected"), "Key rejected", "Rejected"),
+            (.scopeDenied("Anthropic key lacks cost report access"), "Key lacks access", "Denied"),
+            (.transient("Network unavailable"), "Stale", "Stale"),
+        ]
+
+        for copy in expected {
+            let status = APISpendPresentation.rowStatus(
+                freshness: .stale(copy.reason),
+                providerID: .claude,
+                displayName: "Anthropic API"
+            )
+
+            #expect(status.badge == copy.badge)
+            #expect(status.shortBadge == copy.shortBadge)
+        }
+    }
+
+    /// A permanent provider-setup failure is not a key condition, but it still needs a tag on
+    /// the identity line.
+    @Test func permanentSetupFailureShortensToSetup() {
+        let status = APISpendPresentation.rowStatus(
+            freshness: .stale(.providerSetup(.claudeCLIMissing)),
+            providerID: .claude,
+            displayName: "Anthropic API"
+        )
+
+        #expect(status.badge == "Needs setup")
+        #expect(status.shortBadge == "Setup")
+    }
+
+    /// Live and pending rows keep the period chip, so they must not offer a tag to put in
+    /// its place.
+    @Test func liveAndPendingRowsCarryNoIdentityLineTag() {
+        for freshness in [Freshness.live, .pending] {
+            #expect(APISpendPresentation.rowStatus(
+                freshness: freshness,
+                providerID: .claude,
+                displayName: "Anthropic API"
+            ).shortBadge == nil)
+        }
+    }
+
+    // MARK: - Popover identity split (X5)
+
+    /// Core's "Cursor on-demand" measurably clips the identity line, so the popover renders
+    /// the vendor as the title and hands the qualifier to the chip. `displayName` itself is
+    /// what the widgets and the phone mirror read and is deliberately untouched.
+    @Test func popoverIdentitySplitsATrailingQualifierIntoTheChip() {
+        let cursor = APISpendPresentation.popoverIdentity(displayName: "Cursor on-demand")
+
+        #expect(cursor.title == "Cursor")
+        #expect(cursor.chipOverride == "On-demand")
+    }
+
+    /// An initialism is part of the name, not a qualifier — "Anthropic API" must survive
+    /// whole, and so must a single-word name.
+    @Test func popoverIdentityKeepsInitialismsAndSingleWordNames() {
+        for name in ["Anthropic API", "OpenAI API", "xAI API", "Cursor"] {
+            let identity = APISpendPresentation.popoverIdentity(displayName: name)
+
+            #expect(identity.title == name)
+            #expect(identity.chipOverride == nil)
+        }
     }
 
     // MARK: - When the action shows

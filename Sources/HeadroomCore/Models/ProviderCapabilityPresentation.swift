@@ -1,11 +1,12 @@
 public extension ProviderCapabilityState {
+    /// B3T: Title Case, like every other button label (see `ProviderSetupOutcome`).
     var recoveryPresentation: ProviderRecoveryPresentation? {
         switch self {
         case .unknown, .discovering, .available:
             nil
         case .inconclusive:
             .init(
-                status: "Claude Code location couldn't be confirmed — usage will retry",
+                status: "Couldn't confirm where Claude Code is — will retry",
                 primaryLabel: "Check Again",
                 primaryAction: .checkNow,
                 secondaryLabel: "Open Guided Setup",

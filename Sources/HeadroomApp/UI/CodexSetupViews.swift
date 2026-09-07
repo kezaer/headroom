@@ -152,12 +152,15 @@ struct CodexConnectCard: View {
             .padding(.top, 12)
             if let secondaryLabel = presentation?.secondaryLabel,
                let onSecondaryAction {
-                Button(secondaryLabel, action: onSecondaryAction)
-                    .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 4))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(ProviderStyle.textAccent(for: .codex, scheme: scheme))
-                    .padding(.top, 7)
-                    .accessibilityLabel(secondaryLabel)
+                // B3A/P4C/B3: "Use Device Code" was a bare indigo label hanging under the
+                // full-width primary. The primary keeps its width; the secondary becomes a
+                // thin chip in the leading action row beneath it.
+                // B3X: this card's prose starts at its own leading edge, not the 34pt axis.
+                CardActionRow(labelInset: 0) {
+                    Button(secondaryLabel, action: onSecondaryAction)
+                        .buttonStyle(SetupChipButtonStyle(size: .small))
+                        .accessibilityLabel(secondaryLabel)
+                }
             }
             steps
                 .padding(.top, 14)
@@ -228,14 +231,19 @@ struct CodexAccessRecoveryCard: View {
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
+            // P4C/B3: the full-width primary keeps its own line, as in `CodexConnectCard`;
+            // "Check Now" drops to the card's leading action row.
+            VStack(alignment: .leading, spacing: 0) {
                 Button(kind == .permission ? "Open Privacy & Security" : "Resolve Storage", action: onPrimaryAction)
                     .buttonStyle(CodexPrimaryButtonStyle())
                     .accessibilityLabel(kind == .permission
                                         ? "Open Privacy and Security for Codex file access"
                                         : "Resolve Codex storage for this account")
-                Button("Check now", action: onCheckNow)
-                    .buttonStyle(SetupChipButtonStyle())
+                // B3X: aligned with the card's prose, which starts at its own edge.
+                CardActionRow(labelInset: 0) {
+                    Button("Check Now", action: onCheckNow)
+                        .buttonStyle(SetupChipButtonStyle(size: .small))
+                }
             }
         }
     }
@@ -275,17 +283,15 @@ struct CodexWaitingCard: View {
                 .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
                 .padding(.top, 11)
-            HStack(spacing: 14) {
-                Button(action: onCheckNow) {
-                    Label("Check now", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(SetupChipButtonStyle())
+            // B3A/P4C/B3: same as the Claude waiting card — two thin chips, leading-aligned
+            // at the card's foot, with "Check Now" first and no icon inside either one.
+            // B3X: same as the Claude waiting card — the guided card's own leading edge.
+            CardActionRow(labelInset: 0) {
+                Button("Check Now", action: onCheckNow)
+                    .buttonStyle(SetupChipButtonStyle(size: .small))
                 Button("Reopen Terminal", action: onReopen)
-                    .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 4))
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(ProviderStyle.textAccent(for: .codex, scheme: scheme))
+                    .buttonStyle(SetupChipButtonStyle(size: .small))
             }
-            .padding(.top, 14)
             CodexManualCommandDisclosure()
                 .padding(.top, 13)
         }
@@ -353,6 +359,7 @@ struct CodexPrimaryButtonStyle: ButtonStyle {
     private struct StyleBody: View {
         let configuration: Configuration
         let dark: Bool
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @State private var hovering = false
 
         var body: some View {
@@ -363,6 +370,9 @@ struct CodexPrimaryButtonStyle: ButtonStyle {
             let bottom = dark
                 ? Color(red: 0.29, green: 0.34, blue: 0.82)
                 : Color(red: 0.20, green: 0.24, blue: 0.76)
+            // S3A: hover in fast, out slow; press lands inside 100ms and returns on settle.
+            let hoverAnimation = hovering ? HeadroomMotion.hoverIn : HeadroomMotion.hoverOut
+            let pressAnimation = configuration.isPressed ? HeadroomMotion.pressDown : HeadroomMotion.settle
             configuration.label
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
@@ -372,10 +382,16 @@ struct CodexPrimaryButtonStyle: ButtonStyle {
                 .overlay(shape.strokeBorder(Color.white.opacity(0.22), lineWidth: 1).blendMode(.plusLighter).opacity(0.6))
                 .shadow(color: .black.opacity(0.20), radius: 1, y: 1)
                 .brightness(configuration.isPressed ? -0.03 : (hovering ? 0.04 : 0))
+                // S2A: brightness is a colour change and keeps its timing under Reduce Motion;
+                // the 0.98 scale below is movement, so it carries its own modifier.
+                .animation(HeadroomMotion.resolved(hoverAnimation, .crossfade, reduceMotion: reduceMotion),
+                           value: hovering)
+                .animation(HeadroomMotion.resolved(pressAnimation, .crossfade, reduceMotion: reduceMotion),
+                           value: configuration.isPressed)
                 .scaleEffect(configuration.isPressed ? 0.98 : 1)
+                .animation(HeadroomMotion.resolved(pressAnimation, .movement, reduceMotion: reduceMotion),
+                           value: configuration.isPressed)
                 .onHover { hovering = $0 }
-                .animation(HeadroomMotion.press, value: hovering)
-                .animation(HeadroomMotion.press, value: configuration.isPressed)
         }
     }
 }

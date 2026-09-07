@@ -112,15 +112,23 @@ struct AccountsSettingsTile: View {
                 removalInProgress = account.key
                 Task { @MainActor in
                     let result = await AccountsSettingsInteractions.removeAccount(account, from: store)
-                    removalInProgress = nil
                     guard result == .removed else {
+                        removalInProgress = nil
                         restoreRemovalFocus()
                         return
                     }
-                    withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+                    // M7A: every state a completed removal touches settles in one
+                    // transaction, on the same `reorder` spring the list identity below
+                    // carries, so the tile contracts while the row fades rather than after
+                    // it. Dismissing the dialog in its own animation while the row left on
+                    // another is what read as a second, later step.
+                    withAnimation(
+                        HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion)
+                    ) {
+                        removalInProgress = nil
                         removalCandidate = nil
+                        removalOrigin = nil
                     }
-                    removalOrigin = nil
                 }
             }
             Button("Cancel", role: .cancel) { restoreRemovalFocus() }
@@ -230,6 +238,9 @@ struct AccountsSettingsTile: View {
                     stopWaitingAccount: accounts.first {
                         SetupSessions.hasActiveHandoff(for: $0)
                     },
+                    // B3A: Settings keeps the leading row and the small chip; only the
+                    // popover card foot takes P4C's trailing action row.
+                    placement: .settingsGroup,
                     onPrimaryAction: {
                         AccountsSettingsInteractions.performCapabilityRecovery(
                             capability.recovery.primaryAction,
@@ -251,22 +262,29 @@ struct AccountsSettingsTile: View {
             }
             ForEach(accounts) { account in
                 accountRow(account, capability: capability, presentation: presentation)
+                    // M7A: an added row arrives with the Settings reveal (4pt rise + blur
+                    // + fade); a removed one only fades — `settingsReveal` is already
+                    // asymmetric that way, so exits stay softer than entrances.
+                    .transition(.settingsReveal)
             }
             if store.isBuiltInTrackingStopped(for: providerID) {
                 // The way back from stop-tracking: resurface the CLI's own login and
                 // fetch it right away. Quiet on purpose — it's an undo, not a feature.
                 Button("Show CLI Account") {
-                    _ = withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+                    _ = withAnimation(
+                        HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion)
+                    ) {
                         AccountsSettingsInteractions.resumeTrackingBuiltIn(
                             for: providerID,
                             in: store
                         )
                     }
                 }
-                .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
-                .controlSize(.small)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                // B3A: quiet still, but a control — the small chip owns its own font and ink,
+                // so the per-site 11pt secondary label goes away. B3H keeps the resting
+                // container here: on a Settings pane, beside native bordered controls, a
+                // hover-only chip would read as a line of text until the pointer found it.
+                .buttonStyle(SetupChipButtonStyle(size: .small, chrome: .resting))
                 .help("Track the account your CLI is signed into again")
                 .padding(.leading, 16)
             }
@@ -277,7 +295,16 @@ struct AccountsSettingsTile: View {
                 SettingsHelpText(text: offHelpText)
             }
         }
-        .animation(reduceMotion ? nil : HeadroomMotion.settle, value: accounts.map(\.id))
+        // M7A: the single scope for add / remove / Make Main. A row travels roughly its own
+        // height, so the list rides the `reorder` spring — slower than `valueSpring`, and a
+        // spring so a second Make Main mid-flight retargets instead of restarting. It is one
+        // `.movement` scope on purpose: splitting the row's fade from the group's height
+        // change is exactly what made the contraction land a beat late. Nothing between this
+        // and the tile's `raisedTile` pins a height, so the tile follows the group per frame.
+        .animation(
+            HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion),
+            value: accounts.map(\.id)
+        )
         .onAppear {
             SetupSessions.announceCapabilityIfNeeded(announcedCapability, for: providerID)
         }
@@ -516,8 +543,10 @@ struct AccountsSettingsTile: View {
                         onRetry: { store.refreshAccountNow(account.key) }
                     )
                 }
-                .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
-                .controlSize(.small)
+                // B3A/B3H: bare beside a bordered primary was the worst mix in Settings; the
+                // small chip gives it a resting container and its own font and ink, and it
+                // keeps that container — its neighbour is a `.bordered` button.
+                .buttonStyle(SetupChipButtonStyle(size: .small, chrome: .resting))
                 .accessibilityLabel(
                     recoveryActions?.secondaryAccessibilityLabel
                         ?? "\(secondaryLabel) for \(account.label)"
@@ -837,7 +866,9 @@ struct AccountsSettingsTile: View {
     /// Create the account and immediately open its official-CLI sign-in so the add
     /// flow is one gesture: click Add → Terminal opens → sign in → row goes live.
     private func addAccount(for providerID: ProviderID) {
-        _ = withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+        _ = withAnimation(
+            HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion)
+        ) {
             AccountsSettingsInteractions.addAccount(
                 for: providerID,
                 to: store,
@@ -931,7 +962,9 @@ struct AccountsSettingsTile: View {
     private func makeMain(_ account: ProviderAccount) {
         removalOrigin = account.key
         var feedback: AccountsSettingsInteractions.PromotionFeedback?
-        withAnimation(reduceMotion ? nil : HeadroomMotion.settle) {
+        withAnimation(
+            HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion)
+        ) {
             feedback = AccountsSettingsInteractions.makeMain(account, in: store)
         }
         guard let feedback else { return }

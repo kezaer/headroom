@@ -76,7 +76,6 @@ struct ProviderCardView: View {
     var announcesAccessibilityEvents: Bool = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var scheme
     @State private var showsConnectedChip = false
 
     private var isMultiAccount: Bool { entries.count > 1 }
@@ -109,10 +108,13 @@ struct ProviderCardView: View {
         .padding(13)
         .frame(maxWidth: .infinity, alignment: .leading)
         .raisedTile(cornerRadius: 10)
-        // A refresh replacing the pending skeleton (or a stale card recovering) cross-fades
-        // and springs its height change rather than hard-cutting — the arrival of a poll
-        // cycle, felt not flashed. Snaps instead under Reduce Motion.
-        .animation(reduceMotion ? nil : HeadroomMotion.valueSpring, value: snapshot.freshness)
+        // M4A/S2A: this scope owns the *tile* — its padding, its raised shape, the height
+        // it reports to the popover stack. That is travel, so Reduce Motion snaps it; the
+        // body's crossfade is a separate scope below (`singleAccountContent`) and survives.
+        .animation(
+            HeadroomMotion.resolved(HeadroomMotion.valueSpring, .movement, reduceMotion: reduceMotion),
+            value: snapshot.freshness
+        )
         .onAppear {
             evaluateConnectedPayoff()
             announceSetupStateIfNeeded()
@@ -169,7 +171,9 @@ struct ProviderCardView: View {
                 }
             )
             if isMultiAccount {
-                VStack(alignment: .leading, spacing: 22) {
+                // T1A: the same 26pt account gap as `multiAccountBody` — one grouping rhythm
+                // whether or not the capability notice is showing.
+                VStack(alignment: .leading, spacing: 26) {
                     ForEach(entries.filter { $0.snapshot.freshness != .pending }) { entry in
                         accountSection(
                             for: entry,
@@ -185,14 +189,31 @@ struct ProviderCardView: View {
     }
 
     private var singleAccountBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // P4C: the card's actions end in one leading row, and `CardActionRow` owns R4A's 12pt
+        // above it — so this stack no longer spaces its own children.
+        VStack(alignment: .leading, spacing: 0) {
             singleAccountContent
             if let activeSetupAccount {
-                HStack {
-                    Spacer(minLength: 0)
-                    StopWaitingButton(account: activeSetupAccount)
+                // B3X: this row follows whichever body rendered above it, and the four
+                // bodies do not share one content axis — a guided setup card lays out at
+                // its own edge, the compact recovery card behind its own 18pt mark, an
+                // identity row on the 21pt axis. Ask the body rather than assume.
+                CardActionRow(labelInset: singleAccountLabelInset) {
+                    StopWaitingButton(account: activeSetupAccount, style: .chip(.small))
                 }
             }
+        }
+    }
+
+    /// B3X: mirrors the branch order of `singleAccountContent` exactly — change one and the
+    /// other has to move with it, or the Stop Waiting chip drifts off the card's own axis.
+    private var singleAccountLabelInset: CGFloat {
+        if claudeGuidedSetupOutcome != nil || snapshot.codexConnectionAction != nil {
+            0
+        } else if providerSetupOutcome != nil {
+            ProviderSetupRecoveryCard.contentInset
+        } else {
+            IdentityRowMetrics.meterContentInset
         }
     }
 
@@ -309,10 +330,20 @@ struct ProviderCardView: View {
                 }
             )
         } else {
-            VStack(alignment: .leading, spacing: 7) {
+            // R4A: 6, in step with `AccountSectionView`'s identity→body gap — one grouping
+            // rhythm whether the card carries one account or several.
+            VStack(alignment: .leading, spacing: 6) {
                 accountIdentityRow(for: primaryEntry)
                 content
             }
+            // M4A/S2A: the `.pending → .live` body swap is opacity, so it keeps its timing
+            // under Reduce Motion. This is the innermost scope around the switching body,
+            // which is why it — not the tile scope above — drives the `.transition`.
+            // The fill and numeral roll inside the inserted body belong to `UsageBarView`.
+            .animation(
+                HeadroomMotion.resolved(HeadroomMotion.valueSpring, .crossfade, reduceMotion: reduceMotion),
+                value: snapshot.freshness
+            )
         }
     }
 
@@ -321,16 +352,20 @@ struct ProviderCardView: View {
         onCheckNow: @escaping () -> Void
     ) -> some View {
         if let message = SetupSessions.failureMessage(for: account) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
+            // P4C/S2B: the warning keeps the whole line and wraps, with the critical ink
+            // carrying the severity now the triangle is gone; "Check Now" drops to the
+            // notice's own action row instead of sitting at the end of the sentence.
+            // `indented: false` on purpose — this notice heads a guided Connect card whose
+            // own content starts at the card's 13pt edge, so 34 would misalign the pair.
+            VStack(alignment: .leading, spacing: 0) {
+                StatusSentence(text: message, severity: .critical, indented: false)
                     .accessibilityLabel("Setup failed. \(message)")
-                Spacer(minLength: 4)
-                Button("Check now", action: onCheckNow)
-                    .buttonStyle(SetupChipButtonStyle())
+                // B3X: the sentence above is `indented: false`, so the chip label matches it
+                // at the card's own edge rather than the 34pt axis it never reaches here.
+                CardActionRow(labelInset: 0) {
+                    Button("Check Now", action: onCheckNow)
+                        .buttonStyle(SetupChipButtonStyle(size: .small))
+                }
             }
         }
     }
@@ -339,9 +374,11 @@ struct ProviderCardView: View {
 
     private var multiAccountBody: some View {
         let providerAccounts = entries.map(\.account)
-        // G3: the 22pt gap chunks accounts without adding chrome; each section owns its
-        // identity, so row mode has no separate provider header or account counter.
-        return VStack(alignment: .leading, spacing: 22) {
+        // G3: the inter-account gap chunks accounts without adding chrome; each section owns
+        // its identity, so row mode has no separate provider header or account counter.
+        // T1A widened it 22 → 26 to hold the grouping now the title sits at `.medium` and
+        // the meter rows inside a section are 2pt tighter.
+        return VStack(alignment: .leading, spacing: 26) {
             ForEach(entries) { entry in
                 accountSection(
                     for: entry,
@@ -388,10 +425,16 @@ struct ProviderCardView: View {
         guard case .live = snapshot.freshness else { return }
         guard SetupSessions.isConnected(primaryAccount) else { return }
         guard !showsConnectedChip else { return }
-        withAnimation(reduceMotion ? nil : HeadroomMotion.valueSpring) { showsConnectedChip = true }
+        // M8A/S2A: the chip's own transition drops the scale under Reduce Motion, so the
+        // driving animation stays a crossfade here — silencing it would take the fade too.
+        withAnimation(HeadroomMotion.resolved(HeadroomMotion.valueSpring, .crossfade, reduceMotion: reduceMotion)) {
+            showsConnectedChip = true
+        }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(4))
-            withAnimation(reduceMotion ? nil : HeadroomMotion.settle) { showsConnectedChip = false }
+            withAnimation(HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion)) {
+                showsConnectedChip = false
+            }
             SetupSessions.settle(for: primaryAccount)
         }
     }
@@ -463,6 +506,14 @@ struct ProviderCardView: View {
         }
     }
 
+    /// M4A: the Appearance specimen is inert (KTD4) and W4's `.id(meterStyle)` crossfade
+    /// rebuilds it on every style change, so it never stages an arrival — the same
+    /// `announcesAccessibilityEvents: false` that keeps the preview out of the real
+    /// accessibility and setup state keeps it out of the arrival registry.
+    private var meterArrivalKey: AccountKey? {
+        announcesAccessibilityEvents ? primaryAccount.key : nil
+    }
+
     private func bars(for snapshot: UsageSnapshot, dimmed: Bool) -> some View {
         // Single-account keeps the "Low" chip (chiplessCriticalInk defaults off).
         UsageBarsStack(
@@ -470,7 +521,8 @@ struct ProviderCardView: View {
             percentageMode: percentageMode,
             now: now,
             dimmed: dimmed,
-            meterStyle: meterStyle
+            meterStyle: meterStyle,
+            arrivalKey: meterArrivalKey
         )
         .padding(.leading, IdentityRowMetrics.meterContentInset)
         .padding(.trailing, IdentityRowMetrics.contentTrailingInset)
@@ -493,12 +545,16 @@ struct ProviderCardView: View {
     /// Permanent failure the user can fix (UI-05) that is not one of the guided setup
     /// states: message + compact copyable command.
     @ViewBuilder private func actionable(_ reason: FailureReason) -> some View {
+        // S2B: the triangle goes; the sentence's attention ink is the whole signal, and it
+        // starts on the 34pt content axis with the meters and command row below it.
         VStack(alignment: .leading, spacing: 8) {
-            Label(reason.message, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
-                .foregroundStyle(ProviderStyle.severityColor(for: .low, scheme: scheme))
+            StatusSentence(
+                text: reason.message,
+                severity: .forSetupOutcome(reason.providerSetupOutcome)
+            )
             if let command = recoveryCommand {
                 CommandRecoveryRow(command: command)
+                    .padding(.leading, IdentityRowMetrics.meterContentInset)
             }
         }
     }
@@ -521,23 +577,35 @@ private struct ProviderSetupRecoveryCard: View {
     let onPrimaryAction: () -> Void
     let onSecondaryAction: (() -> Void)?
 
+    /// B3X: this card carries its own mark column rather than the identity row's, so its
+    /// content axis is its own 18pt mark plus 7pt gap — not `IdentityRowMetrics`' 21.
+    private static let markSlotWidth: CGFloat = 18
+    private static let markGap: CGFloat = 7
+    static let contentInset = markSlotWidth + markGap
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 7) {
-                ProviderLogoView(providerID: providerID, size: 18)
+        // P4C/B3: status line first, then one leading action row — the primary first.
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: Self.markGap) {
+                ProviderLogoView(providerID: providerID, size: Self.markSlotWidth)
                 Text(presentation.status)
                     .font(.system(size: 12.5, weight: .medium))
                     .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Setup needed. \(presentation.status)")
-            HStack(spacing: 10) {
+            // B3X: the chip labels land under the status text, not under the mark.
+            CardActionRow(labelInset: Self.contentInset) {
+                // B3: the last native control inside a popover card — a `.borderedProminent`
+                // button beside two chips — becomes a chip. One recipe, position carries
+                // primacy.
                 Button(presentation.primaryLabel, action: onPrimaryAction)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(SetupChipButtonStyle(size: .small))
                 if let secondaryLabel = presentation.secondaryLabel,
                    let onSecondaryAction {
                     Button(secondaryLabel, action: onSecondaryAction)
-                        .buttonStyle(SetupChipButtonStyle())
+                        .buttonStyle(SetupChipButtonStyle(size: .small))
                 }
             }
         }
@@ -545,41 +613,104 @@ private struct ProviderSetupRecoveryCard: View {
 }
 
 struct ProviderCapabilityRecoveryView: View {
+    /// The same recovery block renders at a popover card's foot and inside the Accounts
+    /// tile. B3A sizes the chips per surface and P4C only re-places the popover one — a
+    /// Settings group keeps its leading row beside the tile's other controls.
+    enum Placement {
+        case cardFoot
+        case settingsGroup
+
+        /// B3: one chip recipe everywhere — the thin one. The property survives so the two
+        /// placements still read as a deliberate pair rather than an accident.
+        var chipSize: SetupChipButtonStyle.Size { .small }
+
+        /// B3H: the same block renders in two rooms. In a popover card the chrome only
+        /// appears on hover, like the footer's Refresh/Quit; in the Settings group it keeps
+        /// its resting container so it matches the bordered controls beside it.
+        var chipChrome: SetupChipButtonStyle.Chrome {
+            self == .cardFoot ? .hover : .resting
+        }
+    }
+
     let presentation: CapabilityRecoveryPresentation
     var stopWaitingAccount: ProviderAccount? = nil
+    var placement: Placement = .cardFoot
     let onPrimaryAction: () -> Void
     let onSecondaryAction: (() -> Void)?
 
     var body: some View {
+        // P4C/B3: three button languages used to share one row at three sizes. Every message
+        // keeps its own line now and, at a card foot, all three actions collect in one
+        // leading row starting at the mark column, primary first — the same order the
+        // Settings group already used.
+        VStack(alignment: .leading, spacing: 0) {
+            messages
+            switch placement {
+            case .cardFoot:
+                CardActionRow {
+                    primaryButton
+                    secondaryButton
+                    stopWaitingButton
+                }
+            case .settingsGroup:
+                HStack(spacing: 8) {
+                    primaryButton
+                    secondaryButton
+                    stopWaitingButton
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    /// S2B: the triangle is gone from both lines. A missing or unconfirmed CLI is an
+    /// attention state, and so is a handoff standing in the way of the retry — the same
+    /// "Close setup, then retry" sentence an account row shows, so it takes the same ink.
+    /// Indented only at a card foot, where an identity row sets the 34pt axis above it.
+    private var messages: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label(presentation.recovery.status, systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Claude Code availability. \(presentation.recovery.status)")
-            HStack(spacing: 10) {
-                if presentation.state(for: presentation.recovery.primaryAction) == .enabled {
-                    Button(presentation.recovery.primaryLabel, action: onPrimaryAction)
-                        .buttonStyle(SetupChipButtonStyle())
-                }
-                if let secondaryLabel = presentation.recovery.secondaryLabel,
-                   let secondaryAction = presentation.recovery.secondaryAction,
-                   presentation.state(for: secondaryAction) == .enabled,
-                   let onSecondaryAction {
-                    Button(secondaryLabel, action: onSecondaryAction)
-                        .buttonStyle(HoverButtonStyle(horizontalPadding: 6, verticalPadding: 3))
-                }
-                if let stopWaitingAccount {
-                    StopWaitingButton(account: stopWaitingAccount)
-                }
-            }
+            StatusSentence(
+                text: presentation.recovery.status,
+                severity: .attention,
+                indented: placement == .cardFoot
+            )
+            .accessibilityLabel("Claude Code availability. \(presentation.recovery.status)")
             if let refusalMessage {
-                Text(refusalMessage)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel(refusalMessage)
+                StatusSentence(
+                    text: refusalMessage,
+                    severity: .attention,
+                    indented: placement == .cardFoot
+                )
+                .accessibilityLabel(refusalMessage)
             }
+        }
+    }
+
+    @ViewBuilder private var primaryButton: some View {
+        if presentation.state(for: presentation.recovery.primaryAction) == .enabled {
+            Button(presentation.recovery.primaryLabel, action: onPrimaryAction)
+                .buttonStyle(SetupChipButtonStyle(size: placement.chipSize, chrome: placement.chipChrome))
+        }
+    }
+
+    /// B3A: was a bare label with no font or ink of its own sitting beside a filled chip;
+    /// it now takes the same chip so the row speaks one language.
+    @ViewBuilder private var secondaryButton: some View {
+        if let secondaryLabel = presentation.recovery.secondaryLabel,
+           let secondaryAction = presentation.recovery.secondaryAction,
+           presentation.state(for: secondaryAction) == .enabled,
+           let onSecondaryAction {
+            Button(secondaryLabel, action: onSecondaryAction)
+                .buttonStyle(SetupChipButtonStyle(size: placement.chipSize, chrome: placement.chipChrome))
+        }
+    }
+
+    @ViewBuilder private var stopWaitingButton: some View {
+        if let stopWaitingAccount {
+            StopWaitingButton(
+                account: stopWaitingAccount,
+                style: placement == .cardFoot ? .chip(.small) : .bordered
+            )
         }
     }
 
@@ -594,19 +725,23 @@ struct ProviderCapabilityRecoveryView: View {
 }
 
 struct StopWaitingButton: View {
+    /// B3A: one button, two surfaces. Inside a popover card it wears the chip, because a
+    /// card foot must not mix a native bordered control with the chips beside it; a
+    /// Settings row keeps the native small bordered button its neighbours use.
+    enum Style: Equatable {
+        case chip(SetupChipButtonStyle.Size)
+        case bordered
+    }
+
     let account: ProviderAccount
+    var style: Style = .bordered
     var onConfirmationPresented: () -> Void = {}
     var onStop: ((ProviderAccount) -> Void)? = nil
     var onDismiss: () -> Void = {}
     @State private var isConfirming = false
 
     var body: some View {
-        Button("Stop waiting") {
-            onConfirmationPresented()
-            isConfirming = true
-        }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+        button
             .accessibilityLabel("Stop waiting for setup for \(account.label)")
             .confirmationDialog(
                 "Stop waiting for setup?",
@@ -626,6 +761,122 @@ struct StopWaitingButton: View {
                 Text("Headroom stops waiting immediately. The Terminal window may still be open; close it by hand if you no longer need it.")
             }
     }
+
+    @ViewBuilder private var button: some View {
+        let action = Button("Stop Waiting") {
+            onConfirmationPresented()
+            isConfirming = true
+        }
+        switch style {
+        case .chip(let size):
+            action.buttonStyle(SetupChipButtonStyle(size: size))
+        case .bordered:
+            action
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+    }
+}
+
+/// P4C/B3 (Sep 2026): the one action row every card and account section ends with —
+/// **leading**-aligned, R4A's 12pt under the sentence it answers, 8pt between chips, the
+/// primary chip first because a leading row reads left to right. Messages keep their own line
+/// above it, so nothing sits at the trailing end of a sentence any more.
+///
+/// B3X (Kyle, Sep 2026): "have it line up with the messages and service title instead of the
+/// icon." B3 aligned the chip's *box* to the mark column; what the eye reads is the chip's
+/// **label**, and B3H just deleted the resting box that made the box edge visible at all. So
+/// the row aligns its first label, not its first frame: it insets itself by `labelInset`
+/// minus the chip's own horizontal padding, which lands the label exactly on `labelInset`.
+/// At the default that is the 34pt content axis (13 card padding + 21) shared by the identity
+/// title, the status sentence and every meter label. The hover pill then overhangs 10pt to
+/// the left, the same way the footer's Refresh/Quit pills overhang their text.
+struct CardActionRow<Content: View>: View {
+    /// Only for stacks whose own spacing already supplies part of R4A's 12pt gap.
+    var topPadding: CGFloat = 12
+    /// B3X: where the first chip's *label* starts, measured from this row's own leading edge.
+    /// Cards whose sentences sit at their own edge (the guided setup cards, the setup-failure
+    /// notice) pass 0; the inset then goes negative and the pill overhangs into the card's
+    /// 13pt padding, which is the correct trade — the label is what has to agree.
+    var labelInset: CGFloat = IdentityRowMetrics.meterContentInset
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ActionChipFlow(spacing: 8, lineSpacing: 8) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Every popover chip is `.small`, so its horizontal padding is the constant to
+        // subtract; wrapped lines inherit it because `ActionChipFlow` starts each line at
+        // `bounds.minX`.
+        .padding(.leading, labelInset - SetupChipButtonStyle.Size.small.horizontalPadding)
+        .padding(.top, topPadding)
+    }
+}
+
+/// B3: a row that runs out of width wraps to a second leading-aligned line rather than
+/// shrinking a chip or truncating a label — so every subview is measured at its ideal size
+/// and a line break is the only thing that gives. Three chips only co-occur while a handoff
+/// is open (`StopWaitingButton`), so the second line is the exception, not the resting state.
+struct ActionChipFlow: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    struct Line {
+        var indices: [Int] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let lines = lines(subviews: subviews, maxWidth: proposal.width ?? .infinity)
+        let width = lines.map(\.width).max() ?? 0
+        let height = lines.map(\.height).reduce(0, +)
+            + lineSpacing * CGFloat(max(0, lines.count - 1))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Void
+    ) {
+        var y = bounds.minY
+        for line in lines(subviews: subviews, maxWidth: bounds.width) {
+            var x = bounds.minX
+            for index in line.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(
+                    at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
+                    proposal: ProposedViewSize(size)
+                )
+                x += size.width + spacing
+            }
+            y += line.height + lineSpacing
+        }
+    }
+
+    private func lines(subviews: Subviews, maxWidth: CGFloat) -> [Line] {
+        var lines: [Line] = []
+        var current = Line()
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let extended = current.indices.isEmpty
+                ? size.width
+                : current.width + spacing + size.width
+            if !current.indices.isEmpty, extended > maxWidth {
+                lines.append(current)
+                current = Line(indices: [index], width: size.width, height: size.height)
+            } else {
+                current.indices.append(index)
+                current.width = extended
+                current.height = max(current.height, size.height)
+            }
+        }
+        if !current.indices.isEmpty { lines.append(current) }
+        return lines
+    }
 }
 
 
@@ -643,12 +894,17 @@ struct UsageBarsStack: View {
     /// H3a: multi-account sections opt into chipless critical numerals; single-account keeps
     /// the "Low" chip. Threaded down to every row so a stack renders one way.
     var chiplessCriticalInk: Bool = false
+    /// M4A: passed straight through so both of an account's rows draw in together on the
+    /// first live view of that account this launch. `nil` keeps a stack static.
+    var arrivalKey: AccountKey? = nil
 
     var body: some View {
         if windows.isEmpty {
             Text("No usage data").font(.caption).foregroundStyle(.secondary)
         } else {
-            VStack(spacing: meterStyle.format == .micro ? 12 : 9) {
+            // T1A: Micro tightens 12 → 10 so an account's rows read as one block under its
+            // title; Full stays 9, where the taller row already carries the separation.
+            VStack(spacing: meterStyle.format == .micro ? 10 : 9) {
                 ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
                     UsageBarView(
                         window: window,
@@ -656,7 +912,8 @@ struct UsageBarsStack: View {
                         now: now,
                         meterStyle: meterStyle,
                         dimmed: dimmed,
-                        chiplessCriticalInk: chiplessCriticalInk
+                        chiplessCriticalInk: chiplessCriticalInk,
+                        arrivalKey: arrivalKey
                     )
                 }
             }

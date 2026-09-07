@@ -10,10 +10,6 @@ import HeadroomCore
 struct PopoverView: View {
     var store: UsageStore
     var onOpenSettings: () -> Void
-    /// Render-harness only: `ImageRenderer` does not fire `onAppear`, so the entrance
-    /// fade would leave the snapshot fully transparent. Forces the content visible for
-    /// the offscreen marketing export; the live app leaves this off.
-    var forceVisible: Bool = false
     /// Render-harness only: `ImageRenderer` can't rasterize the Liquid Glass shell, so the
     /// marketing export forces the solid surface branch (a flat dark shell that also
     /// matches the design artboard). The live app leaves this off and keeps its glass.
@@ -26,10 +22,6 @@ struct PopoverView: View {
     @State private var popoverWindow: NSWindow?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
-    // Drives the first-session open fade. Subsequent menu-bar opens are instant because
-    // SwiftUI recreates this view per open; replaying motion there reads as latency.
-    @State private var appeared = false
-    @State private var animatesEntrance = false
     /// Content extends past the scroll cap and isn't scrolled to the bottom — gates
     /// the bottom fade so it never softens a fully visible last card.
     @State private var scrollContinuesBelow = false
@@ -61,6 +53,13 @@ struct PopoverView: View {
             let anyProviderMultiAccount = surfaceUsesAccountRows(
                 accountsByProvider: accountsByVisibleProvider
             )
+            // M7A: the card stack's identity is provider order *and* each provider's
+            // account order, flattened. Make Main promotes a row inside one provider and
+            // leaves `providerOrder` untouched, so keying on the provider list alone would
+            // miss the only reorder this surface can actually show.
+            let cardListIdentity = store.providerOrder.flatMap { id in
+                (accountsByVisibleProvider[id] ?? []).map(\.key)
+            }
             VStack(spacing: 20) {
                 header(now: context.date)
                     // Header sits 14pt above the first card (vs the 20pt tile gap) — the
@@ -90,9 +89,25 @@ struct PopoverView: View {
                                 onRetrySetup: { store.refreshNow() },
                                 onRetryAccount: { store.refreshAccountNow($0.key) }
                             )
+                            // M7A: a card that arrives rises 4pt out of a slight blur, one
+                            // that leaves only fades — the Settings list's vocabulary, so
+                            // both surfaces describe the same account change the same way.
+                            .transition(.settingsReveal)
                         }
                         APISpendSectionView(store: store, now: context.date, onOpenSettings: openSettingsDismissingPopover)
+                            // S5A: the spend tile is a sibling card, so it arrives and
+                            // leaves the same way the provider cards above it do.
+                            .transition(.settingsReveal)
                     }
+                    // M7A: the popover had no reorder animation at all, so a Make Main
+                    // promotion teleported its card to the top. The stack's own layout change
+                    // rides this scope, and it is also what the measured `cardsHeight` below
+                    // samples frame by frame — so the container contracts *with* a removed
+                    // card's fade rather than snapping after it.
+                    .animation(
+                        HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion),
+                        value: cardListIdentity
+                    )
                     // Scroll content is laid out at its ideal height regardless of the
                     // ScrollView's own frame, so this reports the true stack height even
                     // on the first pass while the frame below is still zero.
@@ -137,17 +152,25 @@ struct PopoverView: View {
                         .frame(height: 26)
                     }
                 }
-                .animation(reduceMotion ? nil : HeadroomMotion.settle, value: scrollContinuesBelow)
-                .animation(reduceMotion ? nil : HeadroomMotion.settle, value: scrollContinuesAbove)
+                // S2A: both feathers are pure mask opacity, so Reduce Motion keeps the
+                // 200ms softening rather than hard-cutting the card edge.
+                .animation(
+                    HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
+                    value: scrollContinuesBelow
+                )
+                .animation(
+                    HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
+                    value: scrollContinuesAbove
+                )
                 // Applied outside the mask so the indicator never feathers at the ends,
                 // and outside the feather animations so its position tracks the scroll 1:1.
                 .overlay(alignment: .topTrailing) { scrollIndicator }
                 .frame(height: forcedCardsHeight ?? min(cardsHeight, 640))
                 footer
             }
-            // One quick content fade on open — no per-row stagger or vertical travel.
-            .opacity((appeared || forceVisible) ? 1 : 0)
-            .animation(reduceMotion || !animatesEntrance ? nil : HeadroomMotion.quickSettle, value: appeared)
+            // M9C (Sep 2026): no entrance motion at all, not even on the first open. Kyle
+            // reviewed the once-per-session fade in the live build and called for instant —
+            // the popover is opened dozens of times a day and any fade reads as latency.
             // 19pt inset / 20pt tile gap / 384pt overall — tuned in the onboarding HTML
             // mockup (Jul 2026); roomier than the original concentric 12pt scheme.
             .padding(19)
@@ -157,15 +180,9 @@ struct PopoverView: View {
             .modifier(PopoverSurfaceModifier(cornerRadius: 22, forceSolid: forceSolidSurface))
             // Capture the popover's hosting window so opening Settings can dismiss it.
             .background(WindowAccessor { configurePopoverWindow($0) })
-            .onAppear {
-                guard !PopoverEntranceAnimation.hasAnimatedThisSession else {
-                    appeared = true
-                    return
-                }
-                animatesEntrance = true
-                appeared = true
-                PopoverEntranceAnimation.hasAnimatedThisSession = true
-            }
+            // G1A: the popover is the only surface with a title-ink choice, so this is the
+            // one place it enters the view tree (the Settings specimen sets its own).
+            .environment(\.accountTitleInk, store.accountTitleInk)
         }
     }
 
@@ -182,7 +199,8 @@ struct PopoverView: View {
                 .opacity(scrollIndicatorVisible ? 1 : 0)
                 // Fade-out is the specified 200ms on `settle`'s curve; the appearance is
                 // the shorter `quickSettle` so the cue is already there when the finger
-                // lands. Reduce Motion shows and hides it outright.
+                // lands. S2A: the capsule only ever changes opacity, so Reduce Motion keeps
+                // both timings — the geometry below is what stays untweened.
                 .animation(scrollIndicatorAnimation, value: scrollIndicatorVisible)
                 // Geometry sits outside the animation scope so the capsule slides with the
                 // scroll rather than easing behind it.
@@ -197,8 +215,11 @@ struct PopoverView: View {
     }
 
     private var scrollIndicatorAnimation: Animation? {
-        guard !reduceMotion else { return nil }
-        return scrollIndicatorVisible ? HeadroomMotion.quickSettle : HeadroomMotion.settle
+        HeadroomMotion.resolved(
+            scrollIndicatorVisible ? HeadroomMotion.quickSettle : HeadroomMotion.settle,
+            .crossfade,
+            reduceMotion: reduceMotion
+        )
     }
 
     /// Proportional length — viewport × (viewport / content) — floored at 24pt so a very
@@ -272,10 +293,17 @@ struct PopoverView: View {
                 .kerning(-0.2)
             Spacer(minLength: 8)
             if let status = headerStatus(now: now) {
-                Text(status)
+                Text(status.text)
                     .font(.system(size: 11).monospacedDigit())
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
+                    // M2A: the minute tick was a hard cut. The stamp's value only grows, so
+                    // `numericText(value:)` rolls the digits upward — time's own direction.
+                    .contentTransition(headerStatusTransition(status))
+                    .animation(
+                        HeadroomMotion.resolved(HeadroomMotion.settle, .movement, reduceMotion: reduceMotion),
+                        value: status
+                    )
                     .alignmentGuide(.firstTextBaseline) { d in
                         d[.firstTextBaseline] + statusBaselineOffset
                     }
@@ -310,22 +338,50 @@ struct PopoverView: View {
         inkCenterAboveBaseline(titleFont) - inkCenterAboveBaseline(font)
     }
 
+    /// M2A: the header's one status slot carries either the numeric "Updated N …" stamp or
+    /// non-numeric setup copy. `elapsedMinutes` is nil for the latter, which is what keeps a
+    /// phrase like "Watching for approval…" from trying to roll its letters.
+    private struct HeaderStatus: Equatable {
+        let text: String
+        let elapsedMinutes: Double?
+    }
+
+    private func headerStatusTransition(_ status: HeaderStatus) -> ContentTransition {
+        guard let minutes = status.elapsedMinutes else { return .identity }
+        return HeadroomMotion.numericText(value: minutes, reduceMotion: reduceMotion)
+    }
+
     /// Single status for the whole popover. During a guided provider setup it narrates
     /// the stage; otherwise it's "Updated N min ago" from the *oldest* live snapshot so
     /// it never claims data is fresher than the least-fresh provider. Stale providers
     /// are excluded (their own stale pill carries that story); nil on first run when
     /// nothing is live yet, so the header simply omits it.
-    private func headerStatus(now: Date) -> String? {
+    private func headerStatus(now: Date) -> HeaderStatus? {
         if let outcome = claudeGuidedSetupOutcome {
             let account = ProviderAccount.builtIn(for: .claude)
             if SetupSessions.isWaiting(for: account) {
-                return outcome == .claudeLoginRequired ? "Watching for Claude sign-in…" : "Watching for approval…"
+                return HeaderStatus(
+                    text: outcome == .claudeLoginRequired
+                        ? "Watching for Claude sign-in…"
+                        : "Watching for approval…",
+                    elapsedMinutes: nil
+                )
             }
-            return outcome == .claudeLoginRequired ? "Sign in to Claude to begin" : "Set up Claude to begin"
+            return HeaderStatus(
+                text: outcome == .claudeLoginRequired
+                    ? "Sign in to Claude to begin"
+                    : "Set up Claude to begin",
+                elapsedMinutes: nil
+            )
         }
         if codexNeedsConnection {
             let account = ProviderAccount.builtIn(for: .codex)
-            return SetupSessions.isWaiting(for: account) ? "Watching for Codex sign-in…" : "Connect Codex to begin"
+            return HeaderStatus(
+                text: SetupSessions.isWaiting(for: account)
+                    ? "Watching for Codex sign-in…"
+                    : "Connect Codex to begin",
+                elapsedMinutes: nil
+            )
         }
         let liveCaptures = store.providerOrder.flatMap { id -> [Date] in
             store.accounts(for: id).compactMap { account in
@@ -334,8 +390,15 @@ struct PopoverView: View {
                 return snapshot.capturedAt
             }
         }
-        guard let oldest = liveCaptures.min() else { return nil }
-        return Countdown.updatedLabel(capturedAt: oldest, now: now).map { "Updated \($0)" }
+        guard let oldest = liveCaptures.min(),
+              let label = Countdown.updatedLabel(capturedAt: oldest, now: now) else { return nil }
+        // M2A: the label's own granularity is whole minutes since capture, so that is the
+        // value the roll follows. Between polls it only increases, which is what makes the
+        // digits climb; a landing capture resets it and they roll back down.
+        return HeaderStatus(
+            text: "Updated \(label)",
+            elapsedMinutes: (max(0, now.timeIntervalSince(oldest)) / 60).rounded(.down)
+        )
     }
 
     private var claudeGuidedSetupOutcome: ProviderSetupOutcome? {
@@ -379,7 +442,12 @@ struct PopoverView: View {
                         .transition(.opacity)
                 }
             }
-            .animation(reduceMotion ? nil : HeadroomMotion.settle, value: store.isRefreshing)
+            // M11A/S2A: the swap is opacity in a fixed slot, so Reduce Motion keeps the
+            // crossfade instead of blinking the control out from under the pointer.
+            .animation(
+                HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
+                value: store.isRefreshing
+            )
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(HoverButtonStyle(horizontalPadding: 8, verticalPadding: 4))
@@ -387,11 +455,6 @@ struct PopoverView: View {
                 .foregroundStyle(.secondary)
         }
     }
-}
-
-@MainActor
-private enum PopoverEntranceAnimation {
-    static var hasAnimatedThisSession = false
 }
 
 /// L2A geometry. The gutter offset is measured from the scroll viewport's trailing edge,

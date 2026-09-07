@@ -129,6 +129,7 @@ struct AppearanceSettingsPane: View {
     @Binding var appearancePreference: AppearancePreference
     @Binding var meterStyle: MeterStyle
     @Binding var usagePercentageMode: UsagePercentageMode
+    @Binding var accountTitleInk: AccountTitleInk
     @Binding var showCodexSparkCountersInApp: Bool
     let onAppearanceChange: (AppearancePreference) -> Void
     let onMeterStyleChange: (MeterStyle) -> Void
@@ -139,7 +140,8 @@ struct AppearanceSettingsPane: View {
             // the subject of the pane, not another setting.
             AppearanceSpecimen(
                 meterStyle: meterStyle,
-                percentageMode: usagePercentageMode
+                percentageMode: usagePercentageMode,
+                accountTitleInk: accountTitleInk
             )
 
             SettingsTile("Theme") {
@@ -174,6 +176,24 @@ struct AppearanceSettingsPane: View {
                         }
                     }
                     SettingsHelpText(text: "Changes the numbers, words, and meter direction in the app and menu bar.")
+                }
+                // G1A: the popover's account names read as a recessive grey by default;
+                // Brand puts them back in each provider's color for people who want it.
+                VStack(alignment: .leading, spacing: 4) {
+                    ResponsiveControlRow(label: "Account names") {
+                        Picker("Account names", selection: $accountTitleInk) {
+                            ForEach(AccountTitleInk.allCases) { ink in
+                                Text(ink.label).tag(ink)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(maxWidth: SettingsMetrics.segmentedMaxWidth)
+                        .onChange(of: accountTitleInk) { _, newValue in
+                            store.setAccountTitleInk(newValue)
+                        }
+                    }
+                    SettingsHelpText(text: "Brand colors each account name in its provider's color.")
                 }
                 Toggle("Show Codex Spark counters in app", isOn: $showCodexSparkCountersInApp)
                     .onChange(of: showCodexSparkCountersInApp) { _, newValue in
@@ -232,7 +252,7 @@ struct MenuBarSettingsPane: View {
                     ResponsiveControlRow(label: "Priority providers") {
                         menuBarProviderSelectionMenu
                     }
-                    SettingsHelpText(text: "Controls the menu-bar number and widget tiles. Auto uses the tightest menu-bar limit; widgets use the first 2 enabled providers.")
+                    SettingsHelpText(text: "Sets the menu-bar number and widget tiles. Auto picks the tightest limit; widgets show the first two enabled providers.")
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -622,7 +642,7 @@ struct APISpendSettingsPane: View {
             HStack(spacing: 8) {
                 SavedCredentialStatus()
                 Spacer(minLength: 12)
-                Button("Replace key…") {
+                Button("Replace Key") {
                     credentialMessages[provider] = nil
                     cancelMessageDismissal(provider)
                     replacingKeyProviders.insert(provider)
@@ -648,19 +668,19 @@ struct APISpendSettingsPane: View {
         let guidance: (text: String, linkLabel: String, url: URL) = switch provider {
         case .anthropic:
             (
-                "A regular API key cannot read organization spend. Use a dedicated admin key so you can revoke it independently. Spend retrieval currently has a known request-format issue.",
+                "A regular API key can't read organization spend. Use a dedicated admin key you can revoke on its own. Spend retrieval has a known request-format issue.",
                 "Open Anthropic Console",
                 URL(string: "https://platform.claude.com/settings/admin-keys")!
             )
         case .openAI:
             (
-                "A regular API key cannot read organization spend. Use a dedicated admin key with the narrowest access available so you can revoke it independently. Spend retrieval has not been live-verified.",
+                "A regular API key can't read organization spend. Use a dedicated admin key with the narrowest access, so you can revoke it by itself. Spend retrieval isn't live-verified yet.",
                 "Open OpenAI Platform",
                 URL(string: "https://platform.openai.com/settings/organization/admin-keys")!
             )
         case .xAI:
             (
-                "A regular API key cannot read team spend. Use a dedicated management key with only the required ACLs so you can revoke it independently.",
+                "A regular API key can't read team spend. Use a dedicated management key with only the ACLs it needs, so you can revoke it on its own.",
                 "Open xAI Console",
                 URL(string: "https://console.x.ai/team/default/settings/management-keys")!
             )
