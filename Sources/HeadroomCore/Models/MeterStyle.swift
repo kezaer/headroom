@@ -106,8 +106,94 @@ public enum MeterGeometry {
     public static let microTubeHeight = 16.0
     public static let fullTrackHeight = 8.0
     public static let fullTrackInset = 1.5
-    public static let fullCellHeight = 7.0
-    public static let fullCellGap = 2.5
+
+    /// FS2 (Kyle, Sep 2026): the Full segmented cell is the Micro cell scaled up (~2×), not
+    /// a separate drawing — "I want them to feel basically the same but adapted for their
+    /// size." Micro is 6 × 5 with a 2pt gap and r1.5; Full is ≈ 15.7 × 10 with a 4.5pt gap
+    /// and r2.6, chosen on a live three-way comparison after a 22 × 14.5 first cut made the
+    /// row labels hard to read. The two proportions that carry the family are held in both
+    /// formats: the gap is ≈ 22–25% of the cell pitch, and the corner radius is ≈ 26–30% of
+    /// the cell height. `MeterStyleTests` pins the ratios so a later retune of one format
+    /// cannot silently drift away from the other.
+    public static let fullCellHeight = 10.0
+    public static let fullCellGap = 4.5
+    public static let microCellRadius = 1.5
+    public static let fullCellRadius = 2.6
+
+    /// FS2: reference only — Full cells flex to fill the row, so there is no stored width. A
+    /// 14-cell row across the popover's measured 278pt meter run lands each cell at
+    /// (278 − 13 × 4.5) / 14 ≈ 15.7pt, which is the width the family ratios above are stated at.
+    /// Nothing renders from this; the family test and the doc comments do.
+    public static let fullCellNominalWidth = 15.7
+
+    public static func cellHeight(for format: GaugeFormat) -> Double {
+        switch format {
+        case .full: fullCellHeight
+        case .micro: microCellHeight
+        }
+    }
+
+    public static func cellGap(for format: GaugeFormat) -> Double {
+        switch format {
+        case .full: fullCellGap
+        case .micro: microCellGap
+        }
+    }
+
+    public static func cellRadius(for format: GaugeFormat) -> Double {
+        switch format {
+        case .full: fullCellRadius
+        case .micro: microCellRadius
+        }
+    }
+
+    /// FS3 (Kyle, Sep 2026): the Settings Format swatch must preview the *real* Full row in
+    /// small — "update the preview to be accurate too". A miniature cell is therefore the
+    /// format's own cell scaled uniformly down to the Micro cell height, so its proportions
+    /// (aspect, gap-to-pitch, radius-to-height) are exactly the shipped row's, only smaller.
+    /// Micro is already miniature-sized and scales by 1.
+    public struct MiniatureCell: Sendable, Equatable {
+        public let width: Double
+        public let height: Double
+        public let gap: Double
+        public let radius: Double
+    }
+
+    public static func miniatureCell(for format: GaugeFormat) -> MiniatureCell {
+        switch format {
+        case .micro:
+            return MiniatureCell(width: microCellWidth, height: microCellHeight, gap: microCellGap, radius: microCellRadius)
+        case .full:
+            let scale = microCellHeight / fullCellHeight
+            return MiniatureCell(
+                width: fullCellNominalWidth * scale,
+                height: fullCellHeight * scale,
+                gap: fullCellGap * scale,
+                radius: fullCellRadius * scale
+            )
+        }
+    }
+
+    /// AP2 (Kyle, Sep 2026): how many segmented cells fit across a fixed-width swatch at a
+    /// given cell pitch. The Format › Full swatch draws its real cells inside a 60pt
+    /// fragment, which combs them down to ~2pt ticks at the old 20 (~3.75pt at FS1's 10) and
+    /// reads as a barcode rather than as
+    /// the segmented meter it is previewing; it instead asks for the count that keeps each
+    /// cell at the micro cell size, so the swatch shows "the same little segment chips, just
+    /// more of them". Geometry only — the shipped meter still uses `MeterRecipe.cellCount`.
+    ///
+    /// FS2: with Full cells now 14.5pt tall, a count override alone would draw micro-width ×
+    /// full-height slivers, so `MeterGauge`'s `miniatureSegmentCount` also swaps in the Micro
+    /// cell height, gap, and radius. This helper supplies the count half of that pair.
+    public static func segmentCount(
+        fittingWidth width: Double,
+        cellWidth: Double = microCellWidth,
+        gap: Double = microCellGap
+    ) -> Int {
+        let pitch = cellWidth + gap
+        guard width > 0, pitch > 0 else { return 1 }
+        return max(1, Int(((width + gap) / pitch).rounded(.down)))
+    }
 
     /// L8A: a nonzero value always shows a visible stub. The floor is measured along the
     /// fill's travel axis, inside the track's inset.
@@ -240,10 +326,15 @@ public enum MeterCellRecipe: Sendable, Equatable {
 
 /// Pure decisions shared by the full-width and micro renderers.
 public enum MeterRecipe {
+    /// FS1 (Kyle, Sep 2026): Full segmented was 20 cells at 5% each, three rows deep per
+    /// account — dense enough that the row read as a barcode rather than as a meter. FS2
+    /// then settled on fourteen: at the 10pt cell height that keeps the row labels readable,
+    /// fourteen is what holds the Micro chip's ~1.5:1 proportion across the 278pt run (ten
+    /// would have been a 2.2:1 bar, or a row of dots at a 13.8pt gap). Micro stays 5.
     public static func cellCount(for format: GaugeFormat) -> Int {
         switch format {
         case .micro: 5
-        case .full: 20
+        case .full: 14
         }
     }
 

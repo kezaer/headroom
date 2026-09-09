@@ -82,12 +82,107 @@ struct MeterStyleTests {
         #expect(MeterGeometry.microTubeHeight == 16)
         #expect(MeterGeometry.fullTrackHeight == 8)
         #expect(MeterGeometry.fullTrackInset == 1.5)
-        #expect(MeterGeometry.fullCellHeight == 7)
-        #expect(MeterGeometry.fullCellGap == 2.5)
+        // FS2: the Full cell is the Micro cell scaled up (~2.9×), not its own drawing.
+        #expect(MeterGeometry.fullCellHeight == 10)
+        #expect(MeterGeometry.fullCellGap == 4.5)
+        #expect(MeterGeometry.microCellRadius == 1.5)
+        #expect(MeterGeometry.fullCellRadius == 2.6)
+        #expect(MeterGeometry.fullCellNominalWidth == 15.7)
         #expect(MeterGeometry.fullMinimumFillLength == 6)
         #expect(MeterGeometry.microMinimumFillLength == 3)
         #expect(MeterRecipe.cellCount(for: .micro) == 5)
-        #expect(MeterRecipe.cellCount(for: .full) == 20)
+        // FS1: Full is one cell per 10%, down from 20 cells at 5% each.
+        #expect(MeterRecipe.cellCount(for: .full) == 14)
+    }
+
+    /// FS2 (Kyle, Sep 2026): "I want them to feel basically the same but adapted for their
+    /// size." The Full segmented cell is the Micro cell scaled up (~2.9×), so the two
+    /// proportions that carry the family have to hold in *both* formats: the gap is a fifth
+    /// to a third of the cell pitch, and the corner radius is roughly a quarter to a third of
+    /// the cell height. This test is the guard rail on a later retune of one format alone —
+    /// it fails if Micro or Full drifts out of the shared band, not if either number moves.
+    @Test func segmentedCellsAreOneFamilyAcrossFormats() {
+        let widths: [(format: GaugeFormat, width: Double)] = [
+            (.micro, MeterGeometry.microCellWidth),
+            // Full cells flex to fill the row; this is the width 10 of them land on across the
+            // popover's measured 278pt meter run — (278 − 13 × 4.5) / 14 ≈ 15.7.
+            (.full, MeterGeometry.fullCellNominalWidth),
+        ]
+        // Both formats are covered, so adding a third can't quietly skip the family check.
+        #expect(Set(widths.map(\.format)) == Set(GaugeFormat.allCases))
+
+        for (format, width) in widths {
+            let gap = MeterGeometry.cellGap(for: format)
+            let height = MeterGeometry.cellHeight(for: format)
+            let radius = MeterGeometry.cellRadius(for: format)
+
+            let gapShare = gap / (width + gap)
+            #expect(gapShare >= 0.20, "\(format) gap/pitch \(gapShare) is below the family band")
+            #expect(gapShare <= 0.30, "\(format) gap/pitch \(gapShare) is above the family band")
+
+            let radiusShare = radius / height
+            #expect(radiusShare >= 0.25, "\(format) radius/height \(radiusShare) is below the family band")
+            #expect(radiusShare <= 0.32, "\(format) radius/height \(radiusShare) is above the family band")
+        }
+
+        // The nominal Full width is the run the ratios are stated at, not a rendering
+        // constant — it has to keep agreeing with the shipped count and gap.
+        let run = Double(MeterRecipe.cellCount(for: .full)) * MeterGeometry.fullCellNominalWidth
+            + Double(MeterRecipe.cellCount(for: .full) - 1) * MeterGeometry.fullCellGap
+        #expect(abs(run - 278) < 1)
+
+        // The accessors are the family's one source; they must agree with the stored values.
+        #expect(MeterGeometry.cellHeight(for: .micro) == MeterGeometry.microCellHeight)
+        #expect(MeterGeometry.cellHeight(for: .full) == MeterGeometry.fullCellHeight)
+        #expect(MeterGeometry.cellGap(for: .micro) == MeterGeometry.microCellGap)
+        #expect(MeterGeometry.cellGap(for: .full) == MeterGeometry.fullCellGap)
+        #expect(MeterGeometry.cellRadius(for: .micro) == MeterGeometry.microCellRadius)
+        #expect(MeterGeometry.cellRadius(for: .full) == MeterGeometry.fullCellRadius)
+
+        // Full is the Micro cell scaled up, so every dimension has to grow together.
+        #expect(MeterGeometry.fullCellHeight > MeterGeometry.microCellHeight)
+        #expect(MeterGeometry.fullCellGap > MeterGeometry.microCellGap)
+        #expect(MeterGeometry.fullCellRadius > MeterGeometry.microCellRadius)
+    }
+
+    /// AP2: the Format › Full swatch derives its cell count from the fragment width instead
+    /// of drawing Full's real cells at whatever size a 60pt fragment leaves them (FS1's 10
+    /// cells combed to ~3.75pt there, and under FS2's 6.4pt gap they would be ~0.24pt slivers
+    /// 14.5pt tall — which is why the override now carries the whole miniature cell, not just
+    /// the count). In the 60pt fragment the micro pitch
+    /// (6pt cell + 2pt gap) fits exactly 7 — 7 × 6 + 6 × 2 = 54, and an 8th would need 62.
+    @Test func swatchSegmentCountFitsMicroSizedCellsInTheFragment() {
+        #expect(MeterGeometry.segmentCount(fittingWidth: 60) == 7)
+        // Exactly-fitting and just-short widths land on either side of the same boundary.
+        #expect(MeterGeometry.segmentCount(fittingWidth: 62) == 8)
+        #expect(MeterGeometry.segmentCount(fittingWidth: 61.9) == 7)
+        // The micro gauge's own width is the round trip of this math.
+        #expect(MeterGeometry.segmentCount(fittingWidth: 38) == MeterRecipe.cellCount(for: .micro))
+        // Degenerate widths still yield a drawable gauge rather than an empty HStack.
+        #expect(MeterGeometry.segmentCount(fittingWidth: 0) == 1)
+        #expect(MeterGeometry.segmentCount(fittingWidth: 1) == 1)
+        // The pitch is a parameter, not a constant baked into the helper.
+        #expect(MeterGeometry.segmentCount(fittingWidth: 60, cellWidth: 4, gap: 1) == 12)
+    }
+
+    /// FS3: the Format › Full swatch previews the real Full row in small — the shipped cell
+    /// scaled uniformly to Micro's height, so aspect, gap-to-pitch and radius-to-height match.
+    @Test func miniatureFullCellIsTheRealCellScaledToMicroHeight() {
+        let real = (
+            w: MeterGeometry.fullCellNominalWidth, h: MeterGeometry.fullCellHeight,
+            g: MeterGeometry.fullCellGap, r: MeterGeometry.fullCellRadius
+        )
+        let mini = MeterGeometry.miniatureCell(for: .full)
+        let scale = MeterGeometry.microCellHeight / real.h
+        #expect(mini.height == MeterGeometry.microCellHeight)
+        #expect(abs(mini.width - real.w * scale) < 0.001)
+        #expect(abs(mini.gap - real.g * scale) < 0.001)
+        #expect(abs(mini.radius - real.r * scale) < 0.001)
+        #expect(abs(mini.width / mini.height - real.w / real.h) < 0.001)
+        #expect(abs(mini.gap / (mini.width + mini.gap) - real.g / (real.w + real.g)) < 0.001)
+        #expect(MeterGeometry.miniatureCell(for: .micro).width == MeterGeometry.microCellWidth)
+        // Six miniature Full cells fit the 60pt Format fragment at the shipped proportions.
+        #expect(MeterGeometry.segmentCount(fittingWidth: 60, cellWidth: mini.width, gap: mini.gap) == 6)
     }
 
     /// L7B: the cap is its own marker with Kyle's approved constants, not a slice of the fill.
@@ -187,7 +282,9 @@ struct MeterStyleTests {
     }
 
     @Test func segmentedCellCountsClampAndKeepANonzeroFloor() {
-        for cells in [5, 20] {
+        // Both shipped counts (FS1: Micro 5, Full 10) plus a larger one, because the helper
+        // is generic over cell count and the swatch asks it for fragment-derived counts.
+        for cells in [5, 10, 20] {
             #expect(MeterRecipe.litCellCount(fraction: 0, cells: cells) == 0)
             #expect(MeterRecipe.litCellCount(fraction: -0.1, cells: cells) == 0)
             #expect(MeterRecipe.litCellCount(fraction: 0.03, cells: cells) == 1)
@@ -195,7 +292,12 @@ struct MeterStyleTests {
             #expect(MeterRecipe.litCellCount(fraction: 1.1, cells: cells) == cells)
         }
         #expect(MeterRecipe.litCellCount(fraction: 0.72, cells: 5) == 4)
+        // FS1: at Full's 10 cells a reading rounds to the nearest tenth.
+        #expect(MeterRecipe.litCellCount(fraction: 0.72, cells: 10) == 7)
+        #expect(MeterRecipe.litCellCount(fraction: 0.62, cells: 10) == 6)
         #expect(MeterRecipe.litCellCount(fraction: 0.72, cells: 20) == 14)
+        #expect(MeterRecipe.litCellCount(fraction: 0.72, cells: 14) == 10)
+        #expect(MeterRecipe.litCellCount(fraction: 0.12, cells: 14) == 2)
         #expect(MeterRecipe.litCellCount(fraction: .nan, cells: 5) == 0)
         #expect(MeterRecipe.litCellCount(fraction: 0.5, cells: 0) == 0)
     }

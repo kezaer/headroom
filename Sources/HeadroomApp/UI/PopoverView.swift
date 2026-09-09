@@ -274,19 +274,19 @@ struct PopoverView: View {
         window.backgroundColor = .clear
     }
 
-    /// The page title now outweighs the 16pt card titles so hierarchy reads top-down,
-    /// and the right slot carries one contextual status: the consolidated "Updated"
-    /// stamp, or the Claude first-run stage ("Set up Claude to begin" / "Watching for
-    /// approval…"). The gear's visible glyph stays small but its hit area is padded out
-    /// to the 40×40 floor.
+    /// The page title now outweighs the 15pt card titles so hierarchy reads top-down, and
+    /// the right slot carries one contextual status: the consolidated "Updated" stamp, or
+    /// the setup stage a provider card is showing below it (PA10 —
+    /// `PopoverHeaderStatusText`). The gear's visible glyph stays small but its hit area is
+    /// padded out to the 40×40 floor.
     private func header(now: Date) -> some View {
         let statusBaselineOffset = Self.baselineOffsetMatchingTitle(for: Self.statusFont)
         let gearBaselineOffset = Self.inkCenterAboveBaseline(Self.titleFont)
-        // All three elements align on one *ink-center* axis (measured against real
+        // All three elements align on one *cap-centre* axis (measured against real
         // renders): pure `.center` leaves the title ~2pt low (descender + line box),
         // pure baseline leaves the 11pt status visibly low. So: baseline row, with the
-        // status raised 2pt (its ink center then matches the title's) and the gear
-        // centered 5pt above the baseline (the title's ink center).
+        // status raised so its cap centre matches the title's, and the gear centred at
+        // the title's cap centre above the baseline.
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("Usage")
                 .font(.system(size: 20, weight: .bold))
@@ -319,9 +319,10 @@ struct PopoverView: View {
                     // while the visible gearshape stays small.
                     .frame(width: 32, height: 32)
             }
-            // Bare glyph, no container: resting containers are the *cards'* language
-            // (non-clickable). Clickability announces itself on approach — hover pill,
-            // pointer cursor, press state — via HoverButtonStyle.
+            // PA11b: the gear stays bare. Text-labelled buttons all took a resting container
+            // in this pass, but a borderless glyph in a title bar is the macOS HIG's own
+            // toolbar convention — the hover pill, the pointer cursor and the press state
+            // are the affordance, exactly as they are for `+`, `…`, copy, trash and reset.
             .buttonStyle(HoverButtonStyle(horizontalPadding: 0, verticalPadding: 0))
             .accessibilityLabel("Settings")
             .alignmentGuide(.firstTextBaseline) { d in
@@ -331,16 +332,24 @@ struct PopoverView: View {
     }
 
     private static func inkCenterAboveBaseline(_ font: NSFont) -> CGFloat {
-        (font.capHeight + font.descender) / 2
+        // Cap centre, not the cap-to-descender midpoint: the header is Title Case, so its
+        // optical centre is half the cap height. The old midpoint folded the descender in and
+        // sat the gear and the status ~2pt below the title (measured on a live 2× capture).
+        OpticalCentering.capHeightCenter(of: font)
     }
 
+    /// Measured residual on a live 2× capture: with the pure cap-centre difference the 11pt
+    /// stamp's cap centre still sat 0.75pt below the title's (the raised baseline snaps to
+    /// the pixel grid). Re-measure if either font changes.
+    private static let statusBaselineResidual: CGFloat = 0.75
+
     private static func baselineOffsetMatchingTitle(for font: NSFont) -> CGFloat {
-        inkCenterAboveBaseline(titleFont) - inkCenterAboveBaseline(font)
+        inkCenterAboveBaseline(titleFont) - inkCenterAboveBaseline(font) + statusBaselineResidual
     }
 
     /// M2A: the header's one status slot carries either the numeric "Updated N …" stamp or
     /// non-numeric setup copy. `elapsedMinutes` is nil for the latter, which is what keeps a
-    /// phrase like "Watching for approval…" from trying to roll its letters.
+    /// phrase like "Waiting for approval…" from trying to roll its letters.
     private struct HeaderStatus: Equatable {
         let text: String
         let elapsedMinutes: Double?
@@ -359,27 +368,21 @@ struct PopoverView: View {
     private func headerStatus(now: Date) -> HeaderStatus? {
         if let outcome = claudeGuidedSetupOutcome {
             let account = ProviderAccount.builtIn(for: .claude)
-            if SetupSessions.isWaiting(for: account) {
-                return HeaderStatus(
-                    text: outcome == .claudeLoginRequired
-                        ? "Watching for Claude sign-in…"
-                        : "Watching for approval…",
-                    elapsedMinutes: nil
-                )
-            }
             return HeaderStatus(
-                text: outcome == .claudeLoginRequired
-                    ? "Sign in to Claude to begin"
-                    : "Set up Claude to begin",
+                text: PopoverHeaderStatusText.claude(
+                    outcome: outcome,
+                    isWaiting: SetupSessions.isWaiting(for: account)
+                ),
                 elapsedMinutes: nil
             )
         }
-        if codexNeedsConnection {
+        if let action = codexConnectionAction {
             let account = ProviderAccount.builtIn(for: .codex)
             return HeaderStatus(
-                text: SetupSessions.isWaiting(for: account)
-                    ? "Watching for Codex sign-in…"
-                    : "Connect Codex to begin",
+                text: PopoverHeaderStatusText.codex(
+                    action: action,
+                    isWaiting: SetupSessions.isWaiting(for: account)
+                ),
                 elapsedMinutes: nil
             )
         }
@@ -412,9 +415,11 @@ struct PopoverView: View {
         }
     }
 
-    private var codexNeedsConnection: Bool {
-        guard store.providerOrder.contains(.codex) else { return false }
-        return store.appDisplaySnapshot(for: .codex).codexConnectionAction != nil
+    /// PA10: the header reads the *same* action enum the Codex card below it reads, instead
+    /// of collapsing four states into "does Codex need connecting".
+    private var codexConnectionAction: CodexConnectionAction? {
+        guard store.providerOrder.contains(.codex) else { return nil }
+        return store.appDisplaySnapshot(for: .codex).codexConnectionAction
     }
 
     /// Left slot shows a live "Refreshing…" state while a cycle is in flight (UI-02) —
@@ -433,12 +438,13 @@ struct PopoverView: View {
                     .transition(.opacity)
                     .accessibilityLabel("Refreshing usage")
                 } else {
-                    // Quiet bare-text controls (no chip): resting containers belong to
-                    // the cards; hover/press/cursor carry the affordance.
+                    // PA11b (Kyle): "we do need the resting container for all our buttons."
+                    // These two were the model B3H pointed the card chips at — bare labels
+                    // whose only affordance arrived with the pointer — so they are the ones
+                    // that had to move. `.regular` keeps the footer's 12.5pt type; the chip
+                    // brings the container, the border and the press step with it.
                     Button("Refresh") { store.refreshNow() }
-                        .buttonStyle(HoverButtonStyle(horizontalPadding: 8, verticalPadding: 4))
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .buttonStyle(SetupChipButtonStyle(size: .regular))
                         .transition(.opacity)
                 }
             }
@@ -449,10 +455,44 @@ struct PopoverView: View {
                 value: store.isRefreshing
             )
             Spacer()
+            // PA11b: same chip as Refresh — the app's only two whole-app controls read as
+            // one pair.
             Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(HoverButtonStyle(horizontalPadding: 8, verticalPadding: 4))
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(.secondary)
+                .buttonStyle(SetupChipButtonStyle(size: .regular))
+        }
+    }
+}
+
+/// PA10: the popover has one status slot, and it was writing its own copy for a card it
+/// only labels. Codex's expired session, denied file access and misplaced sign-in all read
+/// "Connect Codex to begin" over a card saying "Reconnect Codex" — or saying, in the last
+/// two, that signing in again will not help at all. The slot now derives from the same
+/// `CodexConnectionAction` the card switches on, so header and card cannot disagree.
+///
+/// The waiting strings changed with it: the header said "Watching for …" where every card
+/// and account row says "Waiting for …". One verb.
+///
+/// Lifted out of `PopoverView` on purpose: pure string mapping, so the table is testable
+/// without standing up a store, a snapshot and a popover.
+enum PopoverHeaderStatusText {
+    static func claude(outcome: ProviderSetupOutcome, isWaiting: Bool) -> String {
+        if isWaiting {
+            return outcome == .claudeLoginRequired
+                ? "Waiting for Claude sign-in…"
+                : "Waiting for approval…"
+        }
+        return outcome == .claudeLoginRequired
+            ? "Sign in to Claude to begin"
+            : "Set up Claude to begin"
+    }
+
+    static func codex(action: CodexConnectionAction, isWaiting: Bool) -> String {
+        guard !isWaiting else { return "Waiting for Codex sign-in…" }
+        switch action {
+        case .connect: return "Connect Codex to begin"
+        case .reconnect: return "Reconnect Codex"
+        case .showPrivacyGuidance: return "Codex needs file access"
+        case .resolveStorage: return "Codex sign-in needs relocating"
         }
     }
 }

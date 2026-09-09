@@ -9,6 +9,17 @@ struct MeterGauge: View {
     let fraction: Double
     let severity: UsageSeverity
     let freshness: UsageWindowFreshness
+    /// AP2 / FS2: swatch-only request for a *miniature* segmented gauge. `nil` — the default,
+    /// and the only value any real meter uses — means the shipped cell count and the format's
+    /// own cell metrics. Non-nil means "draw this many cells as the format's *miniature* cell
+    /// (`MeterGeometry.miniatureCell`: the real cell scaled to Micro height)", still laid out
+    /// full-width for Full.
+    ///
+    /// The Settings Format swatch is the one caller: it renders Full inside a 60pt fragment.
+    /// FS2 made the Full cell 14.5pt tall, so overriding only the count would comb the swatch
+    /// into micro-width × full-height slivers; the swatch's whole point is "the same little
+    /// chips, just more of them, placed differently". Non-segmented shapes ignore it.
+    var miniatureSegmentCount: Int? = nil
 
     @Environment(\.colorScheme) private var scheme
     // Fill tier lookup: Increase Contrast swaps the vivid light bar fills back to the
@@ -50,7 +61,7 @@ struct MeterGauge: View {
         case .chip: return CGFloat(MeterGeometry.microChipWidth)
         case .machined: return CGFloat(MeterGeometry.microMachinedWidth)
         case .segmented:
-            let cells = CGFloat(MeterRecipe.cellCount(for: .micro))
+            let cells = CGFloat(resolvedCellCount)
             return cells * CGFloat(MeterGeometry.microCellWidth)
                 + (cells - 1) * CGFloat(MeterGeometry.microCellGap)
         case .tube: return CGFloat(MeterGeometry.microTubeWidth)
@@ -59,11 +70,13 @@ struct MeterGauge: View {
 
     private var gaugeHeight: CGFloat {
         switch (style.format, resolvedShape) {
+        // FS2: segmented rows size to the *cell* format, which the miniature override can
+        // pull back to Micro — so the swatch's frame reserves 5pt, not Full's 14.5pt.
+        case (_, .segmented):
+            return CGFloat(miniatureCell?.height ?? MeterGeometry.cellHeight(for: style.format))
         case (.micro, .chip): return CGFloat(MeterGeometry.microChipHeight)
         case (.micro, .machined): return CGFloat(MeterGeometry.microMachinedHeight)
-        case (.micro, .segmented): return CGFloat(MeterGeometry.microCellHeight)
         case (.micro, .tube): return CGFloat(MeterGeometry.microTubeHeight)
-        case (.full, .segmented): return CGFloat(MeterGeometry.fullCellHeight)
         case (.full, _): return CGFloat(MeterGeometry.fullTrackHeight)
         }
     }
@@ -212,12 +225,24 @@ struct MeterGauge: View {
         }
     }
 
+    private var resolvedCellCount: Int {
+        miniatureSegmentCount ?? MeterRecipe.cellCount(for: style.format)
+    }
+
+    /// FS3: a miniature swatch draws the format's own cell scaled down to Micro height
+    /// (`MeterGeometry.miniatureCell`), so the Full swatch is the real Full row in small —
+    /// same aspect, same gap-to-pitch, same radius-to-height — rather than Micro's chip.
+    private var miniatureCell: MeterGeometry.MiniatureCell? {
+        miniatureSegmentCount == nil ? nil : MeterGeometry.miniatureCell(for: style.format)
+    }
+
     private var segmentedGauge: some View {
-        let cells = MeterRecipe.cellCount(for: style.format)
+        let cells = resolvedCellCount
         let lit = freshness.isUnavailable
             ? 0
             : MeterRecipe.litCellCount(fraction: clampedFraction, cells: cells)
-        let gap = CGFloat(style.format == .micro ? MeterGeometry.microCellGap : MeterGeometry.fullCellGap)
+        let gap = CGFloat(miniatureCell?.gap ?? MeterGeometry.cellGap(for: style.format))
+        let radius = CGFloat(miniatureCell?.radius ?? MeterGeometry.cellRadius(for: style.format))
         let fillRecipe = MeterRecipe.fillRecipe(
             fill: style.fill,
             severity: severity,
@@ -234,7 +259,7 @@ struct MeterGauge: View {
 
         return HStack(spacing: gap) {
             ForEach(0..<cells, id: \.self) { index in
-                RoundedRectangle(cornerRadius: style.format == .micro ? 1.5 : 2, style: .continuous)
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(segmentedCellColor(
                         index: index,
                         lit: lit,
@@ -266,9 +291,14 @@ struct MeterGauge: View {
         case .off:
             return ProviderStyle.meterTickOff(scheme: scheme)
         case .body(let fill):
+            // FS1 (Kyle, Sep 2026): the tip is the reading; the body is the trail behind it.
+            // Body cells step back to `segmentBodyAttenuation` of their own colour so the tip
+            // has something to read against. `.staleGrey` is exempt — it is already a dim, and
+            // dimming a dim would blur the live/stale distinction.
             return fillRecipe == .staleGrey
                 ? staleColor
                 : cellColor(fill, isTip: false, rampStops: rampStops)
+                    .opacity(HeadroomMeterColorValues.segmentBodyAttenuation)
         case .tip(let fill):
             return fillRecipe == .staleGrey
                 ? staleColor
@@ -314,7 +344,7 @@ struct MeterGauge: View {
         ZStack {
             ForEach([0.25, 0.5, 0.75], id: \.self) { fraction in
                 Rectangle()
-                    .fill(Color.primary.opacity(scheme == .dark ? 0.11 : 0.14))
+                    .fill(ProviderStyle.meterQuarterMark(scheme: scheme))
                     .frame(width: 1, height: max(0, size.height - 4))
                     .position(x: size.width * fraction, y: size.height / 2)
             }
@@ -339,7 +369,7 @@ struct MeterGauge: View {
         return severityFillColor.opacity(opacity)
     }
 
-    private var staleColor: Color { Color.secondary.opacity(0.55) }
+    private var staleColor: Color { ProviderStyle.meterStaleFill }
 
     private func continuousFillLength(available: CGFloat) -> CGFloat {
         guard !freshness.isUnavailable else { return 0 }

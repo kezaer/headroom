@@ -15,8 +15,8 @@ struct SettingsSidebar: View {
     /// so this is measured from the top of the sidebar column and has two jobs at once —
     /// clear the floating traffic lights, and land the logo's vertical centre on the same
     /// line as the detail pane's title, which sits at `SettingsPaneScaffold`'s 20pt top
-    /// padding at 15pt semibold. The old 30pt only did the first, which is the "weird
-    /// relationship with the top of the content" in the review.
+    /// padding. The old 30pt only did the first, which is the "weird relationship with the
+    /// top of the content" in the review.
     ///
     /// **Measured, not derived.** `NavigationSplitView` gives the two columns different
     /// top insets under a hidden title bar — the sidebar's content starts 10pt lower than
@@ -27,7 +27,12 @@ struct SettingsSidebar: View {
     /// below; 5.5 wins because the title's box carries descender space its glyphs don't,
     /// putting its optical centre slightly above its box centre. Re-measure if the pane
     /// title's size or the scaffold's top padding changes.
-    private static let identityTopInset: CGFloat = 5.5
+    ///
+    /// Re-measured after PB2 (pane title 15 → 17 semibold) on the harness render: the
+    /// identity row's cap centre sat at 27.5pt and the pane title's at 29.5pt, so the inset
+    /// grew by that 2pt. Still a measurement, not arithmetic — the two columns' insets do
+    /// not close, which is why this note exists at all.
+    private static let identityTopInset: CGFloat = 7.5
 
     /// L10A: gap between the identity block and the first navigation row.
     private static let navigationGap: CGFloat = 14
@@ -121,7 +126,9 @@ extension SettingsPane {
     var symbolName: String {
         switch self {
         case .general: "slider.horizontal.3"
-        case .appearance: "circle.lefthalf.filled"
+        // PB12: striped, not filled. Appearance was the one solid glyph in a sidebar of
+        // outlines, so it read as the selected row even when it wasn't.
+        case .appearance: "circle.lefthalf.striped.horizontal"
         case .menuBar: "menubar.rectangle"
         case .widgets: "square.grid.2x2"
         case .accounts: "person"

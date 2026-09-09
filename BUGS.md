@@ -435,3 +435,28 @@ primary findings were applied; these are the demoted coverage/advisory notes):
   and fold the spend sentence into `StatusSentence`.
 - **`SetupChipButtonStyle.Size.regular` is unreferenced** after B3 moved every popover chip to
   `.small`. Delete the case or keep it for a future card-foot primary — decide, don't drift.
+
+## Pre-ship craft audit residuals (2026-09-08)
+
+- **The `--demo` Claude fixture orders Weekly before 5-hour; the parser never does.**
+  `DemoFixture.swift:20-24` lists `.weekly` first, but `ClaudeUsageParser.rank` puts `.fiveHour`
+  at 0 and `.weekly` at 1, so every real popover shows "5-hour" first while every `--demo`
+  capture (and therefore every marketing shot from `capture-demo-screenshots.sh`) shows "Weekly"
+  first. The Settings `AppearanceSpecimen` uses the parser order and disagrees with the demo
+  popover on the same screen. Sort the fixture through the same rank before the next release shoot.
+- **`HoverButtonStyle` hover band vs hit band is unverified.** The `.padding(8) → contentShape →
+  padding(-8)` trick grows the click target to the 40pt floor, but `.onHover` attaches after the
+  negative padding, so the pill may not appear in the added 8pt band. Needs a live pointer check
+  on the popover gear and spend `+`; no capture path exists for hover states.
+- **"Anthropic API" truncates beside a "Last 30 days" period chip.** The spend identity line is
+  exactly tight: 299pt content minus the 15pt mark, the reserved 91pt "$0,000.00" amount column,
+  the fixed-size period capsule and four 6pt spacings leaves the 15pt semibold title ≈94pt when
+  the chip reads "Last 30 days" (≈75pt boxed) — it needs 96.5. PA7 dropped the spacer floor to 0,
+  which covers "September" with 4pt to spare, but the 30-day period still clips. Options: size the
+  amount column to the widest *actual* total in the card (min "$0.00") instead of a pre-reserved
+  "$0,000.00" — amounts stay aligned, the column only grows when a total earns a digit — or
+  shorten the chip ("30 days"). Both touch S5A; decide with Kyle.
+- **The iOS mirror still shows its own "Low" chip.** AP1 removed the macOS popover chip in favour
+  of red critical ink, but `Sources/HeadroomIOS/Views/UsageBarView.swift` keeps a `lowChip` driven by
+  `MirrorPresentation.showsLowChip` (`MirrorPresentationTests.swift:70`). Bring the phone surface in line
+  or decide it keeps the chip deliberately.
