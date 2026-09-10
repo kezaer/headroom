@@ -389,7 +389,12 @@ struct AccountsSettingsInteractionTests {
         #expect(!off.hidesAccountStatus(isSetupState: true))
         #expect(off.hidesFetchRecovery)
         #expect(off.hidesCapabilityBanner)
-        #expect(off.offHelpText == "Not fetched while this provider is off.")
+        // R2B1: one constant behind the Accounts help line and the Menu Bar Off tooltip, and
+        // no trailing stop — the two sites used to disagree on exactly that.
+        #expect(off.offHelpText == "Not fetched while this provider is off")
+        #expect(off.offHelpText == SettingsCopy.providerOffNotice)
+        #expect(SettingsCopy.providerOffAccessibilityLabel
+                == "Off — not fetched while this provider is off")
         #expect(off.showsAccountCounter)
         #expect(off.showsAddAction)
         #expect(off.subscriptionSwitch.isEnabled)
@@ -910,7 +915,7 @@ struct AccountsSettingsInteractionTests {
                 snapshot: .stale(for: .grok, reason: .providerSetup(.grokAuthAbsent)),
                 account: account
             )
-            #expect(actions?.primaryLabel == "Connect Grok")
+            #expect(actions?.primaryLabel == ProviderSignInCopy.button)
             #expect(actions?.secondaryLabel == "Use Device Code")
             #expect(actions?.secondaryAccessibilityLabel == "Use Device Code for \(account.label)")
             #expect(actions?.secondaryAction == .connectGrokDeviceCode)
@@ -1469,13 +1474,13 @@ private final class GrokDeviceCodeSetupHarness {
         #expect(dedupe.announcement(
             for: .claude,
             state: .confirmedAbsent
-        ) == "Claude Code availability. Install Claude Code to show usage")
+        ) == "Claude Code availability. Headroom can’t find the Claude Code CLI on this Mac")
         #expect(dedupe.announcement(for: .claude, state: .confirmedAbsent) == nil)
         #expect(dedupe.announcement(for: .claude, state: .available) == nil)
         #expect(dedupe.announcement(
             for: .claude,
             state: .inconclusive(.shellTimeout)
-        ) == "Claude Code availability. Couldn’t confirm where Claude Code is — will retry")
+        ) == "Claude Code availability. Couldn’t confirm where Claude Code is\u{00A0}—\u{00A0}will retry")
         #expect(dedupe.announcement(for: .claude, state: .inconclusive(.shellTimeout)) == nil)
     }
 }

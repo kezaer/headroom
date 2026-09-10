@@ -23,11 +23,14 @@ struct CapabilityRecoveryPresentation: Equatable {
     }
 }
 
+/// R2C7: `hasRetainedReading` is true when the same card still draws usage from an earlier
+/// capture, so the sentence can say the reading is the last one rather than ignore it.
 func capabilityRecoveryPresentation(
     state: ProviderCapabilityState?,
-    hasActiveSetupSession: Bool
+    hasActiveSetupSession: Bool,
+    hasRetainedReading: Bool = false
 ) -> CapabilityRecoveryPresentation? {
-    guard let recovery = state?.recoveryPresentation else { return nil }
+    guard let recovery = state?.recoveryPresentation(hasRetainedReading: hasRetainedReading) else { return nil }
     return CapabilityRecoveryPresentation(
         recovery: recovery,
         hasActiveSetupSession: hasActiveSetupSession
@@ -81,6 +84,9 @@ enum AccountsSettingsInteractions {
         var secondaryAccessibilityLabel: String? {
             secondaryLabel.map { "\($0) for \(accountLabel)" }
         }
+        /// R2C11: two buttons need a line of their own. Only the *buttons* move — the status
+        /// stays pinned in the trailing column in both silhouettes, so one list can't print
+        /// the same state in two different places.
         var usesSecondLine: Bool {
             secondaryLabel != nil && secondaryAction != nil
         }
@@ -143,8 +149,10 @@ enum AccountsSettingsInteractions {
         }
         var hidesFetchRecovery: Bool { !isFetching }
         var hidesCapabilityBanner: Bool { !isFetching }
+        /// R2B1: one constant, shared with the Menu Bar pane's Off-tag tooltip, so the two
+        /// statements of this rule cannot drift — they already disagreed on the full stop.
         var offHelpText: String? {
-            isFetching ? nil : "Not fetched while this provider is off."
+            isFetching ? nil : SettingsCopy.providerOffNotice
         }
     }
 

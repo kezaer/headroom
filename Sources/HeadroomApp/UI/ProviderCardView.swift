@@ -32,6 +32,21 @@ func setupHandoffRefusalMessage(for state: SetupSessionState) -> String? {
     state == .blockedByOpenHandoff ? "Close setup, then retry" : nil
 }
 
+/// R2M1: every animation scope in a provider card keyed on `snapshot.freshness`, so pressing
+/// "Open Claude Workspace" replaced a ~278pt Connect card with a ~190pt Waiting card, popped
+/// in "Stop Waiting", swapped the header status, moved the next card up ~88pt and resized the
+/// window in one frame — while `.pending → .live` in the same card got a coordinated crossfade
+/// and spring. This is what the second scope keys on.
+///
+/// The raw state is not it: `.waiting(attempt:)` bumps its counter on every auto-retry, and a
+/// counter that changes nothing on screen must not restage the card's crossfade. Normalizing
+/// the attempt away is the whole job, which is why it is a free function — the rule is
+/// testable without a card.
+func providerCardSessionKey(_ state: SetupSessionState) -> SetupSessionState {
+    if case .waiting = state { return .waiting(attempt: 0) }
+    return state
+}
+
 func providerCardHasTransientStaleState(_ snapshot: UsageSnapshot) -> Bool {
     guard case .stale(let reason) = snapshot.freshness else { return false }
     return !reason.isPermanent
@@ -90,11 +105,16 @@ struct ProviderCardView: View {
     private var activeSetupAccount: ProviderAccount? {
         providerCardStopWaitingAccount(entries: entries)
     }
+    /// R2M1: the card's second animation key. See `providerCardSessionKey`.
+    private var sessionKey: SetupSessionState {
+        providerCardSessionKey(SetupSessions.state(for: primaryAccount))
+    }
     var body: some View {
         Group {
             if let presentation = capabilityRecoveryPresentation(
                    state: capabilityStatus?.state,
-                   hasActiveSetupSession: hasActiveSetupSession
+                   hasActiveSetupSession: hasActiveSetupSession,
+                   hasRetainedReading: entries.contains { !$0.snapshot.windows.isEmpty }
                ) {
                 capabilityBody(presentation)
             } else if isMultiAccount {
@@ -114,6 +134,14 @@ struct ProviderCardView: View {
         .animation(
             HeadroomMotion.resolved(HeadroomMotion.valueSpring, .movement, reduceMotion: reduceMotion),
             value: snapshot.freshness
+        )
+        // R2M1: the same tile scope, keyed on the session instead of the snapshot. Connect →
+        // Waiting is the rarest moment in the app (first run, add account, reconnect) —
+        // exactly where motion is welcome and where an ~88pt collapse reads as a glitch
+        // rather than an answer. If the NSWindow resize steps live, drop this to `settle`.
+        .animation(
+            HeadroomMotion.resolved(HeadroomMotion.valueSpring, .movement, reduceMotion: reduceMotion),
+            value: sessionKey
         )
         .onAppear {
             evaluateConnectedPayoff()
@@ -141,35 +169,42 @@ struct ProviderCardView: View {
 
     // MARK: - Single account (unchanged pre-multi-account layout)
 
+    /// R2C22: the notice is about the *provider*, but the flat 10pt stack said it was about
+    /// the first account — measured, "Install Claude Code" sat 14.5pt above "Personal", the
+    /// same gap as "Personal" → "Weekly" and *smaller* than meter → meter. So the provider
+    /// header and its notice become one group, and the accounts sit a full 26pt boundary
+    /// below it — the same account gap `multiAccountBody` uses.
     private func capabilityBody(_ presentation: CapabilityRecoveryPresentation) -> some View {
         let providerAccounts = entries.map(\.account)
-        return VStack(alignment: .leading, spacing: 10) {
-            IdentityRow(
-                providerID: providerID,
-                title: displayName,
-                planLabel: nil,
-                isMenuBarAccount: false,
-                isStale: false,
-                email: nil,
-                showsPersistentEmail: false,
-                showsConnectedChip: false
-            )
-            ProviderCapabilityRecoveryView(
-                presentation: presentation,
-                stopWaitingAccount: activeSetupAccount,
-                onPrimaryAction: {
-                    performRecovery(
-                        presentation.recovery.primaryAction,
-                        for: primaryAccount,
-                        onRetry: onRetrySetup
-                    )
-                },
-                onSecondaryAction: presentation.recovery.secondaryAction.map { action in
-                    {
-                        performRecovery(action, for: primaryAccount, onRetry: onRetrySetup)
+        return VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 10) {
+                IdentityRow(
+                    providerID: providerID,
+                    title: displayName,
+                    planLabel: nil,
+                    isMenuBarAccount: false,
+                    isStale: false,
+                    email: nil,
+                    showsPersistentEmail: false,
+                    showsConnectedChip: false
+                )
+                ProviderCapabilityRecoveryView(
+                    presentation: presentation,
+                    stopWaitingAccount: activeSetupAccount,
+                    onPrimaryAction: {
+                        performRecovery(
+                            presentation.recovery.primaryAction,
+                            for: primaryAccount,
+                            onRetry: onRetrySetup
+                        )
+                    },
+                    onSecondaryAction: presentation.recovery.secondaryAction.map { action in
+                        {
+                            performRecovery(action, for: primaryAccount, onRetry: onRetrySetup)
+                        }
                     }
-                }
-            )
+                )
+            }
             if isMultiAccount {
                 // T1A: the same 26pt account gap as `multiAccountBody` — one grouping rhythm
                 // whether or not the capability notice is showing.
@@ -178,7 +213,11 @@ struct ProviderCardView: View {
                         accountSection(
                             for: entry,
                             providerAccounts: providerAccounts,
-                            showsStopWaiting: false
+                            showsStopWaiting: false,
+                            // R2C22: the card already stamped the mark on its own header row
+                            // above; a second copy per account row made "✳ Claude" and
+                            // "✳ Personal" read as two provider titles 7pt apart.
+                            showsMark: false
                         )
                     }
                 }
@@ -192,7 +231,7 @@ struct ProviderCardView: View {
         // P4C: the card's actions end in one leading row, and `CardActionRow` owns R4A's 12pt
         // above it — so this stack no longer spaces its own children.
         VStack(alignment: .leading, spacing: 0) {
-            singleAccountContent
+            singleAccountContentGroup
             if let activeSetupAccount {
                 // B3X: this row follows whichever body rendered above it, and the four
                 // bodies do not share one content axis — a guided setup card lays out at
@@ -201,8 +240,18 @@ struct ProviderCardView: View {
                 CardActionRow(labelInset: singleAccountLabelInset) {
                     StopWaitingButton(account: activeSetupAccount, style: .chip(.small))
                 }
+                // R2M1: the row arrives and leaves with the session, so it dissolves into
+                // the height change above rather than popping in on the same frame.
+                .transition(.opacity)
             }
         }
+        // R2M1: the crossfade half of the session split — the body dissolves while the tile
+        // scope above rides the height on `valueSpring`. S2A keeps the 200ms under Reduce
+        // Motion; only the height snaps.
+        .animation(
+            HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
+            value: sessionKey
+        )
     }
 
     /// B3X: mirrors the branch order of `singleAccountContent` exactly — change one and the
@@ -215,6 +264,15 @@ struct ProviderCardView: View {
         } else {
             IdentityRowMetrics.meterContentInset
         }
+    }
+
+    /// R2M1: `singleAccountContent`'s branches *are* the card's setup states — Connect,
+    /// Waiting, the two access-recovery cards — so a session change inserts one and removes
+    /// another. This Group is what carries the transition; the scope driving it is
+    /// `singleAccountBody`'s `sessionKey` crossfade.
+    private var singleAccountContentGroup: some View {
+        Group { singleAccountContent }
+            .transition(.opacity)
     }
 
     @ViewBuilder private var singleAccountContent: some View {
@@ -330,9 +388,12 @@ struct ProviderCardView: View {
                 }
             )
         } else {
-            // R4A: 6, in step with `AccountSectionView`'s identity→body gap — one grouping
+            // R4A: in step with `AccountSectionView`'s identity→body gap — one grouping
             // rhythm whether the card carries one account or several.
-            VStack(alignment: .leading, spacing: 6) {
+            //
+            // CMM4 (Kyle, 2026-09-10) supersedes R2C2's 2: the title sits a touch tighter
+            // than the meter step, not half of it. See `AccountSectionView`.
+            VStack(alignment: .leading, spacing: IdentityRowMetrics.identityToMetersGap) {
                 accountIdentityRow(for: primaryEntry)
                 content
             }
@@ -392,7 +453,8 @@ struct ProviderCardView: View {
     private func accountSection(
         for entry: ProviderAccountEntry,
         providerAccounts: [ProviderAccount],
-        showsStopWaiting: Bool
+        showsStopWaiting: Bool,
+        showsMark: Bool = true
     ) -> some View {
         AccountSectionView(
             entry: entry,
@@ -411,7 +473,8 @@ struct ProviderCardView: View {
             now: now,
             isMenuBarAccount: isMultiAccount && entry.id == entries.first?.id,
             showsStopWaiting: showsStopWaiting,
-            onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) }
+            onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) },
+            showsMark: showsMark
         )
     }
 
@@ -593,6 +656,10 @@ private struct ProviderSetupRecoveryCard: View {
                 ProviderLogoView(providerID: providerID, size: Self.markSlotWidth)
                 Text(presentation.status)
                     .font(.system(size: 12.5, weight: .medium))
+                    // R2B2: the one wrapping `Text` in a popover card that PB11's leading
+                    // pass missed. Two points brings it into the same band as every other
+                    // wrapping sentence here.
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
             }
@@ -792,10 +859,13 @@ struct StopWaitingButton: View {
 /// `labelInset`. At the default that is the 34pt content axis (13 card padding + 21) shared
 /// by the identity title, the status sentence and every meter label.
 ///
-/// PA11b brought the chip's container back at rest, so the box now overhangs the axis by its
-/// own 10pt at all times rather than only on hover. That is still the right trade — B3X's
-/// point was that the *label* is what has to agree with the sentence above it — and it is
-/// the same overhang the footer's chips carry against the shell margin.
+/// PA11b brought the chip's container back at rest, so the box overhung the axis by its own
+/// padding at all times rather than only on hover.
+///
+/// **CMM2 (Kyle, 2026-09-09) supersedes B3X's overhang:** "the edge should be left aligned
+/// with the account title." With a resting container on every chip the box *is* the thing the
+/// eye lines up, so the row now insets by `labelInset` itself and the chip's leading edge
+/// lands on the title's text axis; the trailing edge likewise stops on the meters' right edge.
 struct CardActionRow<Content: View>: View {
     /// Only for stacks whose own spacing already supplies part of R4A's 12pt gap.
     var topPadding: CGFloat = 12
@@ -804,6 +874,12 @@ struct CardActionRow<Content: View>: View {
     /// notice) pass 0; the inset then goes negative and the pill overhangs into the card's
     /// 13pt padding, which is the correct trade — the label is what has to agree.
     var labelInset: CGFloat = IdentityRowMetrics.meterContentInset
+    /// R2C11 (Kyle): where the row's *max width* stops. An account's action row runs to the
+    /// trailing edge of the usage rows above it, so its chips sit inside the same left/right
+    /// bounds as the meters and a wrapped second line breaks on the same edge. Defaulted to 0
+    /// because a card-level row — the guided setup cards, the spend tile — ends at the card's
+    /// own padding, not at a meter column that isn't there.
+    var trailingInset: CGFloat = 0
     @ViewBuilder let content: Content
 
     var body: some View {
@@ -811,10 +887,14 @@ struct CardActionRow<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Every popover chip is `.small`, so its horizontal padding is the constant to
-        // subtract; wrapped lines inherit it because `ActionChipFlow` starts each line at
-        // `bounds.minX`.
-        .padding(.leading, labelInset - SetupChipButtonStyle.Size.small.horizontalPadding)
+        // CMM2: the chip *box* sits on the axis; wrapped lines inherit it because
+        // `ActionChipFlow` starts each line at `bounds.minX`.
+        // CMM6 (Kyle, 2026-09-10): outdented by 1pt. Mechanically the box edge and the
+        // title ink shared one x within 0.5pt; optically a filled, ringed box reads heavier
+        // than a glyph's edge, so it hangs a hair outside the axis the way a bullet does.
+        .padding(.leading, labelInset - IdentityRowMetrics.chipBoxOutdent)
+        // R2C11: the trailing bound is the meter column's right edge, box-to-edge as well.
+        .padding(.trailing, trailingInset)
         .padding(.top, topPadding)
     }
 }
@@ -999,21 +1079,20 @@ private struct CommandRecoveryRow: View {
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
-            Button(action: copy) {
-                Image(systemName: "doc.on.doc")
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(HoverButtonStyle(horizontalPadding: 4, verticalPadding: 4))
-            .foregroundStyle(.secondary)
-            .help("Copy command")
-            .accessibilityLabel("Copy command")
+            // R2M9: the third of the app's copy buttons, on the same shared confirmation.
+            CopyFeedbackButton(
+                copy: copy,
+                label: "Copy command",
+                horizontalPadding: 4,
+                verticalPadding: 4
+            )
         }
         .padding(.horizontal, 9).padding(.vertical, 6)
         .background(ClaudeSetupStyle.codeBackground(dark: scheme == .dark), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
-    private func copy() {
+    private func copy() -> Bool {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
+        return NSPasteboard.general.setString(command, forType: .string)
     }
 }

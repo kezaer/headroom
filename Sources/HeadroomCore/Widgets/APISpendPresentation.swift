@@ -354,9 +354,26 @@ public enum APISpendPresentation {
         }
     }
 
+    /// R2C8: which direction a spend figure points, as the one word that goes after it.
+    /// "$58.90" alone means money gone on a period-spend row and money remaining on a balance
+    /// row, and the two render identically; the chip beside them carries "September",
+    /// "On-demand" and "Pro Lite" too, so it cannot be the thing that disambiguates. The term
+    /// is the meters' own "used"/"left" suffix vocabulary (Kyle, 2026-09-09: "used", not
+    /// "spent", so a spend row and a meter row read as the same kind of figure), kept here so
+    /// every surface — popover, widget, phone — spells the direction the same way.
+    public static func directionTerm(kind: APISpendKind) -> String {
+        switch kind {
+        case .periodSpend: "used"
+        case .balance: "left"
+        }
+    }
+
+    /// The widget/phone form, where the term is baked into one string because those surfaces
+    /// have no suffix column to set it in. Balance rows carried it already; period rows print
+    /// the bare amount beside a period label that already says "spent" in context.
     public static func amountText(_ summary: WidgetAPISpendSummary) -> String? {
         guard let amount = amountText(amount: summary.amount, currency: summary.currency) else { return nil }
-        return summary.semanticKind == .balance ? "\(amount) left" : amount
+        return summary.semanticKind == .balance ? "\(amount) \(directionTerm(kind: .balance))" : amount
     }
 
     /// The macOS popover's own name/chip split for a spend row's identity line. Core's

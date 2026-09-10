@@ -35,29 +35,6 @@ struct AppearanceSpecimen: View {
         )
     }
 
-    /// The menu bar's own summary shape, built from the same fixture window the strip
-    /// would show in production (weekly is the default preferred menu-bar window), so
-    /// flipping Percentages flips the strip's numeral the way it does in the bar.
-    private var menuBarMeters: [MenuBarMeter] {
-        let snapshot = DemoFixture.settingsSpecimenSnapshot
-        guard let weekly = snapshot.windows.first(where: { $0.kind == .weekly }) else {
-            return [MenuBarMeter(summary: .neutral, fill: nil)]
-        }
-        return [
-            MenuBarMeter(
-                summary: MenuBarSummary(
-                    text: "\(percentageMode.roundedPercentage(for: weekly))%",
-                    providerID: .claude,
-                    detail: "\(ProviderID.claude.displayName) \(WindowKind.weekly.shortLabel.lowercased())",
-                    isNeutral: false,
-                    percentageMode: percentageMode,
-                    severity: weekly.severity
-                ),
-                fill: percentageMode.fraction(for: weekly)
-            )
-        ]
-    }
-
     /// M5A: the specimen dissolves old recipe → new recipe instead of hard-cutting, the
     /// Menu Bar preview's `.id` + `.transition(.opacity)` pattern
     /// (`SettingsPanes.swift:209-217`). Its invisible-twin trick needs one change here:
@@ -70,13 +47,38 @@ struct AppearanceSpecimen: View {
     /// layout. A plain `ZStack` would hold the taller card's height for the whole fade and
     /// then snap the pane below it.
     var body: some View {
-        specimen
+        // CMM13 (Kyle, 2026-09-10): the card sits left-aligned on the pane's own axis —
+        // centred it "looked goofy" against the left-aligned tiles below. CMM14: the
+        // menu-bar pill is gone from this well; nothing below it changes the menu bar, only
+        // the card, so the pill was previewing a choice this pane doesn't make.
+        cardPreview
+            // CMM15 (Kyle, 2026-09-10): the well hugs the card — 346 + 16/16 — and sits on
+            // the pane's leading axis. Spanning the detail column left ~160pt of empty tray
+            // beside the card; the well is a picture frame, not a tile.
+            .fixedSize(horizontal: true, vertical: false)
+            .settingsPreviewWell(
+                dark: colorScheme == .dark,
+                verticalPadding: 14,
+                horizontalPadding: 16,
+                cornerRadius: 16
+            )
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Preview of a provider card in the selected style")
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var cardPreview: some View {
+        specimen
+            // R2C20: at the popover's true card width, not stretched to the detail column.
+            // CMM15: the twin sizes the well, so it no longer claims the column's width.
             .hidden()
             .animation(
                 HeadroomMotion.resolved(HeadroomMotion.settle, .movement, reduceMotion: reduceMotion),
                 value: recipeKey
             )
+            // CMM13: `.topLeading` on both, or the fading cards centre themselves over
+            // the leading-aligned twin.
             .overlay(alignment: .topLeading) {
                 ZStack(alignment: .topLeading) {
                     specimen
@@ -92,18 +94,6 @@ struct AppearanceSpecimen: View {
                 )
             }
             .clipped()
-            // AP3 (Kyle): the specimen holds a whole provider card and a menu-bar strip, so
-            // the strip-sized 9 × 8 inset left both nearly touching the well's edge. Only the
-            // well's padding changes — what it frames is still the real card and the real
-            // `MenuBarLabel` renderer.
-            .settingsPreviewWell(
-                dark: colorScheme == .dark,
-                verticalPadding: 14,
-                horizontalPadding: 16
-            )
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Preview of a provider card in the selected style")
     }
 
     /// `MeterStyle` is `Equatable`, not `Hashable`, so the swap keys on the drawn recipe.
@@ -114,6 +104,12 @@ struct AppearanceSpecimen: View {
         "\(meterStyle.format.rawValue).\(meterStyle.resolvedShape.rawValue).\(meterStyle.fill.rawValue)"
     }
 
+    /// R2C20: the specimen is drawn at the popover's own card width. Stretched to the detail
+    /// column it measured 506pt against the real card's 346 — 1.46× — which put ~260pt
+    /// between a Micro row's label and its gauge where the popover puts ~100, so Micro
+    /// previewed airy here and tight there and `ViewThatFits` could pick a branch the popover
+    /// never draws. R6/KD4 says a meter style can never preview as something the popover
+    /// doesn't draw, and width is part of what it draws.
     private var specimen: some View {
         VStack(alignment: .leading, spacing: 9) {
             ProviderCardView(
@@ -132,16 +128,8 @@ struct AppearanceSpecimen: View {
             // G1A: the specimen is the popover's card, so it reads the ink from the
             // environment the same way — set here because Settings is not the popover.
             .environment(\.accountTitleInk, accountTitleInk)
-
-            HStack(spacing: 10) {
-                // PB13: the pill and its plate both follow the *live* menu bar, so this
-                // previews the bar the user has rather than the dark one they might not.
-                MenuBarPreviewPill(meters: menuBarMeters, showsPercentage: true)
-                Text("Follows the choices below.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 0)
-            }
+            // CMM14: the menu-bar pill and its caption left this well — see `body`.
         }
+        .frame(width: PopoverCardMetrics.cardWidth, alignment: .leading)
     }
 }

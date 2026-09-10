@@ -2,8 +2,8 @@ import SwiftUI
 import AppKit
 import HeadroomCore
 
-/// First-run Claude connection flow (onboarding redesign, Jul 2026): the trust-required
-/// failure renders as a calm, guided "Connect Claude" card — value proposition, one
+/// First-run Claude sign-in flow (onboarding redesign, Jul 2026): the trust-required
+/// failure renders as a calm, guided "Sign in to Claude" card — value proposition, one
 /// primary action, three numbered steps — instead of an amber error. After the user
 /// opens setup it becomes a "Waiting for approval…" card, so the existing silent
 /// auto-retries (12/35/75s) have visible feedback. Values were tuned in the HTML
@@ -246,13 +246,17 @@ enum ClaudeSetupSession {
 /// site left. Codex's CTA gradient lives in its own `CodexSetupStyle` rather than here —
 /// mirrored deliberately, so the two provider streams stay decoupled.
 enum ClaudeSetupStyle {
-    /// Dark values darkened (audit): the original dark gradient left the white 13pt
-    /// label at 3.1–3.8:1; this ramp averages ≈4.5:1 across the button face.
+    /// R2C18: the four CTA literals moved to `HeadroomBrandRamp` as stops on Claude's
+    /// constant-hue ramp (H 38.8°, the `claude-color.svg` fill's own hue). The dark top also
+    /// dropped L 0.605 → 0.560: it measured white-on 4.05:1, below AA, while the comment here
+    /// claimed the ramp "averages ≈4.5:1". It is 4.92:1 now, asserted in
+    /// `BrandColorValuesTests`. This enum stays the setup flow's call surface — the two
+    /// provider streams remain decoupled — but the numbers have one home.
     static func buttonTop(dark: Bool) -> Color {
-        dark ? Color(red: 0.75, green: 0.40, blue: 0.22) : Color(red: 0.733, green: 0.345, blue: 0.133)
+        ProviderStyle.claudeCTATop(dark: dark)
     }
     static func buttonBottom(dark: Bool) -> Color {
-        dark ? Color(red: 0.69, green: 0.34, blue: 0.17) : Color(red: 0.663, green: 0.302, blue: 0.110)
+        ProviderStyle.claudeCTABottom(dark: dark)
     }
     static func stepBackground(dark: Bool) -> Color {
         dark ? Color.white.opacity(0.06) : Color.black.opacity(0.045)
@@ -260,8 +264,11 @@ enum ClaudeSetupStyle {
     static func stepBorder(dark: Bool) -> Color {
         dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)
     }
+    /// R2C18: the value now lives in Core as `ProviderStyle.recessedWell`, because the
+    /// Settings preview wells read it too and a Claude-branded token should not own a pane
+    /// with no Claude in it. Those Settings call sites are WS-C's to move.
     static func wellBackground(dark: Bool) -> Color {
-        dark ? Color.black.opacity(0.32) : Color.black.opacity(0.05)
+        ProviderStyle.recessedWell(dark: dark)
     }
     static func codeBackground(dark: Bool) -> Color {
         wellBackground(dark: dark)
@@ -271,8 +278,12 @@ enum ClaudeSetupStyle {
     }
     /// "Connected" chip ink — offset from the bar-fill green so it passes AA as text on
     /// the chip tint in both schemes (light darker, dark brighter + thinner tint).
+    ///
+    /// R2C18: it was a hand-written green sitting beside a chip fill *derived* from
+    /// `healthy` — one chip, two greens. It is now a documented OKLCH lightness offset from
+    /// that same token, so the pair cannot drift apart again.
     static func connectedInk(dark: Bool) -> Color {
-        dark ? Color(red: 0.25, green: 0.86, blue: 0.42) : Color(red: 0.082, green: 0.447, blue: 0.208)
+        ProviderStyle.connectedInk(dark: dark)
     }
     static func connectedBackground(dark: Bool) -> Color {
         let green = HeadroomSeverityColorValues.healthy(dark: dark)
@@ -280,7 +291,27 @@ enum ClaudeSetupStyle {
     }
 }
 
-/// State 1 — "Connect Claude": value first, one primary action, guided steps, and the
+/// R2B2: the two guided setup cards ran a five-value top-padding ladder (6/11/12/14/13) and
+/// a five-value body band (12.5/11.5/12/11/10.5). Five gaps inside a 7pt spread say nothing
+/// about which boundaries are group breaks, so the stack read as one undifferentiated list.
+/// The ladder is two values — 12 between siblings, 20 before the steps block, which is the
+/// card's one real section break — and the band is two: 12.5 for the lead and the steps that
+/// answer it, 11 for the tertiary notes.
+enum SetupCardMetrics {
+    /// Title → its own subtitle; the tightest bind in the card, unchanged.
+    static let leadGap: CGFloat = 6
+    static let siblingGap: CGFloat = 12
+    static let sectionGap: CGFloat = 20
+
+    static let bodySize: CGFloat = 12.5
+    static let noteSize: CGFloat = 11
+
+    /// R2B2: one kerning for the 15/semibold card titles. The app carried −0.15 and −0.2 at
+    /// the same size and weight, which is a difference nobody chose.
+    static let titleKerning: CGFloat = -0.2
+}
+
+/// State 1 — the first-run card: value first, one primary action, guided steps, and the
 /// raw command demoted behind a disclosure.
 struct ClaudeConnectCard: View {
     var outcome: ProviderSetupOutcome = .claudeTrustRequired
@@ -293,39 +324,44 @@ struct ClaudeConnectCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 ProviderLogoView(providerID: .claude, size: 20)
-                Text(outcome == .claudeLoginRequired ? "Sign in to Claude" : "Connect Claude")
+                // R2C6: one title in both branches. The card used to say "Sign in to Claude"
+                // for a login and "Connect Claude" for a workspace approval — two verbs for
+                // the same guided handoff, in the same card, on the same run.
+                Text(ProviderSignInCopy.cardTitle(for: .claude))
                     .font(.system(size: 15, weight: .semibold))
-                    .kerning(-0.2)
+                    .kerning(SetupCardMetrics.titleKerning)
             }
             Text(outcome == .claudeLoginRequired
                  ? "Sign in with the Claude CLI to show this account’s usage."
                  : "See your remaining Claude usage right here.")
-                .font(.system(size: 12.5))
+                .font(.system(size: SetupCardMetrics.bodySize))
                 .foregroundStyle(.secondary)
                 // PB11: 2pt on every line of popover prose that is allowed to wrap.
                 .lineSpacing(2)
                 // W2A: the only body copy in this card that was missing the wrap allowance.
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 6)
+                .padding(.top, SetupCardMetrics.leadGap)
             reassurance
-                .padding(.top, 11)
+                .padding(.top, SetupCardMetrics.siblingGap)
             Button(action: onOpenSetup) {
                 Label(outcome.recoveryPresentation.primaryLabel, systemImage: "terminal")
             }
             .buttonStyle(ClaudePrimaryButtonStyle())
-            .padding(.top, 12)
+            .padding(.top, SetupCardMetrics.siblingGap)
             steps(dark: dark)
-                .padding(.top, 14)
+                .padding(.top, SetupCardMetrics.sectionGap)
             ClaudeManualCommandDisclosure()
-                .padding(.top, 13)
+                .padding(.top, SetupCardMetrics.siblingGap)
         }
     }
 
     /// "official /usage · no login · never spends usage" — the trust line that makes a
     /// first-run user comfortable pressing the button.
     private var reassurance: some View {
+        // R2B2: the tertiary note tier. The inline command run stays 0.5pt under the prose
+        // around it — monospace at a matched point size reads a size larger.
         Text("Reads Claude’s official \(Text("/usage").font(.system(size: 10.5, design: .monospaced))) panel through its CLI. Headroom never receives your password or tokens, and the check never spends usage.")
-            .font(.system(size: 11.5))
+            .font(.system(size: SetupCardMetrics.noteSize))
             .foregroundStyle(.tertiary)
             // PB11: the longest prose in the popover — three lines at 293pt — and the line
             // the audit measured at 1.22 leading against Settings' 1.4.
@@ -337,7 +373,7 @@ struct ClaudeConnectCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 6) {
                 Text("Takes about 20 seconds")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: SetupCardMetrics.noteSize, weight: .semibold))
                     .foregroundStyle(.tertiary)
                     .layoutPriority(1)
                 Rectangle()
@@ -356,13 +392,14 @@ struct ClaudeConnectCard: View {
     private func step(_ number: Int, _ text: Text, dark: Bool) -> some View {
         HStack(alignment: .top, spacing: 9) {
             Text("\(number)")
-                .font(.system(size: 10.5, weight: .bold).monospacedDigit())
+                .font(.system(size: SetupCardMetrics.noteSize, weight: .bold).monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 18, height: 18)
                 .background(ClaudeSetupStyle.stepBackground(dark: dark), in: Circle())
                 .overlay(Circle().strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
+            // R2B2: the steps answer the lead, so they read at the lead's size.
             text
-                .font(.system(size: 12))
+                .font(.system(size: SetupCardMetrics.bodySize))
                 .foregroundStyle(.secondary)
                 // PB11: 2pt on every line of popover prose that is allowed to wrap.
                 .lineSpacing(2)
@@ -390,31 +427,31 @@ struct ClaudeWaitingCard: View {
                     .controlSize(.small)
                 Text(outcome == .claudeLoginRequired ? "Waiting for sign-in…" : "Waiting for approval…")
                     .font(.system(size: 15, weight: .semibold))
-                    .kerning(-0.2)
+                    .kerning(SetupCardMetrics.titleKerning)
             }
             // W2A: the trust variant was three lines ending on the single word "approve."
             Text(outcome == .claudeLoginRequired
                  ? "Finish signing in in the Terminal that just opened. Headroom checks this account automatically."
                  : "Choose the option below in Terminal. Headroom connects as soon as you approve.")
-                .font(.system(size: 12.5))
+                .font(.system(size: SetupCardMetrics.bodySize))
                 .foregroundStyle(.secondary)
                 // PB11: 2pt on every line of popover prose that is allowed to wrap.
                 .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 6)
+                .padding(.top, SetupCardMetrics.leadGap)
             if outcome == .claudeTrustRequired {
                 HStack(spacing: 7) {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.tertiary)
                     Text("“Yes, I trust this folder”")
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.system(size: SetupCardMetrics.bodySize, weight: .semibold))
                 }
                 .padding(.vertical, 6)
                 .padding(.leading, 9).padding(.trailing, 11)
                 .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
-                .padding(.top, 11)
+                .padding(.top, SetupCardMetrics.siblingGap)
             }
             // B3A/P4C/B3: "Reopen Terminal" was a bare accent label standing next to a filled
             // chip. Both are thin chips now, leading-aligned at the card's foot with
@@ -429,7 +466,7 @@ struct ClaudeWaitingCard: View {
                     .buttonStyle(SetupChipButtonStyle(size: .small))
             }
             ClaudeManualCommandDisclosure()
-                .padding(.top, 13)
+                .padding(.top, SetupCardMetrics.siblingGap)
         }
     }
 }
@@ -461,20 +498,29 @@ struct ClaudeManualCommandDisclosure: View {
 
     private func disclosure(for command: String) -> some View {
         let dark = scheme == .dark
+        // R2M7/S2A: one toggle, two kinds of motion, so it needs two resolved scopes rather
+        // than the `reduceMotion ? nil : token` this used to carry — `nil` kills the fade as
+        // well as the travel, and S2A says a crossfade keeps its timing under Reduce Motion.
+        // The revealed well is the crossfade; the chevron's rotation is movement and takes
+        // its own scope below so it snaps.
+        let crossfade = HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion)
+        let movement = HeadroomMotion.resolved(HeadroomMotion.settle, .movement, reduceMotion: reduceMotion)
         return VStack(alignment: .leading, spacing: 9) {
             Button {
-                withAnimation(reduceMotion ? nil : HeadroomMotion.settle) { open.toggle() }
+                open.toggle()
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .bold))
                         .rotationEffect(.degrees(open ? 90 : 0))
+                        .animation(movement, value: open)
                     Text("Rather run it yourself?")
                         .font(.system(size: 11.5, weight: .medium))
                 }
                 .foregroundStyle(.tertiary)
             }
             .buttonStyle(HoverButtonStyle(horizontalPadding: 5, verticalPadding: 3))
+            .accessibilityLabel(open ? "Hide manual Claude login command" : "Show manual Claude login command")
             if open {
                 HStack(alignment: .top, spacing: 8) {
                     Text(ClaudeSetupSession.displayForm(of: command))
@@ -483,22 +529,17 @@ struct ClaudeManualCommandDisclosure: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
-                    Button {
-                        ClaudeSetupSession.copy(command, for: account)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .frame(width: 22, height: 22)
-                    }
-                    .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
-                    .foregroundStyle(.secondary)
-                    .help("Copy command")
-                    .accessibilityLabel("Copy command")
+                    CopyFeedbackButton(
+                        copy: { ClaudeSetupSession.copy(command, for: account) },
+                        label: "Copy command"
+                    )
                 }
                 .padding(.horizontal, 9).padding(.vertical, 8)
                 .background(ClaudeSetupStyle.codeBackground(dark: dark), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .transition(.opacity)
             }
         }
+        .animation(crossfade, value: open)
     }
 }
 
@@ -574,9 +615,13 @@ struct SetupChipButtonStyle: ButtonStyle {
         case small
 
         var fontSize: CGFloat { self == .regular ? 12.5 : 11.5 }
-        var horizontalPadding: CGFloat { self == .regular ? 13 : 10 }
+        // CMM1 (Kyle, 2026-09-09): squarer and tighter, after the CleanMyMac popover buttons
+        // he sent — the reference sits its 15pt label in a 23pt chip with ≈9.5pt side padding
+        // and a radius just over a quarter of the height. Ours keep their heights and take
+        // the same proportions: radius ≈ 0.27 × height, 10/8pt sides.
+        var horizontalPadding: CGFloat { self == .regular ? 10 : 8 }
         var verticalPadding: CGFloat { self == .regular ? 6 : 4 }
-        var cornerRadius: CGFloat { self == .regular ? 8 : 7 }
+        var cornerRadius: CGFloat { self == .regular ? 7 : 6 }
     }
 
     /// PA11b: B3H's `.hover` case is gone with the behaviour it named.
@@ -608,13 +653,37 @@ struct SetupChipButtonStyle: ButtonStyle {
             let pressAnimation = configuration.isPressed ? HeadroomMotion.pressDown : HeadroomMotion.settle
             configuration.label
                 .font(.system(size: size.fontSize, weight: .semibold))
-                .foregroundStyle(dark ? Color(white: 0.85) : Color(red: 0.24, green: 0.24, blue: 0.26))
+                // R2C18: was a byte-copy of the shared light neutral beside an unrelated
+                // `Color(white: 0.85)`; both steps now read `setupChipInk`.
+                .foregroundStyle(ProviderStyle.setupChipInk(dark: dark))
                 .padding(.horizontal, size.horizontalPadding)
                 .padding(.vertical, size.verticalPadding)
                 .background {
+                    // CMM1 → CMM3 (Kyle, 2026-09-09): "a bit too bright now … more
+                    // restrained in a James McDonald way." Four quiet layers instead of one
+                    // loud rim: a low-alpha fill, a 1pt *inset* highlight along the top edge
+                    // (the light catching the lip), a faint ring for the edge, and a 1pt
+                    // shadow underneath so the chip sits *on* the card rather than being
+                    // outlined on it. Each layer is near-invisible alone; together they read
+                    // as a physical control.
                     shape
                         .fill(fillColor)
-                        .overlay(shape.strokeBorder(borderColor, lineWidth: 1))
+                        .overlay {
+                            shape
+                                .inset(by: 1)
+                                .strokeBorder(topHighlight, lineWidth: 1)
+                                // Fade the lip out down the sides rather than cutting it —
+                                // a hard mask leaves a ledge where the highlight stops.
+                                .mask {
+                                    LinearGradient(
+                                        colors: [.white, .clear],
+                                        startPoint: .top,
+                                        endPoint: .init(x: 0.5, y: 0.55)
+                                    )
+                                }
+                        }
+                        .overlay(shape.strokeBorder(ringColor, lineWidth: 1))
+                        .shadow(color: shadowColor, radius: 0.5, y: 1)
                 }
                 // S2A: the fill is a colour change and survives Reduce Motion; the press scale
                 // below is the only movement here, so it resolves separately.
@@ -652,11 +721,25 @@ struct SetupChipButtonStyle: ButtonStyle {
                 : Color.black.opacity(Self.lightFillSteps[step])
         }
 
-        private static let darkFillSteps: [Double] = [0.10, 0.14, 0.18]
-        private static let lightFillSteps: [Double] = [0.06, 0.10, 0.14]
+        // CMM3: quiet steps — rest barely lifts off the card; hover and press add one step
+        // each so the ladder still reads in motion.
+        private static let darkFillSteps: [Double] = [0.07, 0.11, 0.15]
+        private static let lightFillSteps: [Double] = [0.04, 0.07, 0.10]
 
-        private var borderColor: Color {
-            dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08)
+        /// CMM3: the inset top lip. Dark catches white light; light catches a whiter white
+        /// on the near-white tile, which is what makes a light chip look raised at all.
+        private var topHighlight: Color {
+            dark ? Color.white.opacity(0.12) : Color.white.opacity(0.70)
+        }
+
+        /// CMM3: the edge ring, a hair above the fill so the box still has a boundary.
+        private var ringColor: Color {
+            dark ? Color.white.opacity(0.08) : Color.black.opacity(0.09)
+        }
+
+        /// CMM3: one point of shadow, just enough to seat the chip.
+        private var shadowColor: Color {
+            dark ? Color.black.opacity(0.35) : Color.black.opacity(0.08)
         }
     }
 }

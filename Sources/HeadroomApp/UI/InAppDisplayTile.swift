@@ -30,12 +30,10 @@ struct InAppDisplayTile: View {
     private let swatchWidth: CGFloat = 150
     private let swatchSpacing: CGFloat = 8
 
+    /// R2C19/R2B1: `SettingsTile` owns the container, the title case ("In-App Display"), and
+    /// the group rhythm, so this tile can no longer drift from the two beside it.
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("In-app display")
-                .font(.system(size: 15, weight: .semibold))
-                .kerning(-0.2)
-
+        SettingsTile("In-App Display") {
             swatchRow(
                 "Percentages",
                 help: "Changes the numbers, words, and meter direction in the app and menu bar."
@@ -75,9 +73,6 @@ struct InAppDisplayTile: View {
                     store.setShowCodexSparkCountersInApp(newValue)
                 }
         }
-        .padding(13)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .raisedTile(cornerRadius: 10, surface: .opaque)
     }
 
     private var columns: [GridItem] {
@@ -198,7 +193,7 @@ struct InAppDisplayTile: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 36)
                     .background(
-                        ClaudeSetupStyle.wellBackground(dark: colorScheme == .dark),
+                        ProviderStyle.recessedWell(dark: colorScheme == .dark),
                         in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                     )
 
@@ -210,7 +205,7 @@ struct InAppDisplayTile: View {
             .padding(5)
             .selectionChrome(isSelected: isSelected)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SettingsSwatchButtonStyle())
         .help(label)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(isSelected ? "Selected" : "Not selected")

@@ -16,12 +16,16 @@ struct MeterStyleTests {
             (.segmented, "segmented", "Segmented"),
             (.tube, "tube", "Tube"),
         ]
+        // R2C12: the labels name the behavior; the raw values are the stored preference and
+        // deliberately did *not* change, so no one's chosen fill migrates on update. This
+        // pairing is the whole point of the test — a rename that touched a raw value would
+        // silently reset every install to the default.
         let fills: [(GaugeFill, String, String)] = [
-            (.solid, "solid", "Solid"),
-            (.glass, "glass", "Glass + cap"),
-            (.ghost, "ghost", "Ghost + cap"),
-            (.colorAsEvent, "event", "Color as event"),
-            (.hueRamp, "hue", "Hue ramp"),
+            (.solid, "solid", "Always colored"),
+            (.glass, "glass", "Glass"),
+            (.ghost, "ghost", "Ghost"),
+            (.colorAsEvent, "event", "Only when low"),
+            (.hueRamp, "hue", "Fade"),
         ]
 
         for (value, rawValue, label) in formats {
@@ -331,6 +335,51 @@ struct MeterStyleTests {
         }
     }
 
+    /// R2C12: the Fill option named "Hue ramp" was the one thing in the meter that moved hue,
+    /// and it did it by accident — both stops were built by mixing the severity fill toward
+    /// white or black in sRGB, which swings the amber ~8.5° warmer at its start. The ramp is
+    /// now built and traversed in OKLCH at the fill's own hue, so the drift across it is
+    /// structurally zero. The 2° bound is slack for gamut clamping at the saturated ends, not
+    /// a target: anything approaching it means a stop is being clipped and should be retuned.
+    @Test func theRampHoldsItsSeverityHueEndToEnd() {
+        for scheme in MeterColorScheme.allCases {
+            for surface in [MeterRampSurface.flat, .well] {
+                for increasedContrast in [false, true] {
+                    for severity in [UsageSeverity.healthy, .low, .critical] {
+                        let stops = MeterRecipe.rampStops(
+                            severity: severity,
+                            scheme: scheme,
+                            surface: surface,
+                            increasedContrast: increasedContrast
+                        )
+                        let reference = HeadroomOKLCH(stops.end).hue
+                        let label = "\(severity) \(scheme) \(surface) ic=\(increasedContrast)"
+                        for step in 0...20 {
+                            let progress = Double(step) / 20
+                            let hue = HeadroomOKLCH(stops.color(at: progress)).hue
+                            let drift = abs((hue - reference + 540).truncatingRemainder(dividingBy: 360) - 180)
+                            #expect(drift < 2, "\(label) at \(progress): \(drift)°")
+                        }
+                        // The start and the midpoint are the two stops the renderers draw.
+                        // `color(at:)` round-trips through OKLCH, so the endpoints match to
+                        // well under a 1/255 channel step rather than bit-for-bit.
+                        #expect(channelDistance(stops.color(at: 0), stops.start) < 0.001, "\(label) start")
+                        #expect(channelDistance(stops.color(at: 1), stops.end) < 0.001, "\(label) end")
+                        let midpoint = HeadroomOKLCH(stops.midpoint)
+                        let start = HeadroomOKLCH(stops.start)
+                        let end = HeadroomOKLCH(stops.end)
+                        #expect(
+                            abs(midpoint.lightness - (start.lightness + end.lightness) / 2) < 0.01,
+                            "\(label) midpoint lightness"
+                        )
+                        // The mix target is hueless, so the start is the *less* chromatic end.
+                        #expect(start.chroma < end.chroma, "\(label) start chroma")
+                    }
+                }
+            }
+        }
+    }
+
     @Test func cellRecipesPreserveEveryFillAndTipContract() {
         #expect(MeterRecipe.cellRecipe(
             index: 0,
@@ -526,5 +575,9 @@ struct MeterStyleTests {
     private func isNeutral(_ color: HeadroomRGBColor) -> Bool {
         abs(color.red - color.green) < 0.000_001
             && abs(color.green - color.blue) < 0.000_001
+    }
+
+    private func channelDistance(_ lhs: HeadroomRGBColor, _ rhs: HeadroomRGBColor) -> Double {
+        max(abs(lhs.red - rhs.red), max(abs(lhs.green - rhs.green), abs(lhs.blue - rhs.blue)))
     }
 }

@@ -45,13 +45,17 @@ public enum GaugeFill: String, CaseIterable, Identifiable, Sendable {
 
     public var id: String { rawValue }
 
+    /// R2C12: names the behavior, not the renderer. "Color as event" was the default's own
+    /// internal name, "Hue ramp" described a traversal the fill does not perform, and
+    /// "+ cap" put construction in a label whose help line already says the same thing. Raw
+    /// values are untouched so no stored preference migrates.
     public var label: String {
         switch self {
-        case .solid: "Solid"
-        case .glass: "Glass + cap"
-        case .ghost: "Ghost + cap"
-        case .colorAsEvent: "Color as event"
-        case .hueRamp: "Hue ramp"
+        case .solid: "Always colored"
+        case .glass: "Glass"
+        case .ghost: "Ghost"
+        case .colorAsEvent: "Only when low"
+        case .hueRamp: "Fade"
         }
     }
 }
@@ -296,6 +300,22 @@ public struct MeterRampStops: Sendable, Equatable {
         self.start = start
         self.end = end
     }
+
+    /// R2C12: the ramp traverses OKLCH at its severity's fixed hue.
+    ///
+    /// The Fill option is named for a hue ramp and used to be the one thing in the meter that
+    /// actually *moved* hue by accident: both stops were built by mixing the fill toward white
+    /// or black in sRGB, which swings the amber ~8.5° warmer at its start. Interpolating in
+    /// OKLCH with the hue pinned is what makes the name true — the ramp changes lightness and
+    /// chroma only, and `MeterStyleTests` asserts the drift across it stays under 2°.
+    public func color(at progress: Double) -> HeadroomRGBColor {
+        HeadroomOKLCH(start).interpolated(to: HeadroomOKLCH(end), progress: progress).rgb
+    }
+
+    /// The stop a two-colour SwiftUI gradient would otherwise interpolate through in sRGB.
+    /// Handing the gradient an explicit middle stop is what keeps the drawn bar on the OKLCH
+    /// path instead of the straight line between its endpoints.
+    public var midpoint: HeadroomRGBColor { color(at: 0.5) }
 }
 
 /// A semantic fill choice. The app supplies scheme-specific visual tokens for each case;
@@ -353,6 +373,12 @@ public enum MeterRecipe {
 
     /// The ramp is a bar fill end to end, so both stops come from the severity *fill* tier
     /// and honor Increase Contrast (`increasedContrast`); text keeps the text tier.
+    ///
+    /// R2C12: the start stop is the fill moved toward white (light) or black (dark) *in
+    /// OKLCH at the fill's own hue* — the same `rampStartSeverityMix` weight, applied to
+    /// lightness and chroma instead of to three sRGB channels. The old sRGB mix was the one
+    /// place in the meter that traversed hue, and it did it in the Fill option named for
+    /// traversing hue.
     public static func rampStops(
         severity: UsageSeverity,
         scheme: MeterColorScheme,
@@ -364,25 +390,21 @@ public enum MeterRecipe {
             dark: scheme == .dark,
             increasedContrast: increasedContrast
         )
-        let mixColor: HeadroomRGBColor
-        switch scheme {
-        case .light:
-            mixColor = .white
-        case .dark:
-            mixColor = .black
-        }
-        return MeterRampStops(
-            start: mix(
-                end,
-                weight: HeadroomMeterColorValues.rampStartSeverityMix(
-                    dark: scheme == .dark,
-                    surface: surface,
-                    increasedContrast: increasedContrast
-                ),
-                with: mixColor
-            ),
-            end: end
+        let weight = HeadroomMeterColorValues.rampStartSeverityMix(
+            dark: scheme == .dark,
+            surface: surface,
+            increasedContrast: increasedContrast
         )
+        let severityStop = HeadroomOKLCH(end)
+        // White is L 1 · C 0; black is L 0 · C 0. Both are hueless, so mixing toward either
+        // one at a fixed hue is just "keep `weight` of the fill's lightness and chroma".
+        let mixLightness: Double = scheme == .dark ? 0 : 1
+        let start = HeadroomOKLCH(
+            lightness: severityStop.lightness * weight + mixLightness * (1 - weight),
+            chroma: severityStop.chroma * weight,
+            hue: severityStop.hue
+        )
+        return MeterRampStops(start: start.rgb, end: end)
     }
 
     public static func cellRecipe(
@@ -433,18 +455,6 @@ public enum MeterRecipe {
         }
     }
 
-    private static func mix(
-        _ color: HeadroomRGBColor,
-        weight: Double,
-        with background: HeadroomRGBColor
-    ) -> HeadroomRGBColor {
-        let backgroundWeight = 1 - weight
-        return HeadroomRGBColor(
-            red: color.red * weight + background.red * backgroundWeight,
-            green: color.green * weight + background.green * backgroundWeight,
-            blue: color.blue * weight + background.blue * backgroundWeight
-        )
-    }
 }
 
 public extension ResetSchedule {
