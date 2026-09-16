@@ -15,6 +15,7 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     public let workingDirectory: String
     public let bootTimeout: TimeInterval
     public let panelTimeout: TimeInterval
+    private let cursorPathResolver: @Sendable () -> String?
 
     public init(
         cursorPath: String? = CursorUsageCLIProbe.resolveCursorPath(),
@@ -26,10 +27,26 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
         self.workingDirectory = workingDirectory
         self.bootTimeout = bootTimeout
         self.panelTimeout = panelTimeout
+        self.cursorPathResolver = { CursorUsageCLIProbe.resolveCursorPath() }
+    }
+
+    init(
+        cursorPathResolver: @escaping @Sendable () -> String?,
+        workingDirectory: String = CursorUsageCLIProbe.defaultWorkspace.path,
+        bootTimeout: TimeInterval = 20,
+        panelTimeout: TimeInterval = 20
+    ) {
+        self.cursorPath = nil
+        self.workingDirectory = workingDirectory
+        self.bootTimeout = bootTimeout
+        self.panelTimeout = panelTimeout
+        self.cursorPathResolver = cursorPathResolver
     }
 
     public func capturePanel() async -> CursorPanelResult {
-        guard let cursorPath, FileManager.default.isExecutableFile(atPath: cursorPath) else {
+        let resolvedPath = cursorPath ?? cursorPathResolver()
+        guard let cursorPath = resolvedPath,
+              FileManager.default.isExecutableFile(atPath: cursorPath) else {
             return .cliNotFound
         }
         do {
@@ -265,13 +282,21 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
         // check below fails closed rather than sending a second Enter as a model prompt.
         writeText("\u{1B}[13u", to: master)
         var panelBuffer = Data()
-        drain(master: master, maxSeconds: panel, quiet: 4, into: &panelBuffer)
+        let panelAppeared = drainUntil(
+            master: master,
+            maxSeconds: panel,
+            into: &panelBuffer,
+            condition: isUsagePanel
+        )
+        // Once the panel markers appear, collect the remainder of the same paint so the
+        // parser sees complete values rather than the first partial render that matched.
+        if panelAppeared {
+            drain(master: master, maxSeconds: 2, quiet: 0.4, into: &panelBuffer)
+        }
         teardown()
 
         let captured = ANSI.strip(String(decoding: panelBuffer, as: UTF8.self))
-        guard captured.localizedCaseInsensitiveContains("Monthly plan and on-demand usage"),
-              captured.localizedCaseInsensitiveContains("Included")
-        else { return .transientCapture }
+        guard isUsagePanel(captured) else { return .transientCapture }
         return .panel(captured)
     }
 
@@ -291,6 +316,11 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     /// whole token so `/usages`-style commands can never satisfy the gate.
     static func isUsageAutocompleteSelected(_ strippedText: String) -> Bool {
         strippedText.contains(/→\s+\/usage(?:\s|$)/)
+    }
+
+    static func isUsagePanel(_ strippedText: String) -> Bool {
+        strippedText.localizedCaseInsensitiveContains("Monthly plan and on-demand usage")
+            && strippedText.localizedCaseInsensitiveContains("Included")
     }
 
     private static func terminateProcessGroup(_ pid: pid_t) {
