@@ -129,6 +129,10 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /context\n/usage"))
         // Token boundary: a differently-named command must never satisfy the gate.
         #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usages\n/context"))
+
+        #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nIncluded 1% used"))
+        #expect(!CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nLoading…"))
+        #expect(!CursorUsageCLIProbe.isUsagePanel("Included 1% used"))
     }
 
     @Test func cursorIsExplicitlySingleAccount() {
@@ -147,6 +151,39 @@ private struct StubCursorSource: CursorUsageSource {
         try? FileManager.default.removeItem(at: executable)
 
         #expect(await CursorUsageCLIProbe(cursorPath: executable.path).capturePanel() == .cliNotFound)
+    }
+
+    @Test func probeRecoversWhenCursorAgentIsInstalledAfterProbeCreation() async {
+        let executable = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-late-cursor-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: executable) }
+        let path = MutableCursorExecutablePath()
+        let probe = CursorUsageCLIProbe(cursorPathResolver: { path.value })
+
+        #expect(await probe.capturePanel() == .cliNotFound)
+
+        let script = """
+        #!/bin/sh
+        printf '%s' '{"isAuthenticated":false}'
+        """
+        #expect(FileManager.default.createFile(
+            atPath: executable.path,
+            contents: Data(script.utf8),
+            attributes: [.posixPermissions: 0o700]
+        ))
+        path.value = executable.path
+
+        #expect(await probe.capturePanel() == .loginRequired)
+    }
+}
+
+private final class MutableCursorExecutablePath: @unchecked Sendable {
+    private let lock = NSLock()
+    private var path: String?
+
+    var value: String? {
+        get { lock.withLock { path } }
+        set { lock.withLock { path = newValue } }
     }
 }
 

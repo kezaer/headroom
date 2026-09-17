@@ -38,17 +38,32 @@ public enum CursorStatusBlob {
 public struct CursorStatusEmailProbe: CursorAccountEmailReading {
     public let cursorPath: String?
     public let timeout: TimeInterval
+    private let cursorPathResolver: @Sendable () -> String?
 
-    public init(
-        cursorPath: String? = CursorUsageCLIProbe.resolveCursorPath(),
-        timeout: TimeInterval = 5
-    ) {
+    public init(timeout: TimeInterval = 5) {
+        self.cursorPath = nil
+        self.timeout = timeout
+        self.cursorPathResolver = { CursorUsageCLIProbe.resolveCursorPath() }
+    }
+
+    public init(cursorPath: String?, timeout: TimeInterval = 5) {
         self.cursorPath = cursorPath
         self.timeout = timeout
+        self.cursorPathResolver = { cursorPath }
+    }
+
+    init(
+        cursorPathResolver: @escaping @Sendable () -> String?,
+        timeout: TimeInterval = 5
+    ) {
+        self.cursorPath = nil
+        self.timeout = timeout
+        self.cursorPathResolver = cursorPathResolver
     }
 
     public func readAccountEmail() async -> String? {
-        guard let cursorPath, FileManager.default.isExecutableFile(atPath: cursorPath) else {
+        guard let cursorPath = cursorPathResolver(),
+              FileManager.default.isExecutableFile(atPath: cursorPath) else {
             return nil
         }
         // Off the main actor and off the cooperative pool: the capture blocks on poll()

@@ -627,6 +627,29 @@ struct CursorAccountEmailTests {
         #expect(await absent.readAccountEmail() == nil)
     }
 
+    @Test func probeRecoversWhenCursorAgentIsInstalledAfterProbeCreation() async {
+        let executable = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-late-cursor-email-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: executable) }
+        let path = MutableCursorEmailExecutablePath()
+        let probe = CursorStatusEmailProbe(cursorPathResolver: { path.value })
+
+        #expect(await probe.readAccountEmail() == nil)
+
+        let script = """
+        #!/bin/sh
+        printf '%s' '{"userInfo":{"email":"personal@example.com"}}'
+        """
+        #expect(FileManager.default.createFile(
+            atPath: executable.path,
+            contents: Data(script.utf8),
+            attributes: [.posixPermissions: 0o700]
+        ))
+        path.value = executable.path
+
+        #expect(await probe.readAccountEmail() == "personal@example.com")
+    }
+
     @Test func providerPopulatesAccountEmailOnLiveSnapshots() async throws {
         let provider = CursorProvider(
             source: StubCursorPanelSource(result: .panel(try usagePanel())),
@@ -684,6 +707,16 @@ struct CursorAccountEmailTests {
 
         #expect(envelope.providers.count == 2)
         #expect(!String(decoding: encoded, as: UTF8.self).contains("personal@example.com"))
+    }
+}
+
+private final class MutableCursorEmailExecutablePath: @unchecked Sendable {
+    private let lock = NSLock()
+    private var path: String?
+
+    var value: String? {
+        get { lock.withLock { path } }
+        set { lock.withLock { path = newValue } }
     }
 }
 
