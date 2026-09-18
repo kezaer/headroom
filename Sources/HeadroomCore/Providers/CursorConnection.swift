@@ -51,6 +51,44 @@ public enum CursorCLI {
         """
     }
 
+    /// Cursor's `--trust` flag does not skip the trust menu in interactive mode.
+    /// The user makes that decision in the official CLI; Headroom only stages the
+    /// same empty workspace used by its usage probe.
+    public static func workspaceTrustCommand(executablePath: String, workspaceDirectory: String) -> String {
+        let workspace = shellQuoted(workspaceDirectory)
+        return "unset CURSOR_API_KEY CURSOR_API_ENDPOINT; cd \(workspace) && \(shellQuoted(executablePath)) --mode ask --workspace \(workspace)"
+    }
+
+    public static func workspaceTrustScript(
+        executablePath: String,
+        workspaceDirectory: String,
+        completionMarker: SetupCompletionMarker? = nil
+    ) -> String {
+        let executable = shellQuoted(executablePath)
+        let invocation = workspaceTrustCommand(
+            executablePath: executablePath,
+            workspaceDirectory: workspaceDirectory
+        )
+        let launch = completionMarker.map {
+            SetupCompletionCommand.wrap(invocation, marker: $0, mode: .standard)
+        } ?? invocation
+        return """
+        #!/bin/zsh
+        clear
+        export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+        unset CURSOR_API_KEY CURSOR_API_ENDPOINT
+        echo "Headroom needs Cursor Agent to trust its empty usage workspace."
+        echo "Choose [a] Trust this workspace, then quit Cursor Agent and return to Headroom."
+        echo "Headroom will check your usage again after this window closes."
+        echo
+        if [[ ! -x \(executable) ]]; then
+          echo "Cursor Agent moved or is no longer executable. Reopen Headroom and try again."
+          exit 127
+        fi
+        \(launch)
+        """
+    }
+
     private static func shellQuoted(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }

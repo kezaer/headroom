@@ -1,0 +1,20 @@
+#!/bin/zsh
+if [[ "$1" == status ]]; then
+  print -n '{"isAuthenticated":true}'
+  exit 0
+fi
+stty raw -echo
+print -n $'Cursor Agent\r\nv2026.09.15-d2fe57e\r\nPlan, search, build anything\r\nAuto Balance\r\n'
+buffer=''
+while read -k 1 character; do
+  buffer+="$character"
+  [[ "$buffer" == */usage ]] && break
+done
+print -n $'\r\n→  /usage    Show plan and on-demand usage\r\n'
+buffer=''
+while read -k 1 character; do
+  buffer+="$character"
+  [[ "$buffer" == *$'\e[13u' ]] && break
+done
+print -n $'\r\nMonthly plan and on-demand usage\r\nUsage • Pro+ Resets Sep 1\r\nIncluded 1% used\r\nOn-Demand Disabled\r\n'
+sleep 1

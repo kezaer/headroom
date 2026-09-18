@@ -218,7 +218,7 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
         posix_spawnattr_init(&attributes)
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
 
-        let arguments = [cursorPath, "--mode", "ask", "--trust", "--workspace", workingDirectory]
+        let arguments = [cursorPath, "--mode", "ask", "--workspace", workingDirectory]
         var env = environment(workingDirectory: workingDirectory)
         env["TERM"] = "xterm-256color"
         env["COLUMNS"] = "140"
@@ -253,9 +253,13 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
             master: master,
             maxSeconds: boot,
             into: &buffer,
-            condition: isReadyPrompt
+            condition: { isReadyPrompt($0) || isWorkspaceTrustPrompt($0) }
         )
         let bootText = ANSI.strip(String(decoding: buffer, as: UTF8.self))
+        if isWorkspaceTrustPrompt(bootText) {
+            teardown()
+            return .workspaceTrustRequired
+        }
         guard isReadyPrompt(bootText)
         else {
             teardown()
@@ -304,8 +308,17 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     /// also appear on onboarding and update screens, so they never authorize typing by
     /// themselves.
     static func isReadyPrompt(_ strippedText: String) -> Bool {
-        strippedText.localizedCaseInsensitiveContains("Cursor Agent")
-            && strippedText.localizedCaseInsensitiveContains("Ask (shift+tab to cycle)")
+        guard !isWorkspaceTrustPrompt(strippedText),
+              !strippedText.localizedCaseInsensitiveContains("MCP Server Approval Required")
+        else { return false }
+        return strippedText.localizedCaseInsensitiveContains("Cursor Agent")
+            && (strippedText.localizedCaseInsensitiveContains("Ask (shift+tab to cycle)")
+                || strippedText.localizedCaseInsensitiveContains("Plan, search, build anything"))
+    }
+
+    static func isWorkspaceTrustPrompt(_ strippedText: String) -> Bool {
+        strippedText.localizedCaseInsensitiveContains("Workspace Trust Required")
+            && strippedText.localizedCaseInsensitiveContains("Trust this workspace")
     }
 
     /// Cursor paints an arrow beside the active slash-command completion. Requiring the

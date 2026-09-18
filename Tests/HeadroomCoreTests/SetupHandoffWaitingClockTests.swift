@@ -183,4 +183,28 @@ import Testing
             atPath: AccountStorage.generatedCompletedPath(marker, generation: generation)
         ))
     }
+    @Test func trustHandoffWrapperRunsAndRecordsCompletion() throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try AccountStorage.prepareSetupCompletionMarker(marker, purpose: .trust)
+        let scriptURL = directory.appendingPathComponent("trust.command")
+        try SetupCompletionCommand.wrap(
+            "true",
+            marker: marker,
+            mode: .standard
+        ).write(to: scriptURL, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [scriptURL.path]
+        process.environment = ["TERM": "xterm-256color"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+
+        #expect(process.terminationStatus == 0)
+        #expect(AccountStorage.setupHandoffCompletion(marker: marker) == .succeeded)
+    }
+
 }

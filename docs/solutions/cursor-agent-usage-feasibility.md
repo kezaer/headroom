@@ -43,6 +43,21 @@ version-manager precedence, Homebrew fallback selection, missing and non-executa
 and an executable disappearing before PTY input. Actual Homebrew/version-manager installs and
 macOS 15 Sequoia remain separate runtime characterization work in `BUGS.md`.
 
+## September 2026 startup screens
+
+Headroom 1.4.1 could fail before `/usage` even when `cursor-agent status` reported a
+valid login. A new `CursorProbe` directory opens Cursor Agent's **Workspace Trust Required**
+screen. Headroom must report that state separately and offer to open the exact probe
+workspace in the official CLI for the user to approve. The background probe must never
+send the trust key, and interactive `--trust` does not reliably skip the menu.
+
+After trust, Cursor Agent `2026.09.15-d2fe57e` displays `Plan, search, build anything`
+in place of `Ask (shift+tab to cycle)`. Both are accepted only with the Cursor Agent
+banner and without an approval screen. The probe still requires the selected `/usage`
+autocomplete row before it sends the one Kitty Enter. An older CLI may show an MCP server
+approval screen; that remains an unrecognized screen and receives no probe input. Fake
+PTY integration fixtures verify the trust and current-prompt paths without contacting Cursor.
+
 ## PTY details that are load-bearing
 
 Cursor Agent uses Ink and enables the Kitty keyboard protocol. A raw pseudo-terminal must:

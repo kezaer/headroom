@@ -4,6 +4,29 @@ import Testing
 
 @MainActor
 @Suite struct SetupSessionCoordinatorTests {
+    @Test func cursorWorkspaceTrustHandoffKeepsItsPurposeAndRetriesSafely() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .cursor)
+
+        coordinator.beginWorkspaceTrust(for: account)
+        await settleTasks()
+
+        #expect(harness.prepareCalls == [.init(key: account.key, mode: .standard, purpose: .trust)])
+        #expect(harness.openedHandoffs == [
+            .init(accountKey: account.key, mode: .standard, purpose: .trust),
+        ])
+        #expect(harness.resetBoundaryCalls.isEmpty)
+
+        coordinator.handoffDidEnd(account.key, completion: .failed, purpose: .trust)
+        #expect(coordinator.state(for: account.key) == .verifying)
+        coordinator.receive(
+            .stale(for: .cursor, reason: .providerSetup(.cursorTrustRequired)),
+            for: account.key
+        )
+        #expect(coordinator.state(for: account.key) == .failed(.provider(.cursorTrustRequired)))
+    }
+
     @Test func duplicateClicksPrepareAndOpenExactlyOnce() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()

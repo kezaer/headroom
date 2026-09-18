@@ -333,6 +333,7 @@ struct AccountsSettingsInteractionTests {
             (.reconnectGrok, .setup(.standard)),
             (.installCursorAgent, .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)),
             (.connectCursor, .setup(.standard)),
+            (.openCursorWorkspace, .cursorWorkspace),
             (.showPrivacyGuidance, .privacyGuidance(URL(string: "https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac")!)),
             (.resolveCodexStorage, .setup(.standard)),
             (.checkNow, .checkNow),

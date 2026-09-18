@@ -90,6 +90,7 @@ private struct StubCursorSource: CursorUsageSource {
         let cases: [(CursorPanelResult, ProviderSetupOutcome)] = [
             (.cliNotFound, .cursorCLIMissing),
             (.loginRequired, .cursorAuthAbsent),
+            (.workspaceTrustRequired, .cursorTrustRequired),
             (.unknownUI, .cursorUnknownUI),
             (.transientCapture, .cursorTransientCapture),
         ]
@@ -118,8 +119,12 @@ private struct StubCursorSource: CursorUsageSource {
 
     @Test func tuiInputRequiresThePromptAndSelectedUsageCommand() {
         #expect(CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nAsk (shift+tab to cycle)\nAuto"))
+        #expect(CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nv2026.09.15-d2fe57e\nPlan, search, build anything\nAuto Balance"))
         #expect(!CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nA new onboarding screen"))
         #expect(!CursorUsageCLIProbe.isReadyPrompt("Ask (shift+tab to cycle)"))
+        #expect(!CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nWorkspace Trust Required\n[a] Trust this workspace"))
+        #expect(!CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nMCP Server Approval Required\nPlan, search, build anything"))
+        #expect(CursorUsageCLIProbe.isWorkspaceTrustPrompt("/!\\ Workspace Trust Required\n[a] Trust this workspace\n[q] Quit"))
 
         #expect(CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usage\n/context"))
         // The live TUI pads the arrow-to-command gap with several spaces and trails the
@@ -151,6 +156,47 @@ private struct StubCursorSource: CursorUsageSource {
         try? FileManager.default.removeItem(at: executable)
 
         #expect(await CursorUsageCLIProbe(cursorPath: executable.path).capturePanel() == .cliNotFound)
+    }
+
+    @Test func freshWorkspaceTrustNeverReceivesPTYInput() async throws {
+        let (executable, workspace) = try fakeCursorAgent(named: "cursor-agent-trust")
+        defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }
+        let probe = CursorUsageCLIProbe(
+            cursorPath: executable.path,
+            workingDirectory: workspace.path,
+            bootTimeout: 4,
+            panelTimeout: 4
+        )
+
+        #expect(await probe.capturePanel() == .workspaceTrustRequired)
+        #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("unexpected-input").path))
+    }
+
+    @Test func currentCursorPromptOpensUsagePanelThroughPTY() async throws {
+        let (executable, workspace) = try fakeCursorAgent(named: "cursor-agent-ready")
+        defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }
+        let probe = CursorUsageCLIProbe(
+            cursorPath: executable.path,
+            workingDirectory: workspace.path,
+            bootTimeout: 4,
+            panelTimeout: 4
+        )
+        let snapshot = await CursorProvider(source: probe, now: { augustFirst2026 }).fetchSnapshot()
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.planLabel == "Pro+")
+        #expect(snapshot.windows.first?.utilization == 1)
+    }
+
+    private func fakeCursorAgent(named name: String) throws -> (URL, URL) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-cursor-pty-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let fixture = try #require(Bundle.module.url(forResource: name, withExtension: "zsh"))
+        let executable = root.appendingPathComponent("cursor-agent")
+        try FileManager.default.copyItem(at: fixture, to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        return (executable, root.appendingPathComponent("workspace", isDirectory: true))
     }
 
     @Test func probeRecoversWhenCursorAgentIsInstalledAfterProbeCreation() async {
@@ -188,6 +234,35 @@ private final class MutableCursorExecutablePath: @unchecked Sendable {
 }
 
 @Suite struct CursorConnectionTests {
+    @Test func workspaceTrustScriptUsesExactQuotedFolderWithoutAutoApproval() throws {
+        let workspace = "/Users/test/Library/Application Support/Headroom/CursorProbe"
+        let script = CursorCLI.workspaceTrustScript(
+            executablePath: "/Users/test/.local/bin/cursor-agent",
+            workspaceDirectory: workspace,
+            completionMarker: SetupCompletionMarker(
+                pendingPath: "/tmp/cursor pending",
+                completedPath: "/tmp/cursor complete"
+            )
+        )
+        #expect(script.contains("--mode ask --workspace '/Users/test/Library/Application Support/Headroom/CursorProbe'"))
+        #expect(script.contains("unset CURSOR_API_KEY CURSOR_API_ENDPOINT"))
+        #expect(script.contains("[a] Trust this workspace"))
+        #expect(!script.contains("--trust"))
+        #expect(!script.contains("--force"))
+
+        let process = Process()
+        let input = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-n"]
+        process.standardInput = input
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        input.fileHandleForWriting.write(Data(script.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
     @Test func generatedLoginScriptUsesOnlyOfficialCommandAndParsesAsZsh() throws {
         let script = CursorCLI.loginScript(
             executablePath: "/Users/test/.local/bin/cursor-agent",

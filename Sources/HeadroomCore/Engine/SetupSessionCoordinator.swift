@@ -12,6 +12,7 @@ public enum SetupHandoffMode: Sendable, Equatable {
 public enum SetupHandoffPurpose: String, Sendable, Equatable {
     case setup
     case reset
+    case trust
 }
 
 /// Redaction-safe outcome from the official CLI wrapper. Headroom keeps only whether
@@ -246,6 +247,10 @@ public final class SetupSessionCoordinator {
 
     public func begin(for account: ProviderAccount, mode: SetupHandoffMode = .standard) {
         start(account, mode: mode, intent: .begin(.setup))
+    }
+
+    public func beginWorkspaceTrust(for account: ProviderAccount) {
+        start(account, mode: .standard, intent: .begin(.trust))
     }
 
     /// Reset differs from ordinary setup only in settlement: existing live usage is
