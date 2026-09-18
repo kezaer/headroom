@@ -99,6 +99,38 @@ opened the real trust screen. Cursor sign-in scripts clear `CURSOR_API_KEY` and
 use the executable Headroom resolved. A completed login can lead to trust, then MCP
 approval, then usage; the setup coordinator retries after each user decision.
 
+## PR 125 local verification (2026-09-18)
+
+Cursor Agent `2026.09.15-d2fe57e` returned `RESULT: live Cursor snapshot via official /usage panel` with Pro+, Monthly 1% used, scheduled reset evidence, and on-demand disabled. `swift build`, the 29 Cursor tests, the full 870-test Swift suite, and the Xcode app tests passed. Replacing only `CursorUsageCLIProbe.swift` with its `84538b9` version made both late-gate cases fail at `CursorProviderTests.swift:206` (`Expectation failed: await probe.capturePanel() == expected`) and line 207 (`Expectation failed: !FileManager.default.fileExists(atPath: workspace.appendingPathComponent("unexpected-input").path)`). Restoring the PR version made both pass. The failure proves the tests detect input sent into a gate after the ready frame.
+
+Moving aside the existing `~/Library/Application Support/Headroom/CursorProbe` and probing the recreated empty directory still returned live usage. That specific path was already trusted outside the directory itself, so its trust handoff and retry timing could not be tested. The original directory was restored. A new throwaway workspace did display this screen (the path line contained `/tmp/headroom-pr125-cursor-workspace.PCRD0p`):
+
+```text
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │                                                                          │
+  │  ⚠ Workspace Trust Required                                              │
+  │                                                                          │
+  │  Cursor Agent can execute code and access files in this directory.       │
+  │                                                                          │
+  │  Do you trust the contents of this directory?                            │
+  │                                                                          │
+  │    /tmp/headroom-pr125-cursor-workspace.PCRD0p                           │
+  │                                                                          │
+  │                                                                          │
+  │  ▶ [a] Trust this workspace                                              │
+  │    [q] Quit                                                              │
+  │                                                                          │
+  │  Use arrow keys to navigate, Enter to select, or press the key shown     │
+  │                                                                          │
+  ╰──────────────────────────────────────────────────────────────────────────╯
+```
+
+`q` declined the screen and exited with status 0. A later interactive launch with `--trust` bypassed the menu for that throwaway workspace; a subsequent launch without `--trust` also skipped it. This contradicts the earlier note that `--trust` does not reliably skip the menu on this CLI version. Headroom still does not pass `--trust`, because its background probe must not approve workspace access. On the trusted workspace, `/quit` exited with status 0. One Ctrl+C left the CLI running and printed `Press Ctrl+C again to exit`; a second Ctrl+C exited, but the PTY runner aborted before it reported the process status.
+
+Adding `headroom-probe-test` (`/usr/bin/true`) to `~/.cursor/mcp.json` did **not** trigger an approval screen: the next Headroom probe returned live usage. Only the `privacyCache/updatedAt` and `serverConfigCache/updatedAt` fields changed in `cli-config.json`; no approval decision or persistence was observed. `cursor-agent --help` lists `--approve-mcps`, which would approve automatically, but shows no option to start without MCP servers. Both config files were restored byte for byte from backups. The MCP classifier wording and app handoff remain unverified live.
+
+The unsigned PR app built and launched as a separate process. Native UI control timed out while attaching to Headroom, so the card labels, waiting clock, Check Now, decline path, and retry timing have no live acceptance result from this run. The test copy was closed without terminating the user's existing app.
+
 ## PTY details that are load-bearing
 
 Cursor Agent uses Ink and enables the Kitty keyboard protocol. A raw pseudo-terminal must:

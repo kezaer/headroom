@@ -112,8 +112,10 @@ official `claude` CLI's `/usage` panel instead.
   Tools handoff are exercised only by fake PTY fixtures built from a reported older
   screen. Unverified: that the current CLI still prints `MCP Server Approval Required`,
   and that an approval given in the Terminal session persists so the next background
-  probe reaches `/usage` instead of the same dialog. Verify with a throwaway server in
-  `~/.cursor/mcp.json` before describing the path as supported; see
+  probe reaches `/usage` instead of the same dialog. On 2026-09-18, a throwaway
+  `/usr/bin/true` server in `~/.cursor/mcp.json` did not open any approval gate;
+  the probe returned live usage. Find a reproducible unapproved-server case before
+  describing the path as supported; see
   `docs/solutions/cursor-agent-usage-feasibility.md`.
 
 ## Reliability (carried from earlier review)
