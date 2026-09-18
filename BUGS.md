@@ -100,16 +100,14 @@ official `claude` CLI's `/usage` panel instead.
     this does not yet authorize the locator migration. See
     `docs/solutions/grok-build-usage-feasibility.md`.
 
-## Cursor live usage panel on this machine (2026-09-18)
+## Cursor intermittent local diagnostic (2026-09-18)
 
-- The authenticated local Cursor Agent reached the selected `/usage` command and opened
-  “Monthly plan and on-demand usage,” but a 20-second offscreen capture never printed an
-  `Included …% used` row. `swift run Headroom --probe-cursor` therefore returned a
-  transient capture failure. The startup fix has fake-PTY integration coverage for a
-  complete usage panel, but this local account is not a live end-to-end acceptance result.
-  Recheck the official panel when Cursor supplies the missing usage data; if a stable new
-  layout replaces that row, capture a redacted fixture and update the parser and gate
-  together. Do not guess a percentage from an incomplete panel.
+- One offscreen `--probe-cursor` run returned a transient capture failure despite an
+  authenticated CLI. A later run on the same machine parsed the official `/usage` panel
+  as a live Pro+ snapshot with 1% included usage and on-demand disabled. The cause of
+  the first failure was not captured; do not attribute it to a missing `Included` row.
+  If this recurs, add redacted stage diagnostics for auth, boot, autocomplete, and panel
+  timeout before changing the parser or retry policy.
 
 ## Reliability (carried from earlier review)
 

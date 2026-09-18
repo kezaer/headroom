@@ -58,6 +58,11 @@ autocomplete row before it sends the one Kitty Enter. An older CLI may show an M
 approval screen; that remains an unrecognized screen and receives no probe input. Fake
 PTY integration fixtures verify the trust and current-prompt paths without contacting Cursor.
 
+A 2026-09-18 offscreen `--probe-cursor` run against the locally authenticated CLI
+also parsed a live Pro+ panel (1% included usage, on-demand disabled). An earlier run
+that day returned a transient capture failure; its stage was not recorded, so the
+first failure should not be attributed to a panel-layout change.
+
 ## PTY details that are load-bearing
 
 Cursor Agent uses Ink and enables the Kitty keyboard protocol. A raw pseudo-terminal must:
