@@ -61,6 +61,33 @@ separately and offers an official CLI handoff for the user's decision; neither t
 background probe nor the handoff auto-approves servers. Fake PTY fixtures verify
 trust, MCP approval, and current-prompt paths without contacting Cursor.
 
+**The gate can paint after the ready frame.** Boot detection returns on the first
+frame that carries the banner and an input placeholder, but Cursor can draw the trust
+menu or the MCP dialog a moment later. The probe therefore keeps reading the PTY for
+its 1.5 s settle window (it used to sleep through it) and classifies the accumulated
+screen again before the first keystroke. This matters because `/usage` contains `a`,
+the trust menu's approve key: typing it into a late gate would trust the workspace on
+the user's behalf. `cursor-agent-late-trust.zsh` and `cursor-agent-late-mcp.zsh` pin
+that ordering and assert no input reaches the fake CLI.
+
+**Exiting the handoff session.** The interactive CLI exits on `/quit` or a double
+Ctrl+C; a single Ctrl+C is swallowed by the TUI. The trust and MCP handoff scripts say
+so. Either way the wrapper may report a nonzero status, which is why the coordinator
+settles those handoffs on the next live probe rather than on the exit code.
+
+**Interactive `--trust` is confirmed not to skip the menu.** Auto-trusting new
+workspaces from the interactive CLI is an open Cursor feature request
+(forum.cursor.com/t/162011), so the flag was removed from the probe rather than left
+as a false reassurance.
+
+**MCP approval is fixture-verified only.** The `MCP Server Approval Required` text
+comes from a reported older CLI screen, and no machine with an unapproved server was
+available for a live run. Cursor documents a persisted "local approved list" for
+servers, so one handoff should clear the gate for later probes, but that has not been
+observed. Before advertising the path, add a throwaway entry to `~/.cursor/mcp.json`,
+run `--probe-cursor` (expect `MCP server approval required`), complete the Review
+Cursor Tools handoff, and confirm the next probe reaches the panel. See `BUGS.md`.
+
 A 2026-09-18 offscreen `--probe-cursor` run against the locally authenticated CLI
 also parsed a live Pro+ panel (1% included usage, on-demand disabled). An earlier run
 that day returned a transient capture failure; its stage was not recorded, so the

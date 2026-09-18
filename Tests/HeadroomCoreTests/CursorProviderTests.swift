@@ -188,6 +188,25 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("unexpected-input").path))
     }
 
+    /// R2: the gate can paint after the ready frame. The old sleep-then-type path would
+    /// have sent `/usage`, whose `a` is the trust menu's approve key.
+    @Test(arguments: ["cursor-agent-late-trust", "cursor-agent-late-mcp"])
+    func gatePaintedAfterReadyPromptNeverReceivesPTYInput(_ fixture: String) async throws {
+        let (executable, workspace) = try fakeCursorAgent(named: fixture)
+        defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }
+        let probe = CursorUsageCLIProbe(
+            cursorPath: executable.path,
+            workingDirectory: workspace.path,
+            bootTimeout: 4,
+            panelTimeout: 4
+        )
+
+        let expected: CursorPanelResult = fixture.hasSuffix("trust")
+            ? .workspaceTrustRequired : .mcpApprovalRequired
+        #expect(await probe.capturePanel() == expected)
+        #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("unexpected-input").path))
+    }
+
     @Test func currentCursorPromptOpensUsagePanelThroughPTY() async throws {
         let (executable, workspace) = try fakeCursorAgent(named: "cursor-agent-ready")
         defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }

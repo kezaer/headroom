@@ -271,7 +271,22 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
                 ? .transientCapture : .unknownUI
         }
 
-        usleep(1_500_000)
+        // Cursor can paint the trust or MCP gate a beat after the banner and input
+        // placeholder, so a match on the first ready frame is not proof the screen is
+        // still the prompt. Keep reading for the settle window instead of sleeping
+        // through it, then classify again before the first keystroke: `/usage` contains
+        // the trust menu's `[a]` key, so typing it into a late gate would approve the
+        // workspace on the user's behalf (R2).
+        drain(master: master, maxSeconds: 1.5, quiet: 1.5, into: &buffer)
+        let settledText = ANSI.strip(String(decoding: buffer, as: UTF8.self))
+        if isWorkspaceTrustPrompt(settledText) {
+            teardown()
+            return .workspaceTrustRequired
+        }
+        if isMCPApprovalPrompt(settledText) {
+            teardown()
+            return .mcpApprovalRequired
+        }
         writeText("/usage", to: master)
         var autocompleteBuffer = Data()
         _ = drainUntil(

@@ -56,9 +56,11 @@ public enum CursorCLI {
         """
     }
 
-    /// Cursor's `--trust` flag does not skip the trust menu in interactive mode.
-    /// The user makes that decision in the official CLI; Headroom only stages the
-    /// same empty workspace used by its usage probe.
+    /// Cursor's `--trust` flag does not skip the trust menu in interactive mode (it is
+    /// an open Cursor feature request, forum.cursor.com/t/162011). The user makes that
+    /// decision in the official CLI; Headroom only stages the same empty workspace used
+    /// by its usage probe. The interactive CLI exits on `/quit` or a double Ctrl+C; a
+    /// single Ctrl+C is swallowed, which is why the instructions name both.
     public static func workspaceTrustCommand(executablePath: String, workspaceDirectory: String) -> String {
         let workspace = shellQuoted(workspaceDirectory)
         return "unset CURSOR_API_KEY CURSOR_API_ENDPOINT; cd \(workspace) && \(shellQuoted(executablePath)) --mode ask --workspace \(workspace)"
@@ -74,7 +76,7 @@ public enum CursorCLI {
             workspaceDirectory: workspaceDirectory,
             completionMarker: completionMarker,
             reason: "Headroom needs Cursor Agent to trust its empty usage workspace.",
-            instruction: "Choose [a] Trust this workspace. When the prompt appears, press Ctrl+C."
+            instruction: "Choose [a] Trust this workspace. When the prompt appears, type /quit and press Return (or press Ctrl+C twice)."
         )
     }
 
@@ -88,7 +90,7 @@ public enum CursorCLI {
             workspaceDirectory: workspaceDirectory,
             completionMarker: completionMarker,
             reason: "Cursor Agent wants approval for configured external tools.",
-            instruction: "Review Cursor Agent’s external tools. Approve only ones you trust; then press Ctrl+C."
+            instruction: "Review Cursor Agent’s external tools. Approve only ones you trust; then type /quit and press Return (or press Ctrl+C twice)."
         )
     }
 

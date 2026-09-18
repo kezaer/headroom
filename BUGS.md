@@ -108,6 +108,13 @@ official `claude` CLI's `/usage` panel instead.
   the first failure was not captured; do not attribute it to a missing `Included` row.
   If this recurs, add redacted stage diagnostics for auth, boot, autocomplete, and panel
   timeout before changing the parser or retry policy.
+- **Cursor MCP approval handoff is unverified live.** Detection and the Review Cursor
+  Tools handoff are exercised only by fake PTY fixtures built from a reported older
+  screen. Unverified: that the current CLI still prints `MCP Server Approval Required`,
+  and that an approval given in the Terminal session persists so the next background
+  probe reaches `/usage` instead of the same dialog. Verify with a throwaway server in
+  `~/.cursor/mcp.json` before describing the path as supported; see
+  `docs/solutions/cursor-agent-usage-feasibility.md`.
 
 ## Reliability (carried from earlier review)
 
