@@ -70,6 +70,25 @@ The existing `CursorUsageCLIProbe` owns boot and autocomplete gates; `CursorPane
 - **Test scenarios:** Trust result maps to the correct redacted status/action, handoff uses the exact quoted workspace path and CLI executable, script syntax is valid, dismissal/retry remains safe, MCP approval is never accepted automatically.
 - **Verification:** Targeted Core and app tests pass; compile the app target.
 
+## Follow-up Acceptance: Grok and Cursor First Run
+
+The product goal also includes completing authentication smoothly after the first CLI
+handoff, including provider-specific account isolation and optional approval screens.
+
+- R6. Grok built-in and extra-account sign-in use the intended `GROK_HOME`; the
+  clipboard fallback uses Headroom's resolved executable path.
+- R7. Cursor browser sign-in ignores Terminal API-key overrides, matching the usage
+  probe, and its fallback command uses the resolved executable path.
+- R8. Workspace trust and configured MCP-server approval are distinct, actionable
+  user decisions. Neither is approved by Headroom. After the CLI closes, a live
+  provider result completes setup even when quitting the interactive CLI returns a
+  nonzero shell status.
+
+Verify these with generated-script execution against fake CLIs, setup-coordinator
+state transitions, fake PTY approval screens, and offscreen live Grok/Cursor probes
+under a sparse `PATH`. A real user approval remains a user action, not an automated
+acceptance step.
+
 ## Verification Contract
 
 1. Run the new regression tests against the pre-fix behavior where practical and record the failing assertion.

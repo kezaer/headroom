@@ -183,10 +183,11 @@ import Testing
             atPath: AccountStorage.generatedCompletedPath(marker, generation: generation)
         ))
     }
-    @Test func trustHandoffWrapperRunsAndRecordsCompletion() throws {
+    @Test(arguments: [SetupHandoffPurpose.trust, .approval])
+    func approvalHandoffWrapperRunsAndRecordsCompletion(_ purpose: SetupHandoffPurpose) throws {
         let (marker, directory) = try makeMarker()
         defer { try? FileManager.default.removeItem(at: directory) }
-        try AccountStorage.prepareSetupCompletionMarker(marker, purpose: .trust)
+        try AccountStorage.prepareSetupCompletionMarker(marker, purpose: purpose)
         let scriptURL = directory.appendingPathComponent("trust.command")
         try SetupCompletionCommand.wrap(
             "true",

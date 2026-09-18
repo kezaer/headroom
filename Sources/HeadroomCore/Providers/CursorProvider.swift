@@ -4,6 +4,7 @@ public enum CursorPanelResult: Sendable, Equatable {
     case panel(String)
     case loginRequired
     case workspaceTrustRequired
+    case mcpApprovalRequired
     case cliNotFound
     case unknownUI
     case transientCapture
@@ -221,6 +222,7 @@ public struct CursorProvider: UsageProvider {
             )
         case .loginRequired: return stale(.providerSetup(.cursorAuthAbsent))
         case .workspaceTrustRequired: return stale(.providerSetup(.cursorTrustRequired))
+        case .mcpApprovalRequired: return stale(.providerSetup(.cursorMCPApprovalRequired))
         case .cliNotFound: return stale(.providerSetup(.cursorCLIMissing))
         case .unknownUI: return stale(.providerSetup(.cursorUnknownUI))
         case .transientCapture: return stale(.providerSetup(.cursorTransientCapture))
@@ -262,6 +264,7 @@ public struct CursorOnDemandSpendProvider: APISpendProvider {
             )
         case .loginRequired: return stale(.providerSetup(.cursorAuthAbsent))
         case .workspaceTrustRequired: return stale(.providerSetup(.cursorTrustRequired))
+        case .mcpApprovalRequired: return stale(.providerSetup(.cursorMCPApprovalRequired))
         case .cliNotFound: return stale(.providerSetup(.cursorCLIMissing))
         case .unknownUI: return stale(.providerSetup(.cursorUnknownUI))
         case .transientCapture: return stale(.providerSetup(.cursorTransientCapture))

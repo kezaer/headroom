@@ -62,6 +62,7 @@ import Testing
             (.cursorCLIMissing, .installCursorAgent, nil, .none),
             (.cursorAuthAbsent, .connectCursor, .checkNow, .boundedChecksAfterHandoff),
             (.cursorTrustRequired, .openCursorWorkspace, .checkNow, .boundedChecksAfterHandoff),
+            (.cursorMCPApprovalRequired, .reviewCursorTools, .checkNow, .boundedChecksAfterHandoff),
             (.cursorUnknownUI, .checkNow, .connectCursor, .none),
             (.cursorTransientCapture, .checkNow, .connectCursor, .none),
         ]
@@ -272,5 +273,6 @@ private let allSetupOutcomes: [ProviderSetupOutcome] = [
     .codexCallbackIncomplete,
     .grokCLIMissing, .grokAuthAbsent, .grokPermissionDenied, .grokUnsafePermissions,
     .grokMalformedAuth, .grokCredentialIO, .grokRejectedAuth, .grokTransientCapture,
-    .cursorCLIMissing, .cursorAuthAbsent, .cursorTrustRequired, .cursorUnknownUI, .cursorTransientCapture,
+    .cursorCLIMissing, .cursorAuthAbsent, .cursorTrustRequired, .cursorMCPApprovalRequired,
+    .cursorUnknownUI, .cursorTransientCapture,
 ]

@@ -59,6 +59,7 @@ enum SetupSessions {
         case documentation(URL)
         case setup(SetupHandoffMode)
         case cursorWorkspace
+        case cursorTools
         case privacyGuidance(URL)
         case checkNow
     }
@@ -219,6 +220,9 @@ enum SetupSessions {
         case .cursorWorkspace:
             noteHandoffBegan(for: account)
             coordinator?.beginWorkspaceTrust(for: account)
+        case .cursorTools:
+            noteHandoffBegan(for: account)
+            coordinator?.beginCursorMCPApproval(for: account)
         case .setup(.deviceCode):
             noteHandoffBegan(for: account)
             if let coordinator {
@@ -260,6 +264,8 @@ enum SetupSessions {
             .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)
         case .openCursorWorkspace:
             .cursorWorkspace
+        case .reviewCursorTools:
+            .cursorTools
         case .showPrivacyGuidance:
             .privacyGuidance(URL(string: "https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac")!)
         case .checkNow:
@@ -515,13 +521,14 @@ enum SetupSessions {
                     )
                     manualCommand = GrokCLI.accountLoginCommand(
                         grokHome: configuration.grokHomeDirectory?.path,
-                        mode: mode
+                        mode: mode,
+                        executablePath: executable
                     )
                 case .cursor:
                     guard let executable = CursorCLI.resolveExecutable() else {
                         return .failure(.executableMissing)
                     }
-                    if purpose == .trust {
+                    if purpose == .trust || purpose == .approval {
                         let workspace = CursorUsageCLIProbe.defaultWorkspace
                         try FileManager.default.createDirectory(
                             at: workspace,
@@ -532,11 +539,17 @@ enum SetupSessions {
                             [.posixPermissions: 0o700],
                             ofItemAtPath: workspace.path
                         )
-                        script = CursorCLI.workspaceTrustScript(
-                            executablePath: executable,
-                            workspaceDirectory: workspace.path,
-                            completionMarker: completionMarker
-                        )
+                        script = purpose == .trust
+                            ? CursorCLI.workspaceTrustScript(
+                                executablePath: executable,
+                                workspaceDirectory: workspace.path,
+                                completionMarker: completionMarker
+                            )
+                            : CursorCLI.mcpApprovalScript(
+                                executablePath: executable,
+                                workspaceDirectory: workspace.path,
+                                completionMarker: completionMarker
+                            )
                         manualCommand = CursorCLI.workspaceTrustCommand(
                             executablePath: executable,
                             workspaceDirectory: workspace.path
@@ -546,7 +559,7 @@ enum SetupSessions {
                             executablePath: executable,
                             completionMarker: completionMarker
                         )
-                        manualCommand = CursorCLI.loginCommand
+                        manualCommand = CursorCLI.manualLoginCommand(executablePath: executable)
                     }
                 default:
                     return .failure(.stagingFailed)

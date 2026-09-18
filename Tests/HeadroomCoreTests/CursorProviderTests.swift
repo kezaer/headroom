@@ -91,6 +91,7 @@ private struct StubCursorSource: CursorUsageSource {
             (.cliNotFound, .cursorCLIMissing),
             (.loginRequired, .cursorAuthAbsent),
             (.workspaceTrustRequired, .cursorTrustRequired),
+            (.mcpApprovalRequired, .cursorMCPApprovalRequired),
             (.unknownUI, .cursorUnknownUI),
             (.transientCapture, .cursorTransientCapture),
         ]
@@ -124,6 +125,7 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(!CursorUsageCLIProbe.isReadyPrompt("Ask (shift+tab to cycle)"))
         #expect(!CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nWorkspace Trust Required\n[a] Trust this workspace"))
         #expect(!CursorUsageCLIProbe.isReadyPrompt("Cursor Agent\nMCP Server Approval Required\nPlan, search, build anything"))
+        #expect(CursorUsageCLIProbe.isMCPApprovalPrompt("MCP Server Approval Required\nReview servers"))
         #expect(CursorUsageCLIProbe.isWorkspaceTrustPrompt("/!\\ Workspace Trust Required\n[a] Trust this workspace\n[q] Quit"))
 
         #expect(CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usage\n/context"))
@@ -169,6 +171,20 @@ private struct StubCursorSource: CursorUsageSource {
         )
 
         #expect(await probe.capturePanel() == .workspaceTrustRequired)
+        #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("unexpected-input").path))
+    }
+
+    @Test func mcpApprovalNeverReceivesPTYInput() async throws {
+        let (executable, workspace) = try fakeCursorAgent(named: "cursor-agent-mcp")
+        defer { try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent()) }
+        let probe = CursorUsageCLIProbe(
+            cursorPath: executable.path,
+            workingDirectory: workspace.path,
+            bootTimeout: 4,
+            panelTimeout: 4
+        )
+
+        #expect(await probe.capturePanel() == .mcpApprovalRequired)
         #expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("unexpected-input").path))
     }
 
@@ -263,6 +279,62 @@ private final class MutableCursorExecutablePath: @unchecked Sendable {
         #expect(process.terminationStatus == 0)
     }
 
+    @Test func mcpApprovalScriptUsesOfficialCLIWithoutAutomaticApproval() throws {
+        let script = CursorCLI.mcpApprovalScript(
+            executablePath: "/Users/test/.local/bin/cursor-agent",
+            workspaceDirectory: "/tmp/Headroom CursorProbe",
+            completionMarker: SetupCompletionMarker(
+                pendingPath: "/tmp/cursor pending",
+                completedPath: "/tmp/cursor complete"
+            )
+        )
+        #expect(script.contains("Review Cursor Agent’s external tools"))
+        #expect(script.contains("--workspace '/tmp/Headroom CursorProbe'"))
+        #expect(!script.contains("--approve-mcps"))
+
+        let process = Process()
+        let input = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-n"]
+        process.standardInput = input
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        input.fileHandleForWriting.write(Data(script.utf8))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
+    @Test func loginHandoffClearsAPIOverridesBeforeRunningOfficialCLI() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-cursor-login-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("cursor-agent")
+        try """
+        #!/bin/zsh
+        [[ "$1" == login && -z "${CURSOR_API_KEY-}" && -z "${CURSOR_API_ENDPOINT-}" ]]
+        """.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let script = root.appendingPathComponent("login.command")
+        try CursorCLI.loginScript(executablePath: executable.path)
+            .write(to: script, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [script.path]
+        process.environment = [
+            "TERM": "xterm-256color",
+            "CURSOR_API_KEY": "test-override",
+            "CURSOR_API_ENDPOINT": "https://example.invalid",
+        ]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
     @Test func generatedLoginScriptUsesOnlyOfficialCommandAndParsesAsZsh() throws {
         let script = CursorCLI.loginScript(
             executablePath: "/Users/test/.local/bin/cursor-agent",
@@ -272,6 +344,9 @@ private final class MutableCursorExecutablePath: @unchecked Sendable {
             )
         )
         #expect(script.contains("'/Users/test/.local/bin/cursor-agent' login"))
+        #expect(script.contains("unset CURSOR_API_KEY CURSOR_API_ENDPOINT"))
+        #expect(CursorCLI.manualLoginCommand(executablePath: "/Users/test/.local/bin/cursor-agent")
+            == "env -u CURSOR_API_KEY -u CURSOR_API_ENDPOINT '/Users/test/.local/bin/cursor-agent' login")
         #expect(script.contains("complete:${setup_purpose}:${handoff_generation}:${setup_status}"))
         #expect(!script.localizedCaseInsensitiveContains("token"))
 

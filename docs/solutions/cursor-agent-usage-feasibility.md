@@ -51,17 +51,26 @@ screen. Headroom must report that state separately and offer to open the exact p
 workspace in the official CLI for the user to approve. The background probe must never
 send the trust key, and interactive `--trust` does not reliably skip the menu.
 
-After trust, Cursor Agent `2026.09.15-d2fe57e` displays `Plan, search, build anything`
-in place of `Ask (shift+tab to cycle)`. Both are accepted only with the Cursor Agent
+The reported Cursor Agent `2026.09.15-d2fe57e` session displayed `Plan, search,
+build anything`; other sessions still display `Ask (shift+tab to cycle)`. Both are
+accepted only with the Cursor Agent
 banner and without an approval screen. The probe still requires the selected `/usage`
-autocomplete row before it sends the one Kitty Enter. An older CLI may show an MCP server
-approval screen; that remains an unrecognized screen and receives no probe input. Fake
-PTY integration fixtures verify the trust and current-prompt paths without contacting Cursor.
+autocomplete row before it sends the one Kitty Enter. Cursor can also pause on an MCP
+server approval screen when external tools are configured. Headroom classifies that
+separately and offers an official CLI handoff for the user's decision; neither the
+background probe nor the handoff auto-approves servers. Fake PTY fixtures verify
+trust, MCP approval, and current-prompt paths without contacting Cursor.
 
 A 2026-09-18 offscreen `--probe-cursor` run against the locally authenticated CLI
 also parsed a live Pro+ panel (1% included usage, on-demand disabled). An earlier run
 that day returned a transient capture failure; its stage was not recorded, so the
 first failure should not be attributed to a panel-layout change.
+
+The same live probe succeeded with `PATH=/usr/bin:/bin`; a fresh temporary workspace
+opened the real trust screen. Cursor sign-in scripts clear `CURSOR_API_KEY` and
+`CURSOR_API_ENDPOINT` to match the subscription probe, and clipboard fallback commands
+use the executable Headroom resolved. A completed login can lead to trust, then MCP
+approval, then usage; the setup coordinator retries after each user decision.
 
 ## PTY details that are load-bearing
 

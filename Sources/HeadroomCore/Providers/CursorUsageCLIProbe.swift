@@ -253,12 +253,16 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
             master: master,
             maxSeconds: boot,
             into: &buffer,
-            condition: { isReadyPrompt($0) || isWorkspaceTrustPrompt($0) }
+            condition: { isReadyPrompt($0) || isWorkspaceTrustPrompt($0) || isMCPApprovalPrompt($0) }
         )
         let bootText = ANSI.strip(String(decoding: buffer, as: UTF8.self))
         if isWorkspaceTrustPrompt(bootText) {
             teardown()
             return .workspaceTrustRequired
+        }
+        if isMCPApprovalPrompt(bootText) {
+            teardown()
+            return .mcpApprovalRequired
         }
         guard isReadyPrompt(bootText)
         else {
@@ -309,7 +313,7 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     /// themselves.
     static func isReadyPrompt(_ strippedText: String) -> Bool {
         guard !isWorkspaceTrustPrompt(strippedText),
-              !strippedText.localizedCaseInsensitiveContains("MCP Server Approval Required")
+              !isMCPApprovalPrompt(strippedText)
         else { return false }
         return strippedText.localizedCaseInsensitiveContains("Cursor Agent")
             && (strippedText.localizedCaseInsensitiveContains("Ask (shift+tab to cycle)")
@@ -319,6 +323,10 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     static func isWorkspaceTrustPrompt(_ strippedText: String) -> Bool {
         strippedText.localizedCaseInsensitiveContains("Workspace Trust Required")
             && strippedText.localizedCaseInsensitiveContains("Trust this workspace")
+    }
+
+    static func isMCPApprovalPrompt(_ strippedText: String) -> Bool {
+        strippedText.localizedCaseInsensitiveContains("MCP Server Approval Required")
     }
 
     /// Cursor paints an arrow beside the active slash-command completion. Requiring the

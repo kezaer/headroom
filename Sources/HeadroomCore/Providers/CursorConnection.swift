@@ -5,6 +5,10 @@ import Foundation
 public enum CursorCLI {
     public static let executableName = "cursor-agent"
     public static let loginCommand = "cursor-agent login"
+    // Match the subscription probe and use the executable Headroom actually found.
+    public static func manualLoginCommand(executablePath: String) -> String {
+        "env -u CURSOR_API_KEY -u CURSOR_API_ENDPOINT \(shellQuoted(executablePath)) login"
+    }
 
     public static func resolveExecutable() -> String? {
         CursorUsageCLIProbe.resolveCursorPath()
@@ -18,6 +22,7 @@ public enum CursorCLI {
         #!/bin/zsh
         clear
         export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+        unset CURSOR_API_KEY CURSOR_API_ENDPOINT
         echo "Headroom is opening the official Cursor Agent sign-in flow."
         echo "Complete sign-in in the browser, then return to Headroom."
         echo "Headroom never receives your password or sign-in details."
@@ -64,6 +69,36 @@ public enum CursorCLI {
         workspaceDirectory: String,
         completionMarker: SetupCompletionMarker? = nil
     ) -> String {
+        approvalScript(
+            executablePath: executablePath,
+            workspaceDirectory: workspaceDirectory,
+            completionMarker: completionMarker,
+            reason: "Headroom needs Cursor Agent to trust its empty usage workspace.",
+            instruction: "Choose [a] Trust this workspace. When the prompt appears, press Ctrl+C."
+        )
+    }
+
+    public static func mcpApprovalScript(
+        executablePath: String,
+        workspaceDirectory: String,
+        completionMarker: SetupCompletionMarker? = nil
+    ) -> String {
+        approvalScript(
+            executablePath: executablePath,
+            workspaceDirectory: workspaceDirectory,
+            completionMarker: completionMarker,
+            reason: "Cursor Agent wants approval for configured external tools.",
+            instruction: "Review Cursor Agent’s external tools. Approve only ones you trust; then press Ctrl+C."
+        )
+    }
+
+    private static func approvalScript(
+        executablePath: String,
+        workspaceDirectory: String,
+        completionMarker: SetupCompletionMarker?,
+        reason: String,
+        instruction: String
+    ) -> String {
         let executable = shellQuoted(executablePath)
         let invocation = workspaceTrustCommand(
             executablePath: executablePath,
@@ -77,8 +112,8 @@ public enum CursorCLI {
         clear
         export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
         unset CURSOR_API_KEY CURSOR_API_ENDPOINT
-        echo "Headroom needs Cursor Agent to trust its empty usage workspace."
-        echo "Choose [a] Trust this workspace, then quit Cursor Agent and return to Headroom."
+        echo "\(reason)"
+        echo "\(instruction)"
         echo "Headroom will check your usage again after this window closes."
         echo
         if [[ ! -x \(executable) ]]; then
