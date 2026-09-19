@@ -85,8 +85,10 @@ import HeadroomCore
         #expect(script.contains("export CLAUDE_CONFIG_DIR='\(configDirectory)'"))
         #expect(script.contains("'\(staged.completionMarker.completedPath)'"))
         #expect(!script.contains("exec claude"))
-        #expect(staged.manualCommand.contains("CLAUDE_CONFIG_DIR='\(configDirectory)'"))
-        #expect(staged.manualCommand.hasSuffix("'\(launcher.path)'"))
+        // KTD3 (2026-09-19 sign-in plan): the manual command routes through the exported
+        // subshell form, so every command in it binds to this account's config home.
+        #expect(staged.manualCommand.contains("(export CLAUDE_CONFIG_DIR='\(configDirectory)' && "))
+        #expect(staged.manualCommand.hasSuffix("'\(launcher.path)')"))
         #expect(!staged.manualCommand.hasSuffix(" claude"))
 
         await SetupSessions.discardPreparedHandoff(handoff)
@@ -178,7 +180,9 @@ import HeadroomCore
         ))
 
         #expect(command.contains("'\(path)'"))
-        #expect(command.hasSuffix("'\(path)'"))
+        // KTD3 (2026-09-19 sign-in plan): the executable is the last command inside the
+        // routing subshell that every manual command now shares.
+        #expect(command.hasSuffix("'\(path)')"))
         #expect(!command.hasSuffix(" claude"))
     }
 

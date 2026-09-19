@@ -293,6 +293,21 @@ struct ClaudeProviderTests {
         #expect(!ClaudeUsageCLIProbe.printUsageSupported(versionOutput: "not a version"))
     }
 
+    // KTD4 (2026-09-19 sign-in plan): the sign-in floor is a separate three-answer
+    // predicate, because "unreadable" must keep the interactive launch rather than
+    // block sign-in the way a readable-but-old version does.
+    @Test func signInVersionGateSeparatesTooOldFromUnreadable() {
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "2.1.41 (Claude Code)") == .supported)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "2.1.278 (Claude Code)") == .supported)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "3.0.0 (Claude Code)") == .supported)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "2.1.40 (Claude Code)") == .tooOld)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "2.0.99 (Claude Code)") == .tooOld)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "1.0.98 (Claude Code)") == .tooOld)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "") == .unreadable)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "garbage") == .unreadable)
+        #expect(ClaudeUsageCLIProbe.signInSupport(versionOutput: "2.1") == .unreadable)
+    }
+
     @Test func subscriptionPlanHintMapsKnownTiers() {
         #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"subscriptionType":"max"}"#.utf8)) == "Max")
         #expect(ClaudeUsageCLIProbe.subscriptionPlanHint(Data(#"{"subscriptionType":"pro"}"#.utf8)) == "Pro")

@@ -44,6 +44,15 @@ public enum ClaudeAuthStatus: Sendable, Equatable {
     case unsupported
 }
 
+/// Whether the resolved CLI can be handed the sign-in command (`ClaudeUsageCLIProbe
+/// .signInSupport`). Three answers, because "too old" and "unreadable" take opposite
+/// branches at staging.
+public enum ClaudeCLISignInSupport: Sendable, Equatable {
+    case supported
+    case tooOld
+    case unreadable
+}
+
 /// Drives the interactive `claude` CLI in a pseudo-terminal, sends `/usage`, and
 /// returns the rendered panel text. This is the compliant path to the real 5-hour /
 /// weekly windows: the official client makes the request (a free status fetch, no model
@@ -244,6 +253,19 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     static func printUsageSupported(versionOutput: String) -> Bool {
         guard let version = parsedVersion(versionOutput) else { return false }
         return version >= (2, 1, 217)
+    }
+
+    /// KTD4 (2026-09-19 sign-in plan): the sign-in handoff's own floor, separate from
+    /// `ClaudeCLIVersionBand` because that enum is printed by the redaction-safe
+    /// diagnostic. A readable version below 2.1.41 blocks the handoff (R6) — those CLIs
+    /// could sign in and never be confirmed, since every usage check reads `auth
+    /// status` — while an unreadable one keeps today's interactive launch, so a change
+    /// to the CLI's version format cannot lock every user out of sign-in. Pure over the
+    /// already-captured `--version` string: probing by running the subcommand risks an
+    /// older CLI taking `auth login` as a paid model prompt.
+    public static func signInSupport(versionOutput: String) -> ClaudeCLISignInSupport {
+        guard let version = parsedVersion(versionOutput) else { return .unreadable }
+        return version >= (2, 1, 41) ? .supported : .tooOld
     }
 
     public static func versionBand(
