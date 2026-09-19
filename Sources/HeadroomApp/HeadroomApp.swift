@@ -109,7 +109,8 @@ enum Entry {
                 account: accountCategory,
                 versionBand: versionBand,
                 outcome: diagnosticOutcome(for: result),
-                events: events
+                events: events,
+                signOutEvents: AppComposition.signOutRecord.events
             ).forEach { print($0) }
 
             switch result {
@@ -682,6 +683,12 @@ enum AppComposition {
     /// defaults object, so every call site shares one domain regardless of instance.
     static var launchPreferences: Preferences { Preferences(defaults: launchDefaults) }
 
+    /// KTD14 (2026-09-19 sign-in plan): the sign-out record over that same one domain,
+    /// so the running app and `--probe-claude` read and write the same entries. An
+    /// unbundled `swift run Headroom` resolves `.standard` to a different domain than
+    /// the app bundle, so the record is read from the built app's binary.
+    static var signOutRecord: SignOutRecord { SignOutRecord(defaults: launchDefaults) }
+
     /// `arguments` is injected so the demo isolation can be tested from a process that was
     /// not itself launched with `--demo`.
     static func resolveLaunchDefaults(arguments: [String] = CommandLine.arguments) -> UserDefaults {
@@ -736,6 +743,7 @@ enum AppComposition {
             accountRegistry: registry,
             providerFactory: { account in provider(for: account, credentials: credentials) },
             continuityCache: UsageContinuityCache(),
+            signOutRecord: signOutRecord,
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
         )

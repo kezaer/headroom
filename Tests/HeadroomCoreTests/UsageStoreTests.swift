@@ -1910,4 +1910,245 @@ struct UsageStoreTests {
 
         #expect(exporter.exports.last?.apiSpendProviders.isEmpty == true)
     }
+
+    // MARK: - Sign-out record (U6 / KTD14, 2026-09-19 sign-in plan)
+
+    @Test func claudeSignOutAfterLiveUsageRecordsExactlyOneEvent() async {
+        let clock = MutableDateSource(Date(timeIntervalSince1970: 1_000))
+        let record = SignOutRecord(defaults: freshSignOutDefaults(), now: clock.now)
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset)])
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            signOutRecord: record
+        )
+
+        await store.refreshAll()
+        #expect(record.events.isEmpty)
+
+        provider.set(.stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)))
+        clock.set(Date(timeIntervalSince1970: 4_000))
+        await store.refreshAll()
+        await store.refreshAll()
+
+        #expect(record.events.map(\.account) == [AccountKey(providerID: .claude, accountID: .primary)])
+        #expect(record.events.map(\.detectedAt) == [Date(timeIntervalSince1970: 4_000)])
+    }
+
+    @Test func transientCaptureAndUnknownUIChangeNeitherFlagNorList() async {
+        let record = SignOutRecord(defaults: freshSignOutDefaults(), now: { Date(timeIntervalSince1970: 1_000) })
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset)])
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            signOutRecord: record
+        )
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+
+        await store.refreshAll()
+        provider.set(.stale(for: .claude, reason: .providerSetup(.claudeTransientCapture)))
+        await store.refreshAll()
+        provider.set(.stale(for: .claude, reason: .providerSetup(.claudeUnknownUI)))
+        await store.refreshAll()
+
+        #expect(record.events.isEmpty)
+        #expect(record.isLastKnownSignedIn(key))
+
+        // The flag survived both, so the real sign-out that follows is still recorded.
+        provider.set(.stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)))
+        await store.refreshAll()
+        #expect(record.events.count == 1)
+    }
+
+    @Test func signOutRecordIgnoresProvidersOtherThanClaude() async {
+        let record = SignOutRecord(defaults: freshSignOutDefaults(), now: { Date(timeIntervalSince1970: 1_000) })
+        let provider = MutableStubProvider(
+            id: .codex,
+            displayName: "Codex",
+            snapshot: .live(.codex, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset)])
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            signOutRecord: record
+        )
+
+        await store.refreshAll()
+        #expect(!record.isLastKnownSignedIn(AccountKey(providerID: .codex, accountID: .primary)))
+
+        provider.set(.stale(for: .codex, reason: .providerSetup(.codexAuthAbsent)))
+        await store.refreshAll()
+
+        #expect(record.events.isEmpty)
+    }
+
+    /// R16: a sign-out that happened while Headroom was closed is recorded once at the
+    /// next launch, stamped with that launch's detection time.
+    @Test func signOutObservedOnlyAfterRelaunchRecordsOneEventAtDetectionTime() async {
+        let defaults = freshSignOutDefaults()
+        let beforeQuit = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude",
+                             snapshot: .live(.claude, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset)])),
+            ],
+            preferences: freshPreferences(),
+            signOutRecord: SignOutRecord(defaults: defaults, now: { Date(timeIntervalSince1970: 1_000) })
+        )
+        await beforeQuit.refreshAll()
+
+        let afterRelaunch = SignOutRecord(defaults: defaults, now: { Date(timeIntervalSince1970: 8_000) })
+        let relaunched = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude",
+                             snapshot: .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired))),
+            ],
+            preferences: freshPreferences(),
+            signOutRecord: afterRelaunch
+        )
+        await relaunched.refreshAll()
+        await relaunched.refreshAll()
+
+        #expect(afterRelaunch.events.map(\.detectedAt) == [Date(timeIntervalSince1970: 8_000)])
+    }
+
+    /// KTD14: the reset boundary is the durable exclusion — it holds however the session
+    /// ends, including a force-cancelled or settled-failed reset that then polls signed out.
+    @Test func accountResetBoundaryClearsTheFlagSoTheResetSignOutIsNotRecorded() async {
+        let record = SignOutRecord(defaults: freshSignOutDefaults(), now: { Date(timeIntervalSince1970: 1_000) })
+        let provider = MutableStubProvider(
+            id: .claude,
+            displayName: "Claude",
+            snapshot: .live(.claude, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset)])
+        )
+        let store = UsageStore(
+            providers: [provider],
+            preferences: freshPreferences(),
+            signOutRecord: record
+        )
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+
+        await store.refreshAll()
+        provider.set(.stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)))
+        store.invalidateUsageForAccountReset(key)
+
+        await store.refreshAll()
+        await store.refreshAll()
+
+        #expect(!record.isLastKnownSignedIn(key))
+        #expect(record.events.isEmpty)
+    }
+
+    @Test func stopTrackingBuiltInClearsTheFlagSoTheResumedRowRecordsNothing() async {
+        let defaults = freshSignOutDefaults()
+        let record = SignOutRecord(defaults: defaults, now: { Date(timeIntervalSince1970: 1_000) })
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude",
+                             snapshot: .live(.claude, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset)])),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: SignOutTestStorage(),
+            providerFactory: { account in
+                AccountMutableStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    snapshot: .stale(for: account.providerID, reason: .providerSetup(.claudeLoginRequired))
+                )
+            },
+            signOutRecord: record
+        )
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        store.addAccount(for: .claude)
+        await store.refreshAll()
+        #expect(record.isLastKnownSignedIn(key))
+
+        #expect(await store.stopTrackingBuiltInAccount(for: .claude) == .removed)
+        #expect(!record.isLastKnownSignedIn(key))
+
+        // The built-in row reuses `AccountID.primary` across stop and resume, so a
+        // signed-out reading on the resumed row must not read as a new sign-out.
+        #expect(store.resumeTrackingBuiltInAccount(for: .claude) != nil)
+        await store.refreshAll()
+
+        #expect(record.events.isEmpty)
+    }
+
+    @Test func removingAnAccountPurgesItsEvents() async throws {
+        let defaults = freshSignOutDefaults()
+        let record = SignOutRecord(defaults: defaults, now: { Date(timeIntervalSince1970: 1_000) })
+        let store = UsageStore(
+            providers: [
+                StubProvider(id: .claude, displayName: "Claude",
+                             snapshot: .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired))),
+            ],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: SignOutTestStorage(),
+            providerFactory: { account in
+                AccountMutableStubProvider(
+                    id: account.providerID,
+                    accountID: account.id,
+                    snapshot: .live(account.providerID, windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: Date(timeIntervalSince1970: 2_000_000))])
+                )
+            },
+            signOutRecord: record
+        )
+        let added = try #require(store.addAccount(for: .claude))
+        await store.refreshAll()
+        let extraProvider = try #require(
+            store.providers.first(where: { $0.accountKey == added.key }) as? AccountMutableStubProvider
+        )
+        extraProvider.set(.stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)))
+        await store.refreshAll()
+        #expect(record.events(for: added.key).count == 1)
+
+        #expect(await store.removeAccount(added.key) == .removed)
+
+        #expect(record.events(for: added.key).isEmpty)
+        #expect(record.events.isEmpty)
+        #expect(!record.isLastKnownSignedIn(added.key))
+    }
+
+    private func freshSignOutDefaults() -> UserDefaults {
+        let suite = "headroom.signout.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+}
+
+/// Account-scoped provider double whose snapshot can change between refreshes — the
+/// multi-account counterpart of `MutableStubProvider`.
+private final class AccountMutableStubProvider: UsageProvider, @unchecked Sendable {
+    let id: ProviderID
+    let accountID: AccountID
+    let displayName: String
+    private let lock = NSLock()
+    private var _snapshot: UsageSnapshot
+
+    init(id: ProviderID, accountID: AccountID, displayName: String = "P", snapshot: UsageSnapshot) {
+        self.id = id
+        self.accountID = accountID
+        self.displayName = displayName
+        self._snapshot = snapshot
+    }
+
+    func set(_ snapshot: UsageSnapshot) { lock.withLock { _snapshot = snapshot } }
+    func fetchSnapshot() async -> UsageSnapshot { lock.withLock { _snapshot } }
+}
+
+/// No-op storage so these tests never touch the real Application Support tree
+/// (AGENTS.md: the suite is all mocked).
+private struct SignOutTestStorage: AccountStorageManaging {
+    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }

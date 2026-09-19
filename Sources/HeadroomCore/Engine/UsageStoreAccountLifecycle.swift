@@ -24,6 +24,11 @@ extension UsageStore {
     /// so the next accepted result cannot merge windows from the previous login.
     public func invalidateUsageForAccountReset(_ key: AccountKey) {
         attachmentGenerations[key, default: 0] &+= 1
+        // KTD14 (2026-09-19 sign-in plan): a deliberate sign-out is not an observed
+        // change. Clearing the flag at the reset boundary — rather than reading the
+        // coordinator's session purpose, which Stop Waiting and a settled failure both
+        // erase — makes the exclusion hold however that session ends.
+        signOutRecord?.clearLastKnownSignedIn(for: key)
         snapshots[key] = .pending(for: key.providerID)
         continuityCache?.remove(for: key)
         exportWidgetSnapshot()
@@ -114,6 +119,8 @@ extension UsageStore {
             return .failed
         }
         accountRegistry.removeAccount(key)
+        // KTD14: the account's history goes with its config home.
+        signOutRecord?.purgeEvents(for: key)
         detachAccount(key)
         return .removed
     }
@@ -166,6 +173,10 @@ extension UsageStore {
 
     func detachAccount(_ key: AccountKey) {
         attachmentGenerations[key, default: 0] &+= 1
+        // KTD14: the built-in row reuses `AccountID.primary` across stop and resume, so a
+        // detached row's flag must not survive to make the resumed row's first signed-out
+        // reading look like a sign-out Headroom observed.
+        signOutRecord?.clearLastKnownSignedIn(for: key)
         providers.removeAll { $0.accountKey == key }
         snapshots.removeValue(forKey: key)
         continuityCache?.remove(for: key)
