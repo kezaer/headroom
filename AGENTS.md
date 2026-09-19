@@ -81,6 +81,16 @@ the user remains responsible for closing the still-visible Terminal process. Eve
 config, so changing its login is machine-wide (including Terminal), and old/mid-handoff usage
 is generation-rejected until a fresh post-handoff capture arrives.
 
+Claude's handoff has two script kinds, chosen at staging (Sep 2026). **Sign In** runs the
+`signIn` script: it reads the `loggedIn` field of `claude auth status --json`, runs `claude auth
+login` when the account is signed out, prints one result line, and exits with sign-in's own
+status. That process exit is the completion signal, so nothing polls while Terminal is open;
+waiting is bounded by a 5-minute timeout whose **Try Again** fronts the open Terminal and
+resumes. **Open Claude Workspace** (purpose `.trust`), an unreadable CLI version, and an extra
+account below the print-mode floor keep the `interactive` bare launch, which is polled after
+each result lands. A readable version below 2.1.41 opens no Terminal and reads **Update Claude
+Code**. Codex, Grok and Cursor keep their 3/7/15/30-second ladder.
+
 Each provider has a persisted primary selection. **Make Main** reorders the selected row to the
 top, refreshes only it, and immediately reroutes the menu bar, widgets, phone projection,
 capability recovery, and the never-signed-in timer exemption. A dangling primary pointer falls
@@ -191,6 +201,18 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   quiet-period capture across re-renders, login-shell PATH resolution (works from a bare
   Finder-launch env), off-main-actor. Preserve these when editing `ClaudeUsageCLIProbe`;
   the PTY path is the live fallback for CLIs below the print-mode version floor.
+- **Claude's `.trust` and `.setup` handoffs must stay different scripts.** Until Sep 2026 both ran
+  bare `claude`, because one launch covered first sign-in and the workspace-approval prompt. Bare
+  `claude` only shows a login screen on a never-onboarded config, so a returning user landed on a
+  prompt with a small "Not logged in · Run /login" footer. The `signIn` script fixed that, but its
+  already-signed-in guard exits before the approval prompt can appear — route approval recovery
+  through it and the card re-detects the approval need forever. Keep `.claudeTrustRequired` on
+  `.openClaudeWorkspace` → `beginWorkspaceTrust`. Two more rules in the same script: the
+  invocation must END with sign-in's saved status (`SetupCompletionCommand.wrap` records the last
+  command's status, so a trailing `echo` would record every failed sign-in as succeeded), and the
+  guard reads the `loggedIn` JSON field, never the status command's exit code, which was verified
+  on one CLI version only. Script and manual command share one exported-subshell routing: a
+  one-command env prefix would send an extra account's `auth login` to the default login.
 - **Codex setup must remain a CLI handoff.** Keep `CodexCLI.loginCommand`, provider recovery
   copy, Terminal execution, and clipboard fallback on `codex login`. Resolve the executable
   through `CLIExecutableResolver` so Finder launches still support Homebrew/NVM/asdf/mise

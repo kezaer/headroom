@@ -118,7 +118,63 @@ official `claude` CLI's `/usage` panel instead.
   describing the path as supported; see
   `docs/solutions/cursor-agent-usage-feasibility.md`.
 
+## Sign-in handoff residuals (2026-09-19)
+
+Deferred from `docs/plans/2026-09-19-1236-fix-claude-sign-in-handoff-plan.md`.
+
+- **The widget snapshot read blocks the main thread behind a macOS permission prompt.**
+  `UsageStore.refreshAll` → `exportWidgetSnapshot` → `WidgetSnapshotCache.write` →
+  `containsIncompatiblePayload` reads the app-group container with a synchronous
+  `Data(contentsOf:)` on the main actor. When macOS shows "Headroom would like to access data
+  from other apps", `open()` blocks until the user answers, and the popover and menu bar freeze
+  with it. Observed 2026-09-19 with `sample`: a debug test host sat in `open()` at 0% CPU for 14
+  minutes. Move the container I/O off the main actor.
+- **Local builds re-prompt for the app-group container on every rebuild.** The Mac app is not
+  sandboxed and uses the iOS-style group `group.com.kylezantos.headroom`, which macOS 15+ only
+  treats as the app's own when an embedded provisioning profile lists it. `Scripts/build-app.sh`
+  embeds a profile only when `HEADROOM_PROVISIONING_PROFILE` is set, so dev builds and the
+  `HeadroomAppTests` host prompt, and each rebuild re-signs and asks again. It stalls
+  `xcodebuild test` for 5–15 minutes per run. Candidate fixes: a Team-ID-prefixed group for the
+  Mac build (already an env var, `HEADROOM_APP_GROUP_IDENTIFIER`; the widget extension must
+  match), or a no-op widget exporter for the test host. Unverified: whether the shipped
+  Developer ID DMG prompts too.
+- **Reset leaks old-login usage through the store.** The coordinator ignores live results during
+  a reset, but `UsageStore.merge` still publishes a timer poll that lands between Terminal
+  opening and `auth logout` finishing, to the card, menu bar, widget and phone projection. The
+  sign-in plan stopped coordinator checks during a reset handoff, which removes its own
+  contribution. The same window can re-arm the sign-out record's flag, so a reset the user then
+  abandons logs one phantom sign-out. Needs a store-level "suppress until handoff ends" gate.
+- **Console (API billing) sign-in reads as a transient failure forever.** `auth status` reports
+  signed in, `/usage` has no windows, and the outcome is "Couldn't read Claude usage — will
+  retry" with `isPermanent == false`. The `auth status` JSON carries `authMethod` and
+  `subscriptionType`, which could type this state.
+- **The usage probe runs `claude auth status` on every poll with no version gate.** Below CLI
+  2.1.41 an older CLI could take it as a model prompt. Staging now refuses those versions for
+  sign-in and reset, but the probe itself is ungated.
+- **Marker liveness trusts a bare PID.** `setupHandoffIsActive` treats `kill(pid, 0) == 0` as
+  alive with no start-time check, so a recycled PID can pin a handoff as open.
+- **The header waiting clock follows built-in accounts only** (`headerWaitingAccount`), so an
+  extra account's handoff never shows "Waiting 31s".
+- **`CLIExecutableLocatorTests.staleGenerationCompletionJoinsReplacementWithoutStartingThirdSearch`
+  failed once** in a full `swift test` run on 2026-09-19, then passed in isolation and in every
+  later full run. Timing-sensitive; not touched by the sign-in work.
+- **Live QA still owed for the sign-in plan:** the fixed-port concurrency check (two Claude
+  sign-ins at once; if the second cannot bind its callback, add `.claude` to
+  `requiresExclusiveLoginSlot`), what `auth login` exits with when the browser tab is abandoned,
+  and the visual acceptance of each waiting phase in both appearances.
+
 ## Reliability (carried from earlier review)
+
+- **Unregistered account homes are never swept (2026-09-19).** Nothing reconciles
+  `~/Library/Application Support/Headroom/Accounts/<provider>/` against `AccountRegistry`, so a
+  home whose registry row is lost stays on disk forever. Found 14 empty Claude homes from
+  2026-07-16 on the dev machine (created in same-minute pairs, consistent with tests that wrote
+  to the real root before `baseDirectoryURL` injection); moved to Trash by hand. The shipped
+  add/remove paths look balanced, so user impact is unproven. Related trap: running
+  `claude auth status` with `CLAUDE_CONFIG_DIR` pointed at an empty home makes the CLI write a
+  `.claude.json` stub there, so a diagnostic sweep must not probe homes it has not first matched
+  to the registry. If a sweep is added, only remove homes that are unregistered **and** have no
+  active setup marker.
 
 - **No backoff on repeated failures.** Both providers retry every cycle at the fixed
   interval. Exponential backoff on consecutive transient failures would be gentler on a
@@ -432,10 +488,8 @@ primary findings were applied; these are the demoted coverage/advisory notes):
 
 ## Round-2 residuals (2026-09-06, T1A–S5A)
 
-- **`ProviderSetupRecoveryCard`'s primary is still `.borderedProminent` beside a chip secondary.**
-  B3A reassigned every bare `HoverButtonStyle` text button to the chip, but no anchor covered
-  restyling a native prominent primary, so that one card foot still mixes languages. Decide
-  whether the popover's primaries become a filled chip variant or the card keeps AppKit's button.
+- ~~**`ProviderSetupRecoveryCard`'s primary is still `.borderedProminent` beside a chip secondary.**~~
+  Stale as of 2026-09-19: the card's primary and secondary both use `SetupChipButtonStyle`.
 - ~~**`APISpendPresentation.qualifier(kind:)` has no call sites.**~~ Deleted 2026-09-10.
 - **The stale and balance spend rows have no fixture outside `--demo spend-states`.** Every
   other scenario ships the same two live rows, so the state tags, wrapping message, and CTA row
@@ -514,9 +568,10 @@ primary findings were applied; these are the demoted coverage/advisory notes):
   pill on the Accounts `•••` `Menu` (R2C21), swatch hover/press bands (R2M6), sidebar focus on
   open (R2M8), and the dark menu-bar vessel, which brightens with the R2C4b dark critical fill.
 - **Reduce Motion pass is Kyle's** (agents do not change accessibility settings).
-- **Setup body prose still says "connect"** as Headroom's own act ("Headroom reconnects
-  automatically", "Headroom connects as soon as you approve"); R2C6 scoped to status, buttons,
-  header and card title. One-line fixes if the verb should go everywhere.
+- **Setup body prose still says "connect"** as Headroom's own act. The Claude approval body was
+  fixed 2026-09-19 ("Headroom continues as soon as you approve"), when waiting copy came under the
+  copy-rule tests. Still open in `CodexSetupViews.swift`: "Headroom reconnects automatically" and
+  "Headroom will reconnect when Codex confirms it." One-line fixes if the verb should go everywhere.
 
 
 ## Widget craft residuals (2026-09-11, WCF1–WCD3)
