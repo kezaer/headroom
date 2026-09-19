@@ -161,7 +161,10 @@ enum SetupSessions {
                 store.accounts(for: key.providerID).contains(where: { $0.key == key })
             },
             requestRefresh: { key in store.refreshAccountNow(key) },
-            resetBoundary: { key in store.invalidateUsageForAccountReset(key) }
+            resetBoundary: { key in store.invalidateUsageForAccountReset(key) },
+            // KTD9 (2026-09-19 sign-in plan): a check already in flight when Terminal
+            // exits must not settle the verification that follows it.
+            handoffBoundary: { key in store.invalidateUsageForHandoffBoundary(key) }
         )
         self.coordinator = coordinator
         store.attachSetupCoordinator(coordinator)
@@ -172,11 +175,19 @@ enum SetupSessions {
                     builtInClaudeWorkspace: builtInClaudeWorkspace
                 )
                 if AccountStorage.setupHandoffIsActive(marker: marker) {
+                    // KTD8: the policy and the terminal app come from the record this
+                    // handoff saved when it opened, never from the CLI version now
+                    // installed — that can change while the original window is open.
+                    let record = AccountStorage.setupHandoffRecord(marker: marker)
+                    let startedAt = AccountStorage.setupHandoffStartedAt(marker: marker)
                     coordinator.restoreActiveHandoff(
                         account.key,
                         mode: AccountStorage.setupHandoffMode(marker: marker) ?? .standard,
-                        purpose: AccountStorage.setupHandoffPurpose(marker: marker) ?? .setup
+                        purpose: AccountStorage.setupHandoffPurpose(marker: marker) ?? .setup,
+                        policy: record?.waitingPolicy,
+                        startedAt: startedAt
                     )
+                    noteHandoffTerminalApp(record?.terminalBundleIdentifier, for: account.key)
                     restoreWaitingStart(for: account.key, marker: marker)
                     monitorCompletion(marker, for: account.key)
                 } else {
@@ -350,14 +361,20 @@ enum SetupSessions {
     /// Connect button or expose caught filesystem/AppKit errors.
     static func failureMessage(for account: ProviderAccount) -> String? {
         guard case .failed(let failure) = state(for: account) else { return nil }
-        return failureMessage(for: failure, account: account)
+        return failureMessage(
+            for: failure,
+            account: account,
+            purpose: coordinator?.sessionPurpose(for: account.key)
+        )
     }
 
     /// Pure over the typed failure, so the copy for a staging refusal is testable without
-    /// an open session.
+    /// an open session. KTD7 (2026-09-19 sign-in plan): the timeout's sentence follows the
+    /// handoff purpose, which is why the purpose is a parameter rather than read inside.
     static func failureMessage(
         for failure: SetupSessionFailure,
-        account: ProviderAccount
+        account: ProviderAccount,
+        purpose: SetupHandoffPurpose? = nil
     ) -> String {
         switch failure {
         case .executableMissing:
@@ -376,6 +393,16 @@ enum SetupSessions {
             // R2B1: prose names the button it points at, so "Check Now" is capitalised the
             // way the chip beside this sentence is.
             return "Sign-in wasn’t confirmed. Check Now, or reopen the official CLI."
+        case .waitingTimedOut:
+            // R8/KTD12: this state offers Try Again and Stop Waiting only, so the sentence
+            // names no button — unlike `.retryExhausted`, which still points at Check Now.
+            return purpose == .trust
+                ? "Approval wasn’t confirmed."
+                : "Sign-in wasn’t confirmed."
+        case .closedBeforeSignIn:
+            // R11: the window is gone and the account is still signed out. The status the
+            // wrapper recorded is unobservable for an abandoned sign-in, so it says nothing.
+            return "Terminal closed before sign-in finished."
         case .provider(let outcome):
             return outcome.message
         case .providerCapability(let capability):
@@ -734,8 +761,9 @@ enum SetupSessions {
         guard let prepared = preparedScripts.removeValue(forKey: handoff.accountKey) else {
             return .failure(.stagingFailed)
         }
+        let generation: String
         do {
-            try AccountStorage.prepareSetupCompletionMarker(
+            generation = try AccountStorage.prepareSetupCompletionMarker(
                 prepared.completionMarker,
                 mode: handoff.mode,
                 purpose: handoff.purpose
@@ -749,6 +777,21 @@ enum SetupSessions {
         let handlerBundleIdentifier = NSWorkspace.shared
             .urlForApplication(toOpen: prepared.scriptURL)
             .flatMap { Bundle(url: $0)?.bundleIdentifier }
+        // KTD8: save the decisions a relaunch cannot re-derive, beside the generation and
+        // outside the marker lines the wrapper pins. A record that cannot be written is
+        // not worth refusing the handoff over — restore falls back by purpose.
+        try? AccountStorage.writeSetupHandoffRecord(
+            SetupHandoffRecord(
+                waitingPolicy: .staged(
+                    providerID: handoff.accountKey.providerID,
+                    purpose: handoff.purpose,
+                    claudeScriptKind: handoff.claudeScriptKind
+                ),
+                terminalBundleIdentifier: handlerBundleIdentifier
+            ),
+            marker: prepared.completionMarker,
+            generation: generation
+        )
         guard NSWorkspace.shared.open(prepared.scriptURL) else {
             AccountStorage.clearPreparedSetupCompletionMarker(prepared.completionMarker)
             try? FileManager.default.removeItem(at: prepared.scriptURL)

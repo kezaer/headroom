@@ -194,10 +194,12 @@ import Testing
         #expect(harness.scheduler.pendingCount == 0)
     }
 
+    /// KTD6 moved Claude off the retry ladder, so the ladder's own cancellation is pinned
+    /// on a provider that still runs it. The assertions are unchanged.
     @Test func forceCancelWaitingHandoffMakesPendingRetryInert() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()
-        let account = ProviderAccount(id: AccountID("claude-extra"), providerID: .claude, label: "Work", isBuiltIn: false)
+        let account = ProviderAccount(id: AccountID("codex-extra"), providerID: .codex, label: "Work", isBuiltIn: false)
 
         coordinator.begin(for: account)
         await settleTasks()
@@ -383,10 +385,12 @@ import Testing
         #expect(coordinator.state(for: account.key) == .connected)
     }
 
+    /// KTD6 made a Claude reset exit-signalled, so the ladder failure this pins is now a
+    /// ladder provider's. The retained-purpose rule it asserts is provider-independent.
     @Test func retryFailureKeepsResetPurposeWhileWrapperCanStillRescueSession() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator(retryDelays: [.seconds(1)])
-        let account = ProviderAccount.builtIn(for: .claude)
+        let account = ProviderAccount.builtIn(for: .codex)
 
         coordinator.beginReset(for: account)
         await settleTasks()
@@ -394,11 +398,11 @@ import Testing
 
         #expect(coordinator.state(for: account.key) == .failed(.retryExhausted))
         #expect(coordinator.sessionPurpose(for: account.key) == .reset)
-        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        coordinator.receive(.live(.codex, windows: []), for: account.key)
         #expect(coordinator.state(for: account.key) == .failed(.retryExhausted))
 
         coordinator.handoffDidEnd(account.key, completion: .succeeded)
-        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        coordinator.receive(.live(.codex, windows: []), for: account.key)
 
         #expect(coordinator.state(for: account.key) == .connected)
     }
@@ -465,10 +469,12 @@ import Testing
         #expect(!coordinator.hasActiveHandoff(for: account.key))
     }
 
+    /// KTD6 moved Claude off the retry ladder; the ladder itself is unchanged and is
+    /// pinned here on a provider that still runs it.
     @Test func retriesUseVirtualSchedulerAndStopAfterLive() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator(retryDelays: [.seconds(1), .seconds(2)])
-        let account = ProviderAccount(id: AccountID("claude-extra"), providerID: .claude, label: "Work", isBuiltIn: false)
+        let account = ProviderAccount(id: AccountID("codex-extra"), providerID: .codex, label: "Work", isBuiltIn: false)
 
         coordinator.begin(for: account)
         await settleTasks()
@@ -478,7 +484,7 @@ import Testing
         #expect(harness.refreshCalls == [account.key])
         #expect(harness.scheduler.pendingCount == 1)
 
-        coordinator.receive(.init(providerID: .claude, windows: [], planLabel: nil, capturedAt: Date(), freshness: .live), for: account.key)
+        coordinator.receive(.init(providerID: .codex, windows: [], planLabel: nil, capturedAt: Date(), freshness: .live), for: account.key)
         #expect(coordinator.state(for: account.key) == .connected)
         #expect(harness.scheduler.pendingCount == 0)
     }
@@ -917,6 +923,446 @@ import Testing
         #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
     }
 
+    // MARK: - KTD6 to KTD8: the Claude waiting policy, its timeout and resume
+
+    /// KTD6: every check during a sign-in handoff would read signed-out until the CLI
+    /// process exits, and the marker monitor reports that exit within 500 ms.
+    @Test func exitSignalledClaudeHandoffSchedulesOnlyItsWaitingTimeout() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(coordinator.waitingPolicy(for: account.key) == .exitSignalled)
+        #expect(harness.scheduler.pendingDelays == [.seconds(300)])
+        #expect(harness.refreshCalls.isEmpty)
+    }
+
+    /// KTD6: a reset drives the CLI's own logout/login pair, so the stamped script kind
+    /// describes shape only — the purpose is what decides the policy.
+    @Test func resetHandoffIsExitSignalledWhateverScriptKindWasStaged() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .interactive
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+
+        #expect(coordinator.waitingPolicy(for: account.key) == .exitSignalled)
+        #expect(harness.scheduler.pendingDelays == [.seconds(300)])
+
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(coordinator.state(for: account.key) == .verifying)
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        #expect(coordinator.state(for: account.key) == .connected)
+    }
+
+    /// KTD6: the polled chain is driven by landed results, never by a fixed interval —
+    /// `UsageStore.refreshAccount` holds a global flag a shorter interval would monopolise.
+    @Test func polledClaudeHandoffSchedulesOneCheckPerLandedResult() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .interactive
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+
+        #expect(coordinator.waitingPolicy(for: account.key) == .polled)
+        #expect(harness.scheduler.pendingDelays == [.seconds(300), .seconds(10)])
+
+        harness.scheduler.fire(after: .seconds(10))
+        #expect(harness.refreshCalls == [account.key])
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(harness.scheduler.pendingDelays == [.seconds(300)])
+
+        coordinator.receive(.stale(for: .claude, reason: .transient("redacted")), for: account.key)
+        #expect(harness.scheduler.pendingDelays == [.seconds(300), .seconds(10)])
+
+        coordinator.receive(
+            .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)),
+            for: account.key
+        )
+        #expect(harness.scheduler.pendingDelays == [.seconds(300), .seconds(10)])
+    }
+
+    /// KTD6: a capability failure never reaches `receive`, so without this channel one
+    /// inconclusive locator result would end polling until the timeout.
+    @Test func polledClaudeHandoffRearmsFromACapabilityFailureToo() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .interactive
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        harness.scheduler.fire(after: .seconds(10))
+        #expect(harness.scheduler.pendingDelays == [.seconds(300)])
+
+        coordinator.receiveCapabilityFailure(.inconclusive(.shellTimeout), for: .claude)
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(harness.scheduler.pendingDelays == [.seconds(300), .seconds(10)])
+    }
+
+    /// Other providers keep today's ladder and its exhaustion exactly, and the Claude
+    /// timeout never joins it.
+    @Test func codexHandoffKeepsItsLadderAndItsExhaustion() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator(retryDelays: [.seconds(3), .seconds(7)])
+        let account = ProviderAccount(
+            id: AccountID("codex-extra"),
+            providerID: .codex,
+            label: "Work",
+            isBuiltIn: false
+        )
+
+        coordinator.begin(for: account)
+        await settleTasks()
+
+        #expect(coordinator.waitingPolicy(for: account.key) == .retryLadder)
+        #expect(harness.scheduler.pendingDelays == [.seconds(3)])
+
+        harness.scheduler.fireNext()
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 1))
+        #expect(harness.scheduler.pendingDelays == [.seconds(7)])
+
+        harness.scheduler.fireNext()
+        #expect(coordinator.state(for: account.key) == .failed(.retryExhausted))
+        #expect(coordinator.hasActiveHandoff(for: account.key))
+    }
+
+    /// KTD7: the timeout is its own case, because `.retryExhausted` is the state that
+    /// still offers every other provider Sign In and Check Now.
+    @Test func claudeWaitingTimeoutYieldsItsOwnFailureAndKeepsTheHandoffOpen() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        harness.scheduler.fire(after: .seconds(300))
+
+        #expect(coordinator.state(for: account.key) == .failed(.waitingTimedOut))
+        #expect(coordinator.hasActiveHandoff(for: account.key))
+        #expect(harness.refreshCalls.isEmpty)
+    }
+
+    /// R9: a sign-in that finishes after the timeout still connects with no user action.
+    @Test func lateTerminalExitAfterTheTimeoutStillVerifiesAndConnects() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        harness.scheduler.fire(after: .seconds(300))
+        #expect(coordinator.state(for: account.key) == .failed(.waitingTimedOut))
+
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(coordinator.state(for: account.key) == .verifying)
+
+        coordinator.receive(.live(.claude, windows: []), for: account.key)
+        #expect(coordinator.state(for: account.key) == .connected)
+    }
+
+    /// KTD7: the timer registers in `invalidateWork` and checks its generation, so an
+    /// exit that lands first leaves the disarmed timeout inert.
+    @Test func theWaitingTimeoutCannotFireDuringVerification() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(coordinator.state(for: account.key) == .verifying)
+
+        harness.scheduler.fire(after: .seconds(300), includingCancelled: true)
+
+        #expect(coordinator.state(for: account.key) == .verifying)
+    }
+
+    /// KTD8: resume never calls `start`, so the open handoff survives and the refusal
+    /// state is never entered.
+    @Test func resumeWaitingFromTheTimeoutReturnsToWaitingAndRearmsOneTimeout() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        harness.scheduler.fire(after: .seconds(300))
+        #expect(coordinator.state(for: account.key) == .failed(.waitingTimedOut))
+
+        coordinator.resumeWaiting(for: account.key)
+        await settleTasks()
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(coordinator.hasActiveHandoff(for: account.key))
+        #expect(harness.scheduler.pendingDelays == [.seconds(300)])
+        #expect(harness.prepareCalls.count == 1)
+        #expect(harness.openCalls == [account.key])
+    }
+
+    @Test func resumedPolledHandoffResumesItsPolling() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .interactive
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        harness.scheduler.fire(after: .seconds(10))
+        harness.scheduler.fire(after: .seconds(300))
+        #expect(coordinator.state(for: account.key) == .failed(.waitingTimedOut))
+
+        coordinator.resumeWaiting(for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(harness.scheduler.pendingDelays == [.seconds(300), .seconds(10)])
+    }
+
+    @Test func resumeWaitingWithNoActiveHandoffIsANoOp() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+
+        coordinator.resumeWaiting(for: key)
+        await settleTasks()
+
+        #expect(coordinator.state(for: key) == .idle)
+        #expect(harness.scheduler.pendingCount == 0)
+        #expect(harness.prepareCalls.isEmpty)
+        #expect(harness.openCalls.isEmpty)
+    }
+
+    /// The refusal a second Sign In click earns is unchanged by the new entry point.
+    @Test func aSecondBeginWhileWaitingStillBlocksAndOpensNothing() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.begin(for: account)
+        await settleTasks()
+
+        #expect(coordinator.state(for: account.key) == .blockedByOpenHandoff)
+        #expect(harness.prepareCalls.count == 1)
+        #expect(harness.openCalls == [account.key])
+    }
+
+    // MARK: - KTD8/R15: a handoff restored after relaunch
+
+    /// R15: the timeout is measured from the handoff's original start, so a wait that had
+    /// already expired while Headroom was closed lands in the timeout state rather than
+    /// granting the user a fresh five minutes.
+    @Test func restoredHandoffOlderThanTheTimeoutLandsInTheTimeoutState() {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        harness.existingAccounts.insert(key)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        coordinator.restoreActiveHandoff(
+            key,
+            policy: .exitSignalled,
+            startedAt: now.addingTimeInterval(-400),
+            now: now
+        )
+
+        #expect(coordinator.state(for: key) == .failed(.waitingTimedOut))
+        #expect(coordinator.hasActiveHandoff(for: key))
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
+    @Test func restoredHandoffTwoMinutesOldArmsTheRemainingThreeMinutes() {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        harness.existingAccounts.insert(key)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        coordinator.restoreActiveHandoff(
+            key,
+            policy: .exitSignalled,
+            startedAt: now.addingTimeInterval(-120),
+            now: now
+        )
+
+        #expect(coordinator.state(for: key) == .waiting(attempt: 0))
+        #expect(harness.scheduler.pendingDelays == [.seconds(180)])
+    }
+
+    /// KTD8: `setupHandoffStartedAt` returns nil for a legacy, unparseable or future-dated
+    /// start. A fresh full timeout keeps that wait bounded instead of unbounded.
+    @Test func restoredHandoffWithNoReadableStartArmsAFreshTimeout() {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        harness.existingAccounts.insert(key)
+
+        coordinator.restoreActiveHandoff(key, policy: .exitSignalled, startedAt: nil)
+
+        #expect(coordinator.state(for: key) == .waiting(attempt: 0))
+        #expect(harness.scheduler.pendingDelays == [.seconds(300)])
+    }
+
+    /// KTD8: the policy comes from the record saved when the handoff opened. Both cases
+    /// pass a purpose whose no-record fallback is the opposite answer, so a restore that
+    /// re-derived the policy instead of reading it would fail here.
+    @Test func restoredHandoffFollowsItsSavedPolicyNotTheFallback() {
+        let polledHarness = SetupCoordinatorHarness()
+        let polled = polledHarness.makeCoordinator()
+        let setupKey = AccountKey(providerID: .claude, accountID: .primary)
+        polledHarness.existingAccounts.insert(setupKey)
+
+        polled.restoreActiveHandoff(setupKey, purpose: .setup, policy: .polled, startedAt: nil)
+
+        #expect(polled.waitingPolicy(for: setupKey) == .polled)
+        #expect(polledHarness.scheduler.pendingDelays == [.seconds(300), .seconds(10)])
+
+        let exitHarness = SetupCoordinatorHarness()
+        let exitSignalled = exitHarness.makeCoordinator()
+        let trustKey = AccountKey(providerID: .claude, accountID: AccountID("claude-extra"))
+        exitHarness.existingAccounts.insert(trustKey)
+
+        exitSignalled.restoreActiveHandoff(
+            trustKey,
+            purpose: .trust,
+            policy: .exitSignalled,
+            startedAt: nil
+        )
+
+        #expect(exitSignalled.waitingPolicy(for: trustKey) == .exitSignalled)
+        #expect(exitHarness.scheduler.pendingDelays == [.seconds(300)])
+    }
+
+    /// KTD8: a handoff opened by a build that saved no record falls back by purpose.
+    @Test func restoredHandoffWithNoRecordFallsBackByPurpose() {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let setupKey = AccountKey(providerID: .claude, accountID: .primary)
+        let trustKey = AccountKey(providerID: .claude, accountID: AccountID("claude-extra"))
+        harness.existingAccounts.formUnion([setupKey, trustKey])
+
+        coordinator.restoreActiveHandoff(setupKey, purpose: .setup)
+        coordinator.restoreActiveHandoff(trustKey, purpose: .trust)
+
+        #expect(coordinator.waitingPolicy(for: setupKey) == .exitSignalled)
+        #expect(coordinator.waitingPolicy(for: trustKey) == .polled)
+    }
+
+    /// Other providers keep today's restore exactly: no ladder is resumed and no timeout
+    /// is armed for a handoff that outlived the launch which opened it.
+    @Test func restoredCodexHandoffSchedulesNothingAsBefore() {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        harness.existingAccounts.insert(key)
+
+        coordinator.restoreActiveHandoff(key)
+
+        #expect(coordinator.state(for: key) == .waiting(attempt: 0))
+        #expect(coordinator.waitingPolicy(for: key) == .retryLadder)
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
+    // MARK: - KTD9/KTD10: the exit boundary and the closed-early failure
+
+    /// R12/KTD9: a check already in flight when Terminal exits must not settle the
+    /// verification, so the boundary is crossed before the refresh that follows it.
+    @Test func handoffEndCrossesTheGenerationBoundaryBeforeItsRefresh() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        #expect(harness.handoffBoundaryCalls.isEmpty)
+
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+
+        #expect(harness.handoffBoundaryCalls == [account.key])
+        #expect(harness.callOrder == ["boundary", "refresh"])
+    }
+
+    /// KTD9 applies to every purpose, and a reset still crosses its own boundary too.
+    @Test func everyPurposeCrossesTheBoundaryAtHandoffEnd() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let claude = ProviderAccount.builtIn(for: .claude)
+        let codex = ProviderAccount.builtIn(for: .codex)
+
+        coordinator.beginReset(for: claude)
+        await settleTasks()
+        coordinator.handoffDidEnd(claude.key, completion: .succeeded)
+        coordinator.begin(for: codex)
+        await settleTasks()
+        coordinator.handoffDidEnd(codex.key, completion: .failed)
+
+        #expect(harness.handoffBoundaryCalls == [claude.key, codex.key])
+        #expect(harness.resetBoundaryCalls == [claude.key, claude.key])
+    }
+
+    /// AE5/KTD10: `auth login`'s status on an abandoned sign-in is unobserved, so the
+    /// message cannot depend on it — every completion reads the same.
+    @Test(arguments: [SetupHandoffCompletion.succeeded, .failed, .unknown])
+    func finalCheckStillSignedOutIsClosedBeforeSignIn(_ completion: SetupHandoffCompletion) async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: completion)
+        #expect(coordinator.finalVerificationCompletion(for: account.key) == completion)
+
+        coordinator.receive(
+            .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired)),
+            for: account.key
+        )
+
+        #expect(coordinator.state(for: account.key) == .failed(.closedBeforeSignIn))
+        #expect(coordinator.finalVerificationCompletion(for: account.key) == nil)
+    }
+
+    @Test func forceCancelDuringVerificationClearsThePendingFinalRefresh() async {
+        let harness = SetupCoordinatorHarness()
+        harness.claudeScriptKind = .signIn
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .claude)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(coordinator.state(for: account.key) == .verifying)
+        #expect(coordinator.finalVerificationCompletion(for: account.key) == .succeeded)
+
+        coordinator.forceCancel(account.key)
+
+        #expect(coordinator.state(for: account.key) == .cancelled)
+        #expect(coordinator.finalVerificationCompletion(for: account.key) == nil)
+        #expect(coordinator.waitingPolicy(for: account.key) == nil)
+        #expect(harness.scheduler.pendingCount == 0)
+    }
+
     private func settleTasks() async {
         for _ in 0..<20 { await Task.yield() }
     }
@@ -947,19 +1393,30 @@ private final class SetupCoordinatorHarness {
     var discardCalls: [AccountKey] = []
     var refreshCalls: [AccountKey] = []
     var resetBoundaryCalls: [AccountKey] = []
+    /// KTD9 (2026-09-19 sign-in plan): the generation boundary crossed when Terminal exits.
+    var handoffBoundaryCalls: [AccountKey] = []
+    /// KTD9: the boundary has to be crossed before the refresh it guards, so the two
+    /// callbacks share one ordered log.
+    var callOrder: [String] = []
     var existingAccounts: Set<AccountKey> = []
     var suspendPreparation = false
     var openResult: SetupOpenResult = .success(())
+    /// KTD1/KTD6: what staging stamped on the handoff, which is what the waiting policy reads.
+    var claudeScriptKind: ClaudeSetupScriptKind?
     private var preparationContinuation: CheckedContinuation<SetupPreparationResult, Never>?
 
     func makeCoordinator(
         retryDelays: [Duration] = [.seconds(1)],
-        verificationStopLoss: Duration = .seconds(240)
+        verificationStopLoss: Duration = .seconds(240),
+        waitingTimeout: Duration = .seconds(300),
+        polledCheckDelay: Duration = .seconds(10)
     ) -> SetupSessionCoordinator {
         SetupSessionCoordinator(
             scheduler: scheduler,
             retryDelays: retryDelays,
             verificationStopLoss: verificationStopLoss,
+            waitingTimeout: waitingTimeout,
+            polledCheckDelay: polledCheckDelay,
             prepare: { [weak self] account, mode, purpose in
                 guard let self else { return .failure(.stagingFailed) }
                 self.prepareCalls.append(.init(key: account.key, mode: mode, purpose: purpose))
@@ -970,7 +1427,8 @@ private final class SetupCoordinatorHarness {
                 return .success(PreparedSetupHandoff(
                     accountKey: account.key,
                     mode: mode,
-                    purpose: purpose
+                    purpose: purpose,
+                    claudeScriptKind: self.claudeScriptKind
                 ))
             },
             open: { [weak self] handoff in
@@ -980,8 +1438,15 @@ private final class SetupCoordinatorHarness {
             },
             discard: { [weak self] handoff in self?.discardCalls.append(handoff.accountKey) },
             accountExists: { [weak self] key in self?.existingAccounts.contains(key) == true },
-            requestRefresh: { [weak self] key in self?.refreshCalls.append(key) },
-            resetBoundary: { [weak self] key in self?.resetBoundaryCalls.append(key) }
+            requestRefresh: { [weak self] key in
+                self?.refreshCalls.append(key)
+                self?.callOrder.append("refresh")
+            },
+            resetBoundary: { [weak self] key in self?.resetBoundaryCalls.append(key) },
+            handoffBoundary: { [weak self] key in
+                self?.handoffBoundaryCalls.append(key)
+                self?.callOrder.append("boundary")
+            }
         )
     }
 
@@ -989,7 +1454,8 @@ private final class SetupCoordinatorHarness {
         preparationContinuation?.resume(returning: .success(PreparedSetupHandoff(
             accountKey: prepareCalls.last?.key ?? AccountKey(providerID: .claude, accountID: .primary),
             mode: prepareCalls.last?.mode ?? .standard,
-            purpose: prepareCalls.last?.purpose ?? .setup
+            purpose: prepareCalls.last?.purpose ?? .setup,
+            claudeScriptKind: claudeScriptKind
         )))
         preparationContinuation = nil
     }
@@ -1022,6 +1488,20 @@ private final class ManualSetupScheduler: SetupRetryScheduling {
         guard let index = entries.firstIndex(where: { !$0.isCancelled }) else { return }
         let entry = entries.remove(at: index)
         entry.operation()
+    }
+
+    /// KTD6/KTD7: the 5-minute waiting timeout sits beside the polled check, so a test
+    /// names the entry it drives instead of taking whichever happened to be scheduled
+    /// first. `includingCancelled` drives an entry the coordinator already disarmed, which
+    /// is how a timer that must no longer fire is proven inert.
+    @discardableResult
+    func fire(after delay: Duration, includingCancelled: Bool = false) -> Bool {
+        guard let index = entries.firstIndex(where: {
+            $0.delay == delay && (includingCancelled || !$0.isCancelled)
+        }) else { return false }
+        let entry = entries.remove(at: index)
+        entry.operation()
+        return true
     }
 
     func fireLastIncludingCancelled() {

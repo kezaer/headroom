@@ -35,6 +35,14 @@ extension UsageStore {
         exportPhoneSyncSnapshot()
     }
 
+    /// KTD9 (2026-09-19 sign-in plan): the boundary an external handoff's Terminal exit
+    /// draws. It rejects only captures launched before the exit — unlike the reset
+    /// boundary it keeps the row's retained usage, because nothing here says the account
+    /// changed login.
+    public func invalidateUsageForHandoffBoundary(_ key: AccountKey) {
+        attachmentGenerations[key, default: 0] &+= 1
+    }
+
     public func canAddAccount(for providerID: ProviderID) -> Bool {
         guard let accountRegistry, providerFactory != nil,
               accounts(for: providerID).count < accountCapacity(for: providerID)

@@ -449,6 +449,41 @@ import HeadroomCore
             == "Update Claude Code, then try again.")
     }
 
+    /// R8/KTD7: the timeout state offers Try Again and Stop Waiting only, so its sentence
+    /// names no button — unlike `.retryExhausted`, which still points at Check Now. The
+    /// wording follows the handoff purpose.
+    @MainActor @Test func waitingTimeoutCopyFollowsThePurposeAndNamesNoButton() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        let signIn = SetupSessions.failureMessage(
+            for: .waitingTimedOut,
+            account: account,
+            purpose: .setup
+        )
+        let approval = SetupSessions.failureMessage(
+            for: .waitingTimedOut,
+            account: account,
+            purpose: .trust
+        )
+
+        #expect(signIn == "Sign-in wasn’t confirmed.")
+        #expect(approval == "Approval wasn’t confirmed.")
+        #expect(SetupSessions.failureMessage(for: .waitingTimedOut, account: account, purpose: .reset)
+            == signIn)
+        for message in [signIn, approval] {
+            #expect(!message.contains("Check Now"))
+            #expect(!message.lowercased().contains("connect"))
+        }
+    }
+
+    /// R11/KTD10: the window is gone and the account is still signed out. The status the
+    /// wrapper recorded is unobservable for an abandoned sign-in, so the copy never cites it.
+    @MainActor @Test func closedBeforeSignInCopyStatesWhatHappened() {
+        #expect(SetupSessions.failureMessage(
+            for: .closedBeforeSignIn,
+            account: .builtIn(for: .claude)
+        ) == "Terminal closed before sign-in finished.")
+    }
+
     /// KTD5: without a resolved path there is no command at all — the nil branch must not
     /// fall back to a bare-name invocation.
     @MainActor @Test func resolvedCommandIsNilWhenDiscoveryYieldsNoPath() async {

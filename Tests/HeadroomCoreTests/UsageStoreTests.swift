@@ -1561,6 +1561,43 @@ struct UsageStoreTests {
         #expect(store.appDisplaySnapshot(for: .grok).windows.map(\.kind) == [monthly, .fiveHour, .other("Pool")])
     }
 
+    /// R12/KTD9 (2026-09-19 sign-in plan): a check already in flight when the handoff's
+    /// Terminal exits carries the pre-boundary generation, so it cannot settle the
+    /// verification that follows the exit.
+    @Test func handoffBoundaryRejectsACaptureLaunchedBeforeTerminalExited() async {
+        let provider = SlowCountingProvider(id: .claude)
+        let store = makeStore(providers: [provider])
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+
+        let refresh = Task { await store.refreshAll() }
+        await provider.waitUntilFetchStarts()
+        store.invalidateUsageForHandoffBoundary(key)
+        provider.releaseFetch()
+        await refresh.value
+
+        #expect(provider.fetchCount == 1)
+        #expect(store.snapshot(for: .claude).freshness == .pending)
+    }
+
+    /// KTD9: unlike the reset boundary, the exit boundary only rejects in-flight results.
+    /// A healthy row stays on screen while Headroom confirms the sign-in.
+    @Test func handoffBoundaryLeavesAHealthySnapshotAlone() async {
+        let store = makeStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude",
+                         snapshot: .live(.claude, windows: [
+                             UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset),
+                         ])),
+        ])
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+        await store.refreshAll()
+        #expect(store.snapshot(for: .claude).freshness == .live)
+
+        store.invalidateUsageForHandoffBoundary(key)
+
+        #expect(store.snapshot(for: .claude).freshness == .live)
+        #expect(store.snapshot(for: .claude).windows.map(\.kind) == [.weekly])
+    }
+
     /// Fresh-suite preferences so tests never read the developer's real UserDefaults —
     /// a persisted menu-bar window source from actually using the app was leaking into
     /// the default-behavior expectations.
