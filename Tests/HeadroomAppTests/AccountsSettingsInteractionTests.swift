@@ -986,6 +986,91 @@ struct AccountsSettingsInteractionTests {
         #expect(!second.script.contains(first.home.path))
     }
 
+    /// R14/KTD13 (2026-09-19 sign-in plan): Show Terminal activates the app recorded for the
+    /// open handoff exactly once. It is an activation, not another entry point into setup, so
+    /// nothing may be staged, begun, or re-stated by it.
+    @Test func showTerminalActivatesTheRecordedHandlerOnceAndStartsNoHandoff() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let account = ProviderAccount.builtIn(for: .claude)
+        let environment = configureIsolatedSetupSessions(store: fixture.store)
+        defer { environment.cleanup() }
+        let recorder = ActivationRecorder(isRunning: true)
+        let restore = SetupSessions.activateApplication
+        defer {
+            SetupSessions.activateApplication = restore
+            SetupSessions.noteHandoffTerminalApp(nil, for: account.key)
+        }
+        SetupSessions.activateApplication = { recorder.activate($0) }
+        SetupSessions.noteHandoffTerminalApp("com.apple.Terminal", for: account.key)
+
+        #expect(SetupSessions.showTerminal(for: account))
+
+        #expect(recorder.activated == ["com.apple.Terminal"])
+        #expect(SetupSessions.state(for: account) == .idle)
+        #expect(!SetupSessions.hasActiveHandoff(for: account))
+        #expect(SetupSessions.stagedHandoff(for: account.key) == nil)
+    }
+
+    /// R14/KTD13: with nothing recorded, or with the recorded handler no longer running, the
+    /// button is silent — it reports that it activated nothing and leaves the session alone.
+    @Test func showTerminalIsASilentNoOpWithoutARunningRecordedHandler() {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let account = ProviderAccount.builtIn(for: .claude)
+        let environment = configureIsolatedSetupSessions(store: fixture.store)
+        defer { environment.cleanup() }
+        let recorder = ActivationRecorder(isRunning: false)
+        let restore = SetupSessions.activateApplication
+        defer {
+            SetupSessions.activateApplication = restore
+            SetupSessions.noteHandoffTerminalApp(nil, for: account.key)
+        }
+        SetupSessions.activateApplication = { recorder.activate($0) }
+        SetupSessions.noteHandoffTerminalApp(nil, for: account.key)
+
+        // No handler known: the AppKit seam is never reached.
+        #expect(!SetupSessions.showTerminal(for: account))
+        #expect(recorder.activated.isEmpty)
+
+        // Handler known but no instance of it is running.
+        SetupSessions.noteHandoffTerminalApp("com.apple.Terminal", for: account.key)
+        #expect(!SetupSessions.showTerminal(for: account))
+
+        #expect(recorder.activated == ["com.apple.Terminal"])
+        #expect(SetupSessions.state(for: account) == .idle)
+        #expect(!SetupSessions.hasActiveHandoff(for: account))
+        #expect(SetupSessions.stagedHandoff(for: account.key) == nil)
+    }
+
+    /// R14/KTD13: the handler is saved per handoff when it opens, so changing the default
+    /// `.command` app mid-handoff still fronts the app that actually holds the older one. The
+    /// later handoff's identifier stands in for the changed default; neither is a real
+    /// LaunchServices lookup, which is the point — Show Terminal never repeats one.
+    @Test func showTerminalActivatesTheSavedAppAfterTheDefaultHandlerChanges() throws {
+        let fixture = makeFixture()
+        defer { fixture.cleanup() }
+        let opened = ProviderAccount.builtIn(for: .claude)
+        let environment = configureIsolatedSetupSessions(store: fixture.store)
+        defer { environment.cleanup() }
+        let later = try #require(fixture.store.addAccount(for: .claude))
+        let recorder = ActivationRecorder(isRunning: true)
+        let restore = SetupSessions.activateApplication
+        defer {
+            SetupSessions.activateApplication = restore
+            SetupSessions.noteHandoffTerminalApp(nil, for: opened.key)
+            SetupSessions.noteHandoffTerminalApp(nil, for: later.key)
+        }
+        SetupSessions.activateApplication = { recorder.activate($0) }
+        SetupSessions.noteHandoffTerminalApp("co.zantos.headroom.tests.OpeningTerminal", for: opened.key)
+        SetupSessions.noteHandoffTerminalApp("co.zantos.headroom.tests.NewDefaultTerminal", for: later.key)
+
+        #expect(SetupSessions.showTerminal(for: opened))
+
+        #expect(recorder.activated == ["co.zantos.headroom.tests.OpeningTerminal"])
+        #expect(SetupSessions.handoffTerminalApp(for: opened.key) == "co.zantos.headroom.tests.OpeningTerminal")
+    }
+
     @Test func oneActionRecoveryStaysSingleLine() {
         let account = ProviderAccount.builtIn(for: .codex)
         let actions = AccountsSettingsInteractions.recoveryRowActions(
@@ -1027,6 +1112,42 @@ struct AccountsSettingsInteractionTests {
 
     private func settleTasks() async {
         for _ in 0..<20 { await Task.yield() }
+    }
+
+    /// Configure the shared session routing against a throwaway Claude workspace, so a test
+    /// that only needs a live coordinator never reads or writes the real support directory.
+    private func configureIsolatedSetupSessions(store: UsageStore) -> IsolatedSetupEnvironment {
+        let supportRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("headroom-setup-environment-\(UUID().uuidString)", isDirectory: true)
+        SetupSessions.configure(
+            store: store,
+            claudeExecutableLocator: FixedExecutableLocator(path: "/usr/bin/true"),
+            builtInClaudeWorkspace: supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
+        )
+        return IsolatedSetupEnvironment(supportRoot: supportRoot)
+    }
+}
+
+private struct IsolatedSetupEnvironment {
+    let supportRoot: URL
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: supportRoot)
+    }
+}
+
+/// Stands in for the one AppKit call Show Terminal makes, recording every identifier it was
+/// asked to front and reporting whether an instance of it was running.
+@MainActor
+private final class ActivationRecorder {
+    private let isRunning: Bool
+    private(set) var activated: [String] = []
+
+    init(isRunning: Bool) { self.isRunning = isRunning }
+
+    func activate(_ bundleIdentifier: String) -> Bool {
+        activated.append(bundleIdentifier)
+        return isRunning
     }
 }
 

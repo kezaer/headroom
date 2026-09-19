@@ -77,6 +77,10 @@ enum SetupSessions {
     private static weak var store: UsageStore?
     private static var preparedScripts: [AccountKey: PreparedScript] = [:]
     private static var activeScripts: [AccountKey: PreparedScript] = [:]
+    /// KTD13 (2026-09-19 sign-in plan): the bundle identifier LaunchServices resolved for the
+    /// account's open handoff. Show Terminal fronts that app rather than the current default
+    /// `.command` handler, which the user can change while the handoff is still running.
+    private static var handoffTerminalApps: [AccountKey: String] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var checkNowTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
@@ -91,6 +95,40 @@ enum SetupSessions {
     /// Test seam: production reads a staged handoff only through `openPreparedHandoff`.
     static func stagedHandoff(for key: AccountKey) -> PreparedScript? {
         preparedScripts[key]
+    }
+
+    /// KTD13: the handler recorded when this account's handoff opened, or nil when none was
+    /// resolved — which is what Show Terminal treats as "nothing to front".
+    static func handoffTerminalApp(for key: AccountKey) -> String? {
+        handoffTerminalApps[key]
+    }
+
+    /// KTD13: a handoff that outlived the launch which opened it has no script left to
+    /// resolve, so its restored handler is written back through here.
+    static func noteHandoffTerminalApp(_ bundleIdentifier: String?, for key: AccountKey) {
+        handoffTerminalApps[key] = bundleIdentifier
+    }
+
+    /// KTD13: the only AppKit call Show Terminal makes, replaceable so tests never front a
+    /// real app. Returns whether a running instance was activated.
+    static var activateApplication: @MainActor (String) -> Bool = activateRunningApplication(bundleIdentifier:)
+
+    /// R14: app-level activation needs no automation permission, so nothing here enumerates
+    /// or raises a window — a minimized window stays minimized.
+    static func activateRunningApplication(bundleIdentifier: String) -> Bool {
+        NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first?
+            .activate() ?? false
+    }
+
+    /// R14: bring the app that opened this account's handoff forward. Silent when no handler
+    /// was recorded or none of its instances is running: no session state changes, and no
+    /// handoff is begun, staged or re-stated.
+    @discardableResult
+    static func showTerminal(for account: ProviderAccount) -> Bool {
+        guard let bundleIdentifier = handoffTerminalApps[account.key] else { return false }
+        return activateApplication(bundleIdentifier)
     }
 
     static func configure(
@@ -408,6 +446,7 @@ enum SetupSessions {
     /// the generation's files are removed, so a late wrapper stays ignored on relaunch.
     static func forceCancel(for account: ProviderAccount) {
         completionTasks.removeValue(forKey: account.key)?.cancel()
+        handoffTerminalApps.removeValue(forKey: account.key)
         let prepared = preparedScripts.removeValue(forKey: account.key)
             ?? activeScripts.removeValue(forKey: account.key)
         let marker = prepared?.completionMarker ?? completionMarker(
@@ -603,6 +642,11 @@ enum SetupSessions {
             try? FileManager.default.removeItem(at: prepared.scriptURL)
             return .failure(.stagingFailed)
         }
+        // KTD13: resolve the handler while the script is still on disk — the open below hands
+        // the file to exactly this app, so it is the one Show Terminal must front later.
+        let handlerBundleIdentifier = NSWorkspace.shared
+            .urlForApplication(toOpen: prepared.scriptURL)
+            .flatMap { Bundle(url: $0)?.bundleIdentifier }
         guard NSWorkspace.shared.open(prepared.scriptURL) else {
             AccountStorage.clearPreparedSetupCompletionMarker(prepared.completionMarker)
             try? FileManager.default.removeItem(at: prepared.scriptURL)
@@ -611,6 +655,7 @@ enum SetupSessions {
                 : .failure(.pasteboardFailed)
         }
         activeScripts[handoff.accountKey] = prepared
+        noteHandoffTerminalApp(handlerBundleIdentifier, for: handoff.accountKey)
         monitorCompletion(prepared.completionMarker, for: handoff.accountKey)
         return .success(())
     }
@@ -651,6 +696,7 @@ enum SetupSessions {
             )
             AccountStorage.clearFinishedSetupCompletionMarkers(marker)
             activeScripts.removeValue(forKey: key)
+            handoffTerminalApps.removeValue(forKey: key)
             completionTasks[key] = nil
         }
     }
