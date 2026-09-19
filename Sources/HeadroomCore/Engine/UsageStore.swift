@@ -100,6 +100,8 @@ public final class UsageStore {
     public private(set) var accountTitleInk: AccountTitleInk
     public private(set) var meterStyle: MeterStyle
     public private(set) var menuBarFillSource: MenuBarFillSource
+    private var savedMenuBarProviderOrder: [ProviderID]
+    public private(set) var widgetPrioritySource: MenuBarFillSource
     public private(set) var menuBarWindowSources: [ProviderID: MenuBarWindowSource]
     public private(set) var showCodexSparkCountersInApp: Bool
     public private(set) var showCodexSparkCountersInWidgets: Bool
@@ -206,6 +208,12 @@ public final class UsageStore {
         let registeredProviderIDs = providers.map(\.id).uniqued()
         self.composedProviderOrder = registeredProviderIDs
         self.menuBarFillSource = preferences.menuBarFillSource.filtered(to: registeredProviderIDs)
+        self.savedMenuBarProviderOrder = preferences.menuBarProviderOrder
+        if let saved = preferences.widgetPriorityProviders {
+            self.widgetPrioritySource = saved.isEmpty ? .auto : .providers(Set(saved))
+        } else {
+            self.widgetPrioritySource = preferences.menuBarFillSource
+        }
         self.menuBarWindowSources = Dictionary(uniqueKeysWithValues: registeredProviderIDs.map {
             ($0, preferences.menuBarWindowSource(for: $0))
         })
@@ -418,9 +426,76 @@ public final class UsageStore {
     }
 
     public func setMenuBarFillSource(_ source: MenuBarFillSource) {
+        // Freeze the old shared selection before the first menu-bar edit, so an
+        // upgrade preserves widget contents across launches as well as in memory.
+        if preferences.widgetPriorityProviders == nil {
+            preferences.widgetPriorityProviders = widgetPrioritySource.providerIDs?.sorted { $0.raw < $1.raw } ?? []
+        }
         let filtered = source.filtered(to: registeredProviderOrder)
         preferences.menuBarFillSource = filtered
         menuBarFillSource = filtered
+    }
+
+    public func setWidgetPrioritySource(_ source: MenuBarFillSource) {
+        let filtered = source.filtered(to: registeredProviderOrder)
+        preferences.widgetPriorityProviders = filtered.providerIDs?.sorted { $0.raw < $1.raw } ?? []
+        widgetPrioritySource = filtered
+        exportWidgetSnapshot()
+    }
+
+    public var menuBarProviderOrder: [ProviderID] {
+        let registered = registeredProviderOrder
+        return savedMenuBarProviderOrder.filter(registered.contains).uniqued()
+            + registered.filter { !savedMenuBarProviderOrder.contains($0) }
+    }
+
+    /// The same ordered IDs drive both the arranger and the actual menu-bar label.
+    public var selectedMenuBarProviders: [ProviderID] {
+        guard let selected = menuBarFillSource.providerIDs else { return [] }
+        return menuBarProviderOrder.filter { selected.contains($0) && providerOrder.contains($0) }
+    }
+
+    public func addMenuBarProvider(_ id: ProviderID) {
+        guard providerOrder.contains(id) else { return }
+        var selected = menuBarFillSource.providerIDs ?? []
+        guard selected.insert(id).inserted else { return }
+        saveMenuBarOrder(menuBarProviderOrder.filter { $0 != id } + [id])
+        setMenuBarFillSource(.providers(selected))
+    }
+
+    public func removeMenuBarProvider(_ id: ProviderID) {
+        // Keep an explicit escape to the automatic summary instead of silently
+        // switching modes when the last visible provider is removed.
+        guard selectedMenuBarProviders.count > 1,
+              var selected = menuBarFillSource.providerIDs,
+              selected.remove(id) != nil else { return }
+        setMenuBarFillSource(.providers(selected))
+    }
+
+    /// A nil target appends the dragged pill. Ignore external/stale drop payloads.
+    public func moveMenuBarProvider(_ id: ProviderID, before target: ProviderID?) {
+        let visible = selectedMenuBarProviders
+        guard visible.contains(id), target != id,
+              target.map(visible.contains) ?? true else { return }
+        var order = menuBarProviderOrder.filter { $0 != id }
+        let index = target.flatMap { order.firstIndex(of: $0) } ?? order.endIndex
+        order.insert(id, at: index)
+        saveMenuBarOrder(order)
+    }
+
+    public func moveMenuBarProvider(_ id: ProviderID, by offset: Int) {
+        let visible = selectedMenuBarProviders
+        guard let index = visible.firstIndex(of: id),
+              [-1, 1].contains(offset), visible.indices.contains(index + offset) else { return }
+        let insertion = offset < 0 ? index - 1 : index + 2
+        moveMenuBarProvider(id, before: visible.indices.contains(insertion) ? visible[insertion] : nil)
+    }
+
+    private func saveMenuBarOrder(_ order: [ProviderID]) {
+        // Preserve temporarily unregistered IDs rather than forgetting their preference.
+        let saved = order + savedMenuBarProviderOrder.filter { !order.contains($0) }
+        savedMenuBarProviderOrder = saved.uniqued()
+        preferences.menuBarProviderOrder = savedMenuBarProviderOrder
     }
 
     public func menuBarWindowSource(for id: ProviderID) -> MenuBarWindowSource {
@@ -484,11 +559,11 @@ public final class UsageStore {
     /// Render-ready menu bar meters. Explicit selection gives each chosen provider its
     /// own vessel/percentage pair; automatic mode keeps the existing compact summary.
     public var menuBarMeters: [MenuBarMeter] {
-        guard case .providers(let selected) = menuBarFillSource else {
+        guard menuBarFillSource.providerIDs != nil else {
             return [MenuBarMeter(summary: menuBarSummary, fill: menuBarFill)]
         }
 
-        let meters = providerOrder.filter { selected.contains($0) }.map { providerMenuBarMeter(for: $0) }
+        let meters = selectedMenuBarProviders.map { providerMenuBarMeter(for: $0) }
         return meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
     }
 
@@ -909,7 +984,7 @@ public final class UsageStore {
     }
 
     private func resolvedWidgetProviderSelection() -> [ProviderID] {
-        switch menuBarFillSource.filtered(to: providerOrder) {
+        switch widgetPrioritySource.filtered(to: providerOrder) {
         case .auto:
             return Array(providerOrder.prefix(2))
         case .providers(let selected):
@@ -966,7 +1041,7 @@ public final class UsageStore {
             .min { $0.window.percentRemaining < $1.window.percentRemaining }
     }
 
-    private func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {
+    public func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {
         let needsAttention = providerNeedsAttention(id)
         guard let resolved = menuBarWindow(for: id) else {
             let name = displayNames[id] ?? id.raw

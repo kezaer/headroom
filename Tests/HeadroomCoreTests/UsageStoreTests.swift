@@ -1238,6 +1238,117 @@ struct UsageStoreTests {
         #expect(reloaded.menuBarMeters.map(\.summary.providerID) == [.claude, .codex, .grok])
     }
 
+    @Test func menuBarArrangerAddsMovesAndRemovesWithoutChangingOtherPreferences() {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.setSurfaceEnabled(true, for: .cursorSubscription)
+        preferences.showMenuBarPercentage = true
+        preferences.setMenuBarWindowSource(.fiveHour, for: .codex)
+        let ids: [ProviderID] = [.claude, .codex, .grok, .cursor]
+        let providers: [any UsageProvider] = ids.map {
+            StubProvider(id: $0, displayName: $0.raw, snapshot: .pending(for: $0))
+        }
+        let store = UsageStore(providers: providers, preferences: preferences)
+        #expect(store.menuBarFillSource == .auto)
+        for id in ids { store.addMenuBarProvider(id) }
+        #expect(store.selectedMenuBarProviders == ids)
+        store.moveMenuBarProvider(.cursor, before: .claude)
+        #expect(store.selectedMenuBarProviders == [.cursor, .claude, .codex, .grok])
+        store.moveMenuBarProvider(.claude, by: 1)
+        #expect(store.selectedMenuBarProviders == [.cursor, .codex, .claude, .grok])
+        store.moveMenuBarProvider(.cursor, before: nil)
+        #expect(store.selectedMenuBarProviders == [.codex, .claude, .grok, .cursor])
+        store.removeMenuBarProvider(.grok)
+        store.addMenuBarProvider(.grok)
+        #expect(store.selectedMenuBarProviders == [.codex, .claude, .cursor, .grok])
+        #expect(store.providerOrder == ids)
+        #expect(store.menuBarWindowSource(for: .codex) == .fiveHour)
+        store.setShowMenuBarPercentage(false)
+        let reloaded = UsageStore(providers: providers, preferences: preferences)
+        #expect(reloaded.selectedMenuBarProviders == store.selectedMenuBarProviders)
+        #expect(!reloaded.showMenuBarPercentage)
+        #expect(reloaded.menuBarWindowSource(for: .codex) == .fiveHour)
+    }
+
+    @Test func menuBarArrangerRetainsDisabledProvidersAndRejectsInvalidEdits() {
+        let preferences = freshPreferences()
+        preferences.menuBarFillSource = .both
+        preferences.menuBarProviderOrder = [.codex, ProviderID("unknown"), .codex, .claude]
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude)),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .pending(for: .codex)),
+        ], preferences: preferences)
+        #expect(store.selectedMenuBarProviders == [.codex, .claude])
+        store.setSurfaceEnabled(false, for: .codexSubscription)
+        #expect(store.selectedMenuBarProviders == [.claude])
+        store.removeMenuBarProvider(.claude)
+        store.addMenuBarProvider(.codex)
+        store.addMenuBarProvider(ProviderID("unknown"))
+        store.moveMenuBarProvider(.claude, before: ProviderID("unknown"))
+        store.moveMenuBarProvider(.claude, by: Int.min)
+        #expect(store.menuBarFillSource == .both)
+        store.setSurfaceEnabled(true, for: .codexSubscription)
+        #expect(store.selectedMenuBarProviders == [.codex, .claude])
+        store.removeMenuBarProvider(.codex)
+        store.removeMenuBarProvider(.claude)
+        #expect(store.selectedMenuBarProviders == [.claude])
+        store.setMenuBarFillSource(.auto)
+        #expect(store.selectedMenuBarProviders.isEmpty)
+        #expect(store.menuBarMeters.count == 1)
+    }
+
+    @Test func widgetSelectionCanChangeIndependentlyAndExportsImmediately() {
+        let preferences = freshPreferences()
+        preferences.menuBarFillSource = .both
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(providers: [
+            StubProvider(id: .claude, displayName: "Claude", snapshot: .pending(for: .claude)),
+            StubProvider(id: .codex, displayName: "Codex", snapshot: .pending(for: .codex)),
+        ], preferences: preferences, widgetExporter: exporter)
+        store.setWidgetPrioritySource(.codex)
+        #expect(exporter.exports.last?.widgetProviderSelection == ["codex"])
+        #expect(store.menuBarFillSource == .both)
+        store.setWidgetPrioritySource(.auto)
+        #expect(preferences.widgetPriorityProviders == [])
+        #expect(exporter.exports.last?.widgetProviderSelection == ["claude", "codex"])
+    }
+
+    @Test func menuBarRestoresIndependentOrderForAllFourProviders() async {
+        let defaults = UserDefaults(suiteName: "headroom.tests.\(UUID().uuidString)")!
+        let preferences = Preferences(defaults: defaults)
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.setSurfaceEnabled(true, for: .cursorSubscription)
+        preferences.menuBarFillSource = .providers([.claude, .codex, .grok, .cursor])
+        defaults.set(["cursor", "codex", "claude", "grok"], forKey: "menuBarProviderOrder")
+        let ids: [ProviderID] = [.claude, .codex, .grok, .cursor]
+        let providers = ids.map { StubProvider(id: $0, displayName: $0.raw, snapshot: .pending(for: $0)) }
+        let exporter = SpyWidgetExporter()
+        let store = UsageStore(providers: providers, preferences: preferences, widgetExporter: exporter)
+        await store.refreshAll()
+
+        #expect(store.menuBarMeters.map(\.summary.providerID) == [.cursor, .codex, .claude, .grok])
+        #expect(store.providerOrder == ids)
+        #expect(exporter.exports.last?.widgetProviderSelection == ["claude", "codex"])
+        let reloaded = UsageStore(providers: providers, preferences: preferences)
+        #expect(reloaded.menuBarMeters.map(\.summary.providerID) == [.cursor, .codex, .claude, .grok])
+    }
+
+    @Test func menuBarChangesPreserveExistingWidgetSelectionAcrossReloads() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .grokSubscription)
+        preferences.menuBarFillSource = .providers([.claude, .grok])
+        let providers: [any UsageProvider] = [ProviderID.claude, .codex, .grok].map {
+            StubProvider(id: $0, displayName: $0.raw, snapshot: .pending(for: $0))
+        }
+        let store = UsageStore(providers: providers, preferences: preferences)
+        store.setMenuBarFillSource(.codex)
+        let exporter = SpyWidgetExporter()
+        let reloaded = UsageStore(providers: providers, preferences: preferences, widgetExporter: exporter)
+        await reloaded.refreshAll()
+        #expect(reloaded.menuBarMeters.map(\.summary.providerID) == [.codex])
+        #expect(exporter.exports.last?.widgetProviderSelection == ["claude", "grok"])
+    }
+
     @Test func billingPeriodOnlyProviderFallsBackToItsRealWindow() async {
         let preferences = freshPreferences()
         preferences.setSurfaceEnabled(true, for: .grokSubscription)

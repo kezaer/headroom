@@ -100,6 +100,24 @@ official `claude` CLI's `/usage` panel instead.
     this does not yet authorize the locator migration. See
     `docs/solutions/grok-build-usage-feasibility.md`.
 
+## Cursor intermittent local diagnostic (2026-09-18)
+
+- One offscreen `--probe-cursor` run returned a transient capture failure despite an
+  authenticated CLI. A later run on the same machine parsed the official `/usage` panel
+  as a live Pro+ snapshot with 1% included usage and on-demand disabled. The cause of
+  the first failure was not captured; do not attribute it to a missing `Included` row.
+  If this recurs, add redacted stage diagnostics for auth, boot, autocomplete, and panel
+  timeout before changing the parser or retry policy.
+- **Cursor MCP approval handoff is unverified live.** Detection and the Review Cursor
+  Tools handoff are exercised only by fake PTY fixtures built from a reported older
+  screen. Unverified: that the current CLI still prints `MCP Server Approval Required`,
+  and that an approval given in the Terminal session persists so the next background
+  probe reaches `/usage` instead of the same dialog. On 2026-09-18, a throwaway
+  `/usr/bin/true` server in `~/.cursor/mcp.json` did not open any approval gate;
+  the probe returned live usage. Find a reproducible unapproved-server case before
+  describing the path as supported; see
+  `docs/solutions/cursor-agent-usage-feasibility.md`.
+
 ## Reliability (carried from earlier review)
 
 - **No backoff on repeated failures.** Both providers retry every cycle at the fixed
@@ -197,6 +215,13 @@ official `claude` CLI's `/usage` panel instead.
   2026-08-08 symptom (blank light captures, light ink over dark) did not reproduce. AGENTS.md's
   "do not accept `--render-popover` output as evidence" gotcha can be relaxed once one more run
   confirms it; live `MenuBarExtra` acceptance stays the bar for window sizing.
+- **Settings captures can still be invalid when WindowServer capture fails.** On
+  2026-09-17, the Settings capture path under the Swift 6.3.3 command-line toolchain
+  printed `could not create image from window`; its bitmap fallback saved PNGs with a
+  blank sidebar, cropped header, and incorrect dark material despite exiting 0. The new
+  `--menu-bar-only` acceptance run now fails instead of using that fallback. Do not use
+  general-harness fallback captures as visual acceptance. Reproduce with the full Xcode
+  toolchain and use an explicitly authorized live Settings check until capture is reliable.
 - **The harness's multi-account path renders neither Grok/Cursor nor the spend card.**
   `renderMulti` in `PopoverRenderHarness.swift` passes `apiSpendProviders: []` and
   `renderPreferences` enables only the Anthropic/OpenAI spend surfaces, so

@@ -56,7 +56,19 @@ Add, rename, or remove accounts in **Settings → Accounts**. Removing an additi
 deletes only that Headroom-owned local CLI home; it does not touch the subscription, built-in
 CLI login, or sibling accounts. The popover shows every account and becomes scrollable at
 higher counts. The menu bar, macOS widgets, and iPhone/iPad snapshot intentionally continue
-to follow each provider's built-in account so compact surfaces keep one stable meaning.
+to follow each provider's selected main account so compact surfaces keep one stable meaning.
+
+## Menu bar pills
+
+In **Settings → Menu Bar**, add a pill for each provider you want to see. Drag the cards
+or use their left/right arrows to arrange the pills. The preview updates with your choices.
+Choose **Pills + percentages** for exact readings or **Pills only** to save space, especially
+on laptops with a notch. Each pill follows its provider's main account and preferred usage
+window. Removing a pill does not disconnect the account; keep at least one pill or switch
+back to the automatic summary.
+
+Menu bar order is independent of the popover. Choose widget providers separately in
+**Settings → Widgets & iPhone**; existing widget selections are preserved when upgrading.
 
 ## Troubleshooting provider setup
 
