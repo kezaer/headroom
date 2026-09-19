@@ -18,6 +18,8 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let meterFill = "meterFill"
         static let menuBarFillSource = "menuBarFillSource"
         static let menuBarFillProviders = "menuBarFillProviders"
+        static let menuBarProviderOrder = "menuBarProviderOrder"
+        static let widgetPriorityProviders = "widgetPriorityProviders"
         /// Kept as a read-through migration source for installs that saved one shared
         /// menu-bar window before providers became independently configurable.
         static let legacyMenuBarWindowSource = "menuBarWindowSource"
@@ -151,6 +153,26 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
                 }
                 defaults.set("providers", forKey: Key.menuBarFillSource)
                 defaults.set(ids.map(\.raw).sorted(), forKey: Key.menuBarFillProviders)
+            }
+        }
+    }
+
+    /// Independent from the app's provider order. Unknown IDs survive temporarily
+    /// missing providers; the store filters them when resolving the visible order.
+    public var menuBarProviderOrder: [ProviderID] {
+        get { (defaults.stringArray(forKey: Key.menuBarProviderOrder) ?? []).map(ProviderID.init) }
+        nonmutating set { defaults.set(newValue.map(\.raw), forKey: Key.menuBarProviderOrder) }
+    }
+
+    /// Nil means this install still inherits its legacy menu-bar priority selection.
+    /// An empty array is an explicit automatic widget selection, not an unmigrated one.
+    public var widgetPriorityProviders: [ProviderID]? {
+        get { defaults.stringArray(forKey: Key.widgetPriorityProviders)?.map(ProviderID.init) }
+        nonmutating set {
+            if let newValue {
+                defaults.set(newValue.map(\.raw), forKey: Key.widgetPriorityProviders)
+            } else {
+                defaults.removeObject(forKey: Key.widgetPriorityProviders)
             }
         }
     }

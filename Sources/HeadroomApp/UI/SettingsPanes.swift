@@ -198,13 +198,8 @@ struct AppearanceSettingsPane: View {
 
 // MARK: - Menu Bar
 
-/// What the "Priority providers" control claims the menu bar is showing. A provider whose
-/// subscription switch is off is never fetched, so `UsageStore.menuBarMeters` and
-/// `menuBarBestWindow` already drop it from the effective selection — the menu title used
-/// to keep naming it, so a switched-off pick read as the live source of a pill that had
-/// gone neutral. The stored preference is deliberately left alone (R11: "off" means "not
-/// fetched", not "forgotten"), so switching the provider back on restores it as a priority
-/// without re-picking it; only the reported selection narrows.
+/// Shared priority-label formatting now used by Widgets. Disabled providers stay
+/// stored but do not claim to supply a visible tile.
 enum MenuBarPrioritySelection {
     static func label(
         source: MenuBarFillSource,
@@ -221,280 +216,284 @@ enum MenuBarPrioritySelection {
 
 struct MenuBarSettingsPane: View {
     let store: UsageStore
-    @Binding var showMenuBarPercentage: Bool
-    @Binding var menuBarFillSource: MenuBarFillSource
-    @Binding var menuBarWindowSources: [ProviderID: MenuBarWindowSource]
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
+    private static let cardWidth: CGFloat = 100
+
+    private var selected: [ProviderID] { store.selectedMenuBarProviders }
+    private var available: [ProviderID] {
+        store.registeredProviderOrder.filter { !selected.contains($0) }
+    }
+
     var body: some View {
-        SettingsPaneScaffold(SettingsPane.menuBar.label) {
+        // The specimen stays in view while the editor scrolls at the window's resize floor.
+        VStack(alignment: .leading, spacing: SettingsMetrics.headerToContent) {
+            Text(SettingsPane.menuBar.label)
+                .font(.system(size: 17, weight: .semibold))
+                .kerning(-0.2)
             SettingsTile {
-                // Live specimen of the real menu-bar label (same renderer, same store
-                // meters), re-rendering as the choices below change — the user sees what
-                // "fill" and "limit window" mean instead of decoding prose.
-                HStack(spacing: 10) {
-                    ZStack(alignment: .leading) {
-                        // Invisible percentage-on twin reserves the slot at its widest
-                        // state, so toggling the percentage never reflows the caption or
-                        // changes the strip height — the swap happens inside a fixed box.
-                        MenuBarLabel(
-                            meters: store.menuBarMeters,
-                            showsPercentage: true,
-                            appearance: .menuBar
-                        )
-                        .hidden()
-                        // `.id` swap: the outgoing and incoming pills overlap leading-
-                        // aligned and dissolve, instead of the NSImage hard-cutting.
-                        MenuBarLabel(
-                            meters: store.menuBarMeters,
-                            showsPercentage: store.showMenuBarPercentage,
-                            appearance: .menuBar
-                        )
-                        .id(menuBarPreviewKey)
-                        .transition(.opacity)
+                preview
+                displayChoices
+            }
+            ScrollView(.vertical) {
+                SettingsTile("Your Pills") {
+                    arranger
+                    availablePills
+                    windowChoices
+                    SettingsHelpText(text: "Uses each provider’s main account. Removing a pill keeps its account connected.")
+                    if store.menuBarFillSource != .auto {
+                        Button("Use one automatic summary pill instead…") {
+                            store.setMenuBarFillSource(.auto)
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 11))
                     }
-                    // R2M7/S2A: the swap is a pure `.transition(.opacity)` between two
-                    // overlapping pills, so it keeps its timing under Reduce Motion —
-                    // `reduceMotion ? nil :` hard-cut the one thing S2A says must not.
-                    .animation(
-                        HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
-                        value: menuBarPreviewKey
-                    )
-                    .menuBarPreviewPlate(darkMenuBar: MenuBarAppearanceMonitor.shared.isDarkMenuBar)
-                    Text("Live preview — follows the choices below")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                }
+                .padding(.bottom, 20)
+            }
+            .scrollIndicators(.automatic)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .frame(maxWidth: SettingsView.detailContentMaxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var preview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Menu bar preview")
+                Spacer(minLength: 8)
+                Text(store.menuBarFillSource == .auto ? "Automatic summary" : "\(selected.count) pills")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.system(size: 11, weight: .medium))
+            ScrollView(.horizontal) {
+                HStack {
                     Spacer(minLength: 0)
+                    // No invisible percentage-on twin: seeing the width shrink is the
+                    // point of the compact choice. Always use the production renderer.
+                    MenuBarPreviewPill(meters: store.menuBarMeters, showsPercentage: store.showMenuBarPercentage)
                 }
-                // R2C9: r14 around the r6 menu-bar plate at 9/6pt of padding.
-                .settingsPreviewWell(dark: colorScheme == .dark, verticalPadding: 6, cornerRadius: 14)
+                .frame(minHeight: 30)
+            }
+            .frame(height: 30)
+            .scrollIndicators(.automatic)
+            .settingsPreviewWell(dark: colorScheme == .dark, verticalPadding: 6, cornerRadius: 14)
+        }
+    }
 
-                SettingsSwitchRow(title: "Show percentage", isOn: $showMenuBarPercentage)
-                    .onChange(of: showMenuBarPercentage) { _, newValue in
-                        store.setShowMenuBarPercentage(newValue)
-                    }
+    private var percentageBinding: Binding<Bool> {
+        Binding(get: { store.showMenuBarPercentage }, set: { store.setShowMenuBarPercentage($0) })
+    }
 
-                VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
-                    ResponsiveControlRow(label: "Priority providers") {
-                        menuBarProviderSelectionMenu
-                    }
-                    // PB8: this pane owns the widget rule; the Widgets pane points back here
-                    // instead of restating it in different words ("first two enabled
-                    // providers" vs "up to 2 of your priority providers" was one rule
-                    // described twice, and the two descriptions disagreed).
-                    SettingsHelpText(text: "Sets the menu-bar number and the first two widget tiles. Auto picks whichever provider is closest to its limit.")
+    private var displayChoices: some View {
+        VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
+            Text("Display")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                displayChoice(showsPercentage: true, title: "Pills + percentages", detail: "Exact usage at a glance")
+                displayChoice(showsPercentage: false, title: "Pills only", detail: "Save menu bar space")
+            }
+            .accessibilityRepresentation {
+                Picker("Menu bar display", selection: percentageBinding) {
+                    Text("Pills + percentages").tag(true)
+                    Text("Pills only").tag(false)
                 }
+            }
+            SettingsHelpText(text: "Short on space? Pills only is useful on laptops with a notch.")
+        }
+    }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    // R2B2: a sub-group header that is smaller *and* lighter than the 13pt
-                    // rows beneath it reads as a caption belonging to the row above, not as
-                    // the head of what follows. Uppercase + tracking is the sidebar's own
-                    // section idiom, so the level is carried by treatment instead of size.
-                    Text("Preferred window")
-                        .font(.system(size: 11, weight: .semibold))
-                        .textCase(.uppercase)
-                        .tracking(0.3)
-                        .foregroundStyle(.secondary)
+    private func displayChoice(showsPercentage: Bool, title: String, detail: String) -> some View {
+        Button {
+            store.setShowMenuBarPercentage(showsPercentage)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                MenuBarPreviewPill(meters: Self.displaySamples, showsPercentage: showsPercentage)
+                    .frame(height: 30)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .selectionChrome(isSelected: store.showMenuBarPercentage == showsPercentage)
+        }
+        .buttonStyle(SettingsSwatchButtonStyle())
+        .help(detail)
+    }
 
-                    ForEach(store.registeredProviderOrder, id: \.self) { providerID in
-                        if store.hasSelectableMenuBarWindows(for: providerID) {
-                            menuBarWindowRow(
-                                providerID: providerID,
-                                selection: menuBarWindowBinding(for: providerID)
-                            )
+    /// Inert examples teach the two treatments even before usage is available. Only
+    /// these swatches use fixtures; the main specimen and provider cards use the store.
+    private static let displaySamples: [MenuBarMeter] = [72, 38].map { value in
+        MenuBarMeter(summary: MenuBarSummary(text: "\(value)%", providerID: nil, detail: nil, isNeutral: false),
+                     fill: Double(value) / 100)
+    }
+
+    @ViewBuilder private var arranger: some View {
+        if store.menuBarFillSource == .auto {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("One automatic summary pill")
+                    .font(.system(size: 13, weight: .medium))
+                SettingsHelpText(text: "Follows the provider closest to its limit. Add providers below to give each its own pill.")
+            }
+        } else if selected.isEmpty {
+            SettingsHelpText(text: "Your selected providers are switched off. Turn on tracking in Accounts, or add another provider below.")
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                SettingsHelpText(text: "Drag to arrange, or use the arrows. Order runs left to right.")
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(selected, id: \.self) { id in
+                            providerCard(id)
                         }
                     }
-
-                    // PB7: "level", not "fill" — Fill is the Appearance pane's meter recipe,
-                    // and this sentence means how full the vessel is drawn.
-                    SettingsHelpText(text: "Each provider’s percentage, level, and color follow its preferred window.")
+                    .padding(1)
                 }
+                // Horizontal scrollers have no useful ideal height in an AppKit host
+                // (#popover-scroll-height). Reserve the card's full editing surface.
+                .frame(height: 116)
+                .scrollIndicators(.automatic)
+                .settingsPreviewWell(dark: colorScheme == .dark, verticalPadding: 9, cornerRadius: 20)
             }
         }
     }
 
-    /// Keys the preview pill's cross-fade to the preference changes that re-render it
-    /// (live data ticks don't need choreography). PB13: the palette follows the live menu
-    /// bar rather than `colorScheme` or a pinned dark, so an appearance flip repaints
-    /// through observation instead of this key — it is not a choice the user just made.
-    private var menuBarPreviewKey: String {
-        let windows = store.registeredProviderOrder.map { id in
-            "\(id.raw)=\(menuBarWindowSources[id, default: .weekly].rawValue)"
-        }.joined(separator: ",")
-        return "\(store.showMenuBarPercentage)-\(store.usagePercentageMode.rawValue)-\(store.menuBarFillSource.sortedIdentifier)-\(windows)"
+    private func providerCard(_ id: ProviderID) -> some View {
+        VStack(spacing: 8) {
+            HStack {
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+                    .padding(4)
+                    .contentShape(Rectangle())
+                    .help("Drag to arrange \(name(id))")
+                    .accessibilityLabel("Drag \(name(id))")
+                Spacer(minLength: 4)
+                Button {
+                    store.removeMenuBarProvider(id)
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .disabled(selected.count == 1)
+                .help(selected.count == 1 ? "Keep one pill, or choose the automatic summary below" : "Remove \(name(id)) pill")
+                .accessibilityLabel("Remove \(name(id)) pill")
+            }
+            .font(.system(size: 10))
+            MenuBarPreviewPill(meters: [store.providerMenuBarMeter(for: id)], showsPercentage: store.showMenuBarPercentage)
+                .frame(height: 25)
+            Text(name(id))
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .help(name(id))
+            HStack(spacing: 12) {
+                moveButton(id, offset: -1)
+                moveButton(id, offset: 1)
+            }
+        }
+        .buttonStyle(.borderless)
+        .padding(8)
+        .frame(width: Self.cardWidth)
+        .selectionChrome(isSelected: false)
+        .draggable(id.raw)
+        .dropDestination(for: String.self) { values, location in
+            guard values.count == 1, let raw = values.first else { return false }
+            let source = ProviderID(raw)
+            guard source != id, selected.contains(source), let index = selected.firstIndex(of: id) else { return false }
+            let targetIndex = location.x < Self.cardWidth / 2 ? index : index + 1
+            let target = selected.indices.contains(targetIndex) ? selected[targetIndex] : nil
+            store.moveMenuBarProvider(source, before: target)
+            return true
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(name(id)) menu bar pill")
     }
 
-    private var menuBarProviderSelectionMenu: some View {
-        Menu {
-            Button {
-                applyMenuBarFillSource(.auto)
-            } label: {
-                HStack {
-                    Text("Auto")
-                    if menuBarFillSource == .auto { Image(systemName: "checkmark") }
-                }
-            }
-            Divider()
-            ForEach(store.registeredProviderOrder, id: \.self) { providerID in
-                let selected = menuBarFillSource.providerIDs?.contains(providerID) == true
-                Button {
-                    toggleMenuBarProvider(providerID)
-                } label: {
-                    HStack {
-                        Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
-                        if selected { Image(systemName: "checkmark") }
+    private func moveButton(_ id: ProviderID, offset: Int) -> some View {
+        let direction = offset < 0 ? "left" : "right"
+        return Button {
+            store.moveMenuBarProvider(id, by: offset)
+        } label: {
+            Image(systemName: "arrow.\(direction)")
+                .font(.system(size: 11))
+        }
+        .disabled(offset < 0 ? selected.first == id : selected.last == id)
+        .help("Move \(name(id)) \(direction)")
+        .accessibilityLabel("Move \(name(id)) \(direction)")
+    }
+
+    @ViewBuilder private var availablePills: some View {
+        if available.isEmpty {
+            SettingsHelpText(text: "All \(selected.count) providers shown.")
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Available Pills")
+                    .font(.system(size: 13, weight: .medium))
+                ForEach(available, id: \.self) { id in
+                    HStack(spacing: 8) {
+                        ProviderLogoView(providerID: id, size: 15)
+                        Text(name(id))
+                        Spacer(minLength: 8)
+                        if store.providerOrder.contains(id) {
+                            Button("Add pill", systemImage: "plus") { store.addMenuBarProvider(id) }
+                                .controlSize(.small)
+                                .accessibilityLabel("Add \(name(id)) pill")
+                        } else {
+                            SettingsPillBadge(text: "Off")
+                                .help(SettingsCopy.providerOffNotice)
+                        }
                     }
                 }
-                // A provider whose subscription switch is off is never fetched, so it can
-                // never supply the menu-bar number. Listed but greyed (not removed) so the
-                // menu keeps registry order and the absence reads as a state, not a bug.
-                .disabled(!isProviderFetched(providerID))
-            }
-        } label: {
-            Text(menuBarSelectionLabel)
-        }
-        .fixedSize()
-    }
-
-    private var menuBarSelectionLabel: String {
-        MenuBarPrioritySelection.label(
-            source: menuBarFillSource,
-            fetchedOrder: store.providerOrder,
-            displayName: { store.displayNames[$0] ?? $0.raw.capitalized }
-        )
-    }
-
-    private func toggleMenuBarProvider(_ providerID: ProviderID) {
-        var selected = menuBarFillSource.providerIDs ?? []
-        if selected.contains(providerID) {
-            selected.remove(providerID)
-        } else {
-            selected.insert(providerID)
-        }
-        applyMenuBarFillSource(selected.isEmpty ? .auto : .providers(selected))
-    }
-
-    private func applyMenuBarFillSource(_ source: MenuBarFillSource) {
-        menuBarFillSource = source
-        store.setMenuBarFillSource(source)
-    }
-
-    /// Whether Headroom actually polls this provider. `providerOrder` is
-    /// `registeredProviderOrder` filtered by the user's subscription switches, so this
-    /// reads the same `enabledSurfaces` truth the rest of the app does — no second
-    /// on/off source lives in the Menu Bar pane.
-    private func isProviderFetched(_ providerID: ProviderID) -> Bool {
-        store.providerOrder.contains(providerID)
-    }
-
-    private func menuBarWindowBinding(for providerID: ProviderID) -> Binding<MenuBarWindowSource> {
-        Binding(
-            get: { menuBarWindowSources[providerID] ?? store.menuBarWindowSource(for: providerID) },
-            set: { menuBarWindowSources[providerID] = $0 }
-        )
-    }
-
-    /// Provider identity is the row label, so the two choices scan as one compact
-    /// matrix without introducing nested provider cards inside the Menu Bar tile.
-    private func menuBarWindowRow(
-        providerID: ProviderID,
-        selection: Binding<MenuBarWindowSource>
-    ) -> some View {
-        // R11's rule, applied here: "off" means "not fetched". The row stays in registry
-        // order and keeps its stored choice — dimmed with an Off tag, control disabled —
-        // so turning the provider back on restores the row in place instead of
-        // reflowing the list.
-        let isFetched = isProviderFetched(providerID)
-
-        return VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    providerWindowLabel(providerID, isFetched: isFetched)
-                    Spacer(minLength: 12)
-                    menuBarWindowPicker(providerID: providerID, selection: selection)
-                        .disabled(!isFetched)
-                }
-
-                VStack(alignment: .leading, spacing: SettingsMetrics.labelToStackedControl) {
-                    providerWindowLabel(providerID, isFetched: isFetched)
-                    menuBarWindowPicker(providerID: providerID, selection: selection)
-                        .disabled(!isFetched)
+                if available.contains(where: { !store.providerOrder.contains($0) }) {
+                    SettingsHelpText(text: "Turn on provider tracking in Accounts to add its pill.")
                 }
             }
-
-            // The fallback line describes live data ("using 5-hour while weekly is
-            // unavailable"), which says nothing about a provider that isn't polled.
-            if isFetched, let fallback = menuBarWindowFallbackText(for: providerID) {
-                SettingsHelpText(text: fallback)
-            }
         }
     }
 
-    private func providerWindowLabel(_ providerID: ProviderID, isFetched: Bool) -> some View {
-        // The Off tag sits outside the width-reservation stack: reserving it would widen
-        // every row's label slot the moment one provider is switched off. The picker is
-        // pinned to `segmentedMaxWidth` by the trailing spacer, so the tag can't push it.
-        HStack(spacing: 6) {
-            ZStack(alignment: .leading) {
-                ForEach(store.registeredProviderOrder, id: \.self) { id in
-                    providerWindowLabelContent(id).hidden()
+    @ViewBuilder private var windowChoices: some View {
+        let ids = store.menuBarFillSource == .auto ? store.providerOrder : selected
+        if !ids.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Usage Shown in Each Pill")
+                    .font(.system(size: 13, weight: .medium))
+                ForEach(ids, id: \.self) { id in
+                    ResponsiveControlRow(label: name(id)) {
+                        if store.hasSelectableMenuBarWindows(for: id) {
+                            Picker("\(name(id)) usage window", selection: Binding(
+                                get: { store.menuBarWindowSource(for: id) },
+                                set: { store.setMenuBarWindowSource($0, for: id) }
+                            )) {
+                                ForEach(MenuBarWindowSource.allCases, id: \.self) { source in
+                                    Text(source.label).tag(source)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .fixedSize()
+                        } else {
+                            Text(store.resolvedMenuBarWindowKind(for: id)?.shortLabel ?? "Waiting for usage")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let resolved = store.resolvedMenuBarWindowSource(for: id),
+                       resolved != store.menuBarWindowSource(for: id) {
+                        SettingsHelpText(text: "Using \(resolved.label.lowercased()) while \(store.menuBarWindowSource(for: id).label.lowercased()) data is unavailable.")
+                    }
                 }
-                providerWindowLabelContent(providerID)
             }
-            if !isFetched {
-                SettingsPillBadge(text: "Off")
-                    // R2B1/PB9: one constant, shared with the Accounts help line, so the two
-                    // statements of this rule cannot drift (they disagreed on the full stop).
-                    .help(SettingsCopy.providerOffNotice)
-                    .accessibilityLabel(SettingsCopy.providerOffAccessibilityLabel)
-            }
-        }
-        // Matches the dimmed-row step Accounts uses for the same "off" state.
-        .opacity(isFetched ? 1 : 0.45)
-    }
-
-    /// Every row reserves the widest registered provider label so flexible picker slots
-    /// receive identical proposals at compact window widths.
-    private func providerWindowLabelContent(_ providerID: ProviderID) -> some View {
-        HStack(spacing: 7) {
-            ProviderLogoView(providerID: providerID, size: 15)
-            Text(store.displayNames[providerID] ?? providerID.raw.capitalized)
         }
     }
 
-    private func menuBarWindowPicker(
-        providerID: ProviderID,
-        selection: Binding<MenuBarWindowSource>
-    ) -> some View {
-        let name = store.displayNames[providerID] ?? providerID.raw.capitalized
-        return Picker("\(name) preferred window", selection: selection) {
-            ForEach(MenuBarWindowSource.allCases, id: \.self) { source in
-                Text(source.label).tag(source)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        // PB3: `width`, not `maxWidth`, so the slot is one declared size instead of whatever
-        // the labels happen to need. The trailing alignment is the other half of the fix and
-        // is load-bearing: an AppKit segmented control does *not* stretch to a proposal wider
-        // than its intrinsic width, so "Weekly | 5-hour" (127pt) sat centred in the 220pt box
-        // and still ended ~45pt short of the rail every other control in the tile lands on.
-        // Measured in the harness render at 800 × 700. A longer set of labels (the API Spend
-        // Period picker, 217pt) fills the box and is unaffected.
-        .frame(width: SettingsMetrics.segmentedMaxWidth, alignment: .trailing)
-        .onChange(of: selection.wrappedValue) { _, newValue in
-            store.setMenuBarWindowSource(newValue, for: providerID)
-        }
-    }
-
-    private func menuBarWindowFallbackText(for providerID: ProviderID) -> String? {
-        let preferred = store.menuBarWindowSource(for: providerID)
-        guard let resolved = store.resolvedMenuBarWindowSource(for: providerID),
-              resolved != preferred
-        else { return nil }
-        return "Using \(resolved.label.lowercased()) while \(preferred.label.lowercased()) data is unavailable."
+    private func name(_ id: ProviderID) -> String {
+        store.displayNames[id] ?? id.raw.capitalized
     }
 }
 
@@ -505,11 +504,6 @@ struct WidgetsSettingsPane: View {
     @Binding var widgetsEnabled: Bool
     @Binding var showCodexSparkCountersInWidgets: Bool
     @Binding var syncToIPhoneEnabled: Bool
-    /// PB8: the widget rule lives in Menu Bar, so the help line there links to it. The root
-    /// owns the sidebar selection (KTD3) and persists it through `settingsPane`, so this
-    /// pane asks rather than navigating itself.
-    let onShowMenuBarPane: () -> Void
-
     var body: some View {
         SettingsPaneScaffold(SettingsPane.widgets.label) {
             // L9P: sits on the pane background above the tile, like the Appearance
@@ -521,7 +515,7 @@ struct WidgetsSettingsPane: View {
                     widgetsEnabled: $widgetsEnabled,
                     showCodexSparkCountersInWidgets: $showCodexSparkCountersInWidgets,
                     syncToIPhoneEnabled: $syncToIPhoneEnabled,
-                    onShowMenuBarPane: onShowMenuBarPane
+                    store: store
                 )
                 .onChange(of: widgetsEnabled) { _, newValue in
                     store.setWidgetsEnabled(newValue)

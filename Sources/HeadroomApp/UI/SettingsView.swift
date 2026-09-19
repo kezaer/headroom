@@ -32,12 +32,9 @@ struct SettingsView: View {
     @State private var sidebarSelection: SettingsPane? = .general
     @State private var hasVisitedAccounts = false
     @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
-    @State private var showMenuBarPercentage = false
     @State private var usagePercentageMode: UsagePercentageMode = .remaining
     @State private var accountTitleInk: AccountTitleInk = .neutral
     @State private var meterStyle: MeterStyle = .default
-    @State private var menuBarFillSource: MenuBarFillSource = .auto
-    @State private var menuBarWindowSources: [ProviderID: MenuBarWindowSource] = [:]
     @State private var widgetsEnabled = true
     @State private var showCodexSparkCountersInApp = true
     @State private var showCodexSparkCountersInWidgets = false
@@ -254,22 +251,13 @@ struct SettingsView: View {
                 }
             )
         case .menuBar:
-            MenuBarSettingsPane(
-                store: store,
-                showMenuBarPercentage: $showMenuBarPercentage,
-                menuBarFillSource: $menuBarFillSource,
-                menuBarWindowSources: $menuBarWindowSources
-            )
+            MenuBarSettingsPane(store: store)
         case .widgets:
             WidgetsSettingsPane(
                 store: store,
                 widgetsEnabled: $widgetsEnabled,
                 showCodexSparkCountersInWidgets: $showCodexSparkCountersInWidgets,
-                syncToIPhoneEnabled: $syncToIPhoneEnabled,
-                // PB8: goes through the same selection the sidebar writes, so the visit is
-                // persisted to `settingsPane` by the `onChange` above and the pane cross-fade
-                // plays exactly as if the row had been clicked.
-                onShowMenuBarPane: { sidebarSelection = .menuBar }
+                syncToIPhoneEnabled: $syncToIPhoneEnabled
             )
         case .accounts:
             AccountsSettingsPane(
@@ -372,14 +360,9 @@ struct SettingsView: View {
         sidebarSelection = storedPane
         if storedPane == .accounts { hasVisitedAccounts = true }
         appearancePreference = preferences.appearancePreference
-        showMenuBarPercentage = store.showMenuBarPercentage
         usagePercentageMode = store.usagePercentageMode
         accountTitleInk = store.accountTitleInk
         meterStyle = store.meterStyle
-        menuBarFillSource = store.menuBarFillSource
-        menuBarWindowSources = Dictionary(uniqueKeysWithValues: store.registeredProviderOrder.map {
-            ($0, store.menuBarWindowSource(for: $0))
-        })
         widgetsEnabled = store.widgetsEnabled
         showCodexSparkCountersInApp = store.showCodexSparkCountersInApp
         showCodexSparkCountersInWidgets = store.showCodexSparkCountersInWidgets

@@ -145,6 +145,21 @@ struct PreferencesTests {
         #expect(prefs.menuBarFillSource == .providers([.claude, .codex, .grok]))
     }
 
+    @Test func menuBarOrderAndWidgetMigrationStatePersistIndependently() {
+        let defaults = freshDefaults()
+        let prefs = Preferences(defaults: defaults)
+        #expect(prefs.menuBarProviderOrder.isEmpty)
+        #expect(prefs.widgetPriorityProviders == nil)
+        prefs.menuBarProviderOrder = [.cursor, .claude, .codex, .grok]
+        prefs.widgetPriorityProviders = [.codex]
+        let reloaded = Preferences(defaults: defaults)
+        #expect(reloaded.menuBarProviderOrder == [.cursor, .claude, .codex, .grok])
+        #expect(reloaded.widgetPriorityProviders == [.codex])
+        prefs.widgetPriorityProviders = []
+        #expect(reloaded.widgetPriorityProviders == [])
+        #expect(reloaded.menuBarFillSource == .auto)
+    }
+
     @Test func menuBarWindowSourcesDefaultAndPersistIndependently() {
         let prefs = Preferences(defaults: freshDefaults())
 

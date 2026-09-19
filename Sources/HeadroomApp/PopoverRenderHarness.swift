@@ -17,6 +17,32 @@ enum PopoverRenderHarness {
 
         Task { @MainActor in
             var failedPaths: [String] = []
+            // Focused, offscreen acceptance for the arranger at the normal and minimum
+            // window sizes, including both width treatments and the automatic entry state.
+            if CommandLine.arguments.contains("--menu-bar-only") {
+                for dark in [false, true] {
+                    for showsPercentage in [false, true] {
+                        for compactWindow in [false, true] {
+                            let name = "settings-menuBar-\(showsPercentage ? "percentages" : "pills")-\(compactWindow ? "compact" : "regular")-\(dark ? "dark" : "light").png"
+                            let url = outDir.appendingPathComponent(name)
+                            if await renderSettings(
+                                pane: .menuBar, percentageMode: .remaining, dark: dark,
+                                height: compactWindow ? 632 : nil,
+                                width: compactWindow ? 720 : nil,
+                                menuBarPercentages: showsPercentage, to: url
+                            ) {
+                                print("✓ \(url.path)")
+                            } else { failedPaths.append(url.path) }
+                        }
+                    }
+                    let url = outDir.appendingPathComponent("settings-menuBar-auto-\(dark ? "dark" : "light").png")
+                    if await renderSettings(pane: .menuBar, percentageMode: .remaining, dark: dark, to: url) {
+                        print("✓ \(url.path)")
+                    } else { failedPaths.append(url.path) }
+                }
+                for path in failedPaths { print("✗ Failed to render \(path)") }
+                exit(failedPaths.isEmpty ? 0 : 1)
+            }
             for state in State.allCases {
                 let modes: [UsagePercentageMode] = state == .connected ? UsagePercentageMode.allCases : [.remaining]
                 for mode in modes {
@@ -339,6 +365,8 @@ enum PopoverRenderHarness {
         dark: Bool,
         multiAccount: Bool = false,
         height heightOverride: CGFloat? = nil,
+        width widthOverride: CGFloat? = nil,
+        menuBarPercentages: Bool? = nil,
         to url: URL
     ) async -> Bool {
         // L9A retired the per-pane window heights; the harness captures every pane at
@@ -349,6 +377,14 @@ enum PopoverRenderHarness {
         // The window opens on the persisted pane (R4), so selecting it here is how the
         // harness chooses which detail column to capture without a view-side hook.
         preferences.settingsPane = pane
+        if pane == .menuBar {
+            preferences.setSurfaceEnabled(true, for: .grokSubscription)
+            preferences.setSurfaceEnabled(true, for: .cursorSubscription)
+            if let menuBarPercentages {
+                preferences.showMenuBarPercentage = menuBarPercentages
+                preferences.menuBarFillSource = .providers([.claude, .codex, .grok, .cursor])
+            }
+        }
         let store: UsageStore
         if multiAccount {
             let fixture = multiFixture(for: .multiMixed)
@@ -388,7 +424,10 @@ enum PopoverRenderHarness {
                 providers: [
                     DemoUsageProvider(id: .claude, displayName: "Claude", snapshot: DemoFixture.claudeSnapshot),
                     DemoUsageProvider(id: .codex, displayName: "Codex", snapshot: DemoFixture.codexSnapshot),
-                ],
+                ] + (pane == .menuBar ? [
+                    DemoUsageProvider(id: .grok, displayName: "Grok", snapshot: DemoFixture.grokSnapshot),
+                    DemoUsageProvider(id: .cursor, displayName: "Cursor", snapshot: DemoFixture.cursorSnapshot),
+                ] : []),
                 apiSpendProviders: [
                     DemoSpendProvider(id: .claude, displayName: "Anthropic API", snapshot: DemoFixture.anthropicSpend),
                     DemoSpendProvider(id: .codex, displayName: "OpenAI API", snapshot: DemoFixture.openAISpend),
@@ -396,7 +435,8 @@ enum PopoverRenderHarness {
                 preferences: preferences
             )
         }
-        let width = SettingsView.windowWidth
+        if pane == .menuBar { await store.refreshAll() }
+        let width = widthOverride ?? SettingsView.windowWidth
         let root = SettingsView(
             store: store,
             appearancePreference: .constant(dark ? .dark : .light),
@@ -425,7 +465,11 @@ enum PopoverRenderHarness {
         window.orderFrontRegardless()
         window.displayIfNeeded()
         try? await Task.sleep(for: .milliseconds(500))
-        let captured = capture(window: window, to: url)
+        // The focused acceptance run must fail if WindowServer capture is unavailable;
+        // cacheDisplay can save a nonempty but cropped/incorrect Settings bitmap.
+        let captured = CommandLine.arguments.contains("--menu-bar-only")
+            ? captureWindow(number: window.windowNumber, to: url)
+            : capture(window: window, to: url)
         window.orderOut(nil)
         return captured
     }
