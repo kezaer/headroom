@@ -650,28 +650,25 @@ struct AccountSectionView: View {
                         }
                     }
                 } else if isWaitingForSetup {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // S2B: the spinner is the one thing besides a brand mark allowed in
-                        // the mark column — it reports progress, not severity — and taking
-                        // the 15pt slot still lands the sentence on the 34pt content axis.
-                        HStack(alignment: .top, spacing: IdentityRowMetrics.spacing) {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .frame(width: IdentityRowMetrics.markSlotWidth, height: 15)
-                            StatusSentence(
-                                text: SetupSessions.mode(for: account) == .deviceCode
-                                    ? "Waiting for device code…"
-                                    : "Waiting for sign-in…",
-                                severity: .progress,
-                                indented: false
-                            )
-                        }
-                        // B3A: the bare accent label is gone — a waiting row's one control
-                        // now carries the same resting container as the sign-in chip.
-                        CardActionRow(trailingInset: IdentityRowMetrics.contentTrailingInset) {
-                            Button("Check Now") { onRetry() }
-                                .buttonStyle(SetupChipButtonStyle(size: .small))
-                        }
+                    // S2B: the spinner is the one thing besides a brand mark allowed in
+                    // the mark column — it reports progress, not severity — and taking
+                    // the 15pt slot still lands the sentence on the 34pt content axis.
+                    //
+                    // R13/KTD12 (2026-09-19 sign-in plan): the row's Check Now is gone on
+                    // every provider. Its one control is the Stop Waiting chip the section
+                    // renders below, which R13 keeps reachable through the confirming phase.
+                    HStack(alignment: .top, spacing: IdentityRowMetrics.spacing) {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: IdentityRowMetrics.markSlotWidth, height: 15)
+                        StatusSentence(
+                            // R7: the row states the phase it is actually in — opening
+                            // Terminal, waiting for the user, or confirming after it closed.
+                            text: SetupSessions.waitingPhase(for: account)?.copy.title
+                                ?? "Waiting for sign-in…",
+                            severity: .progress,
+                            indented: false
+                        )
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 0) {
@@ -693,35 +690,18 @@ struct AccountSectionView: View {
                         // wrapped pair of chips sits inside the meters' left/right bounds.
                         // CMM4: 8, not R4A's 12 — the buttons are the sentence's own action
                         // and sat further from it than the sentence sat from its title.
+                        // KTD12: the chips come from `setupRowChips`, so the timeout's Try
+                        // Again and the too-old-CLI's Check Now are the same decision the
+                        // Settings row makes rather than a second copy of it here.
                         CardActionRow(topPadding: 8, trailingInset: IdentityRowMetrics.contentTrailingInset) {
-                            Button {
-                                if let recoveryPresentation {
-                                    SetupSessions.performRecovery(
-                                        recoveryPresentation.primaryAction,
-                                        for: account,
-                                        onRetry: onRetry
-                                    )
-                                } else {
-                                    SetupSessions.openSetup(for: account, onRetry: onRetry)
-                                }
-                            } label: {
-                                Text(recoveryPresentation?.primaryLabel ?? "Sign In")
-                            }
-                            .buttonStyle(SetupChipButtonStyle(size: .small))
-                            .accessibilityLabel("\(recoveryPresentation?.primaryLabel ?? "Sign In") for \(account.label)")
-                            if let secondaryLabel = recoveryPresentation?.secondaryLabel,
-                               let secondaryAction = recoveryPresentation?.secondaryAction {
-                                Button(secondaryLabel) {
-                                    SetupSessions.performRecovery(
-                                        secondaryAction,
-                                        for: account,
-                                        onRetry: onRetry
-                                    )
-                                }
-                                .buttonStyle(SetupChipButtonStyle(size: .small))
-                            } else if SetupSessions.failureMessage(for: account) != nil {
-                                Button("Check Now", action: onRetry)
+                            ForEach(setupRowChips(
+                                state: setupState,
+                                presentation: recoveryPresentation,
+                                hasFailureMessage: SetupSessions.failureMessage(for: account) != nil
+                            )) { chip in
+                                Button(chip.label) { perform(chip) }
                                     .buttonStyle(SetupChipButtonStyle(size: .small))
+                                    .accessibilityLabel("\(chip.label) for \(account.label)")
                             }
                         }
                     }
@@ -735,6 +715,22 @@ struct AccountSectionView: View {
 
     private var isWaitingForSetup: Bool {
         SetupSessions.isWaiting(for: account)
+    }
+
+    /// KTD12: `.checkNow` as a *recovery* action re-runs Claude's executable search before
+    /// it polls; the bare Check Now chip is the row's own forced poll. Keeping both routes
+    /// preserves the behaviour each slot had before the chips were unified.
+    private func perform(_ chip: SetupRowChip) {
+        switch chip {
+        case .tryAgain:
+            SetupSessions.tryAgain(for: account, onRetry: onRetry)
+        case .checkNow:
+            onRetry()
+        case .recovery(let action, _):
+            SetupSessions.performRecovery(action, for: account, onRetry: onRetry)
+        case .signIn:
+            SetupSessions.openSetup(for: account, onRetry: onRetry)
+        }
     }
 
     /// Account-scoped setup payoff: the chip belongs to the row whose login completed.

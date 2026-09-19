@@ -10,6 +10,11 @@ func settingsRecoveryActions(
     setupState: SetupSessionState
 ) -> AccountsSettingsInteractions.RecoveryRowActions? {
     guard setupHandoffRefusalMessage(for: setupState) == nil else { return nil }
+    // R13/KTD12 (2026-09-19 sign-in plan): the row rendered Sign In *and* Check Now all
+    // through a handoff, because `recoveryButtons` is gated on this being non-nil. While
+    // the session owns its own controls — waiting, confirming, the timeout, a too-old CLI
+    // — the outcome's fetch-recovery pair is suppressed the way a refusal already does.
+    guard setupRowRecovery(for: setupState) == .outcomeRecovery else { return nil }
     return AccountsSettingsInteractions.recoveryRowActions(
         snapshot: snapshot,
         account: account
@@ -23,7 +28,10 @@ func settingsStopWaitingAccount(
     setupState: SetupSessionState,
     hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
 ) -> ProviderAccount? {
-    guard hasActiveHandoff(account)
+    guard setupSessionOffersStopWaiting(
+              state: setupState,
+              hasActiveHandoff: hasActiveHandoff(account)
+          )
             || removalState == .setupActive
             || setupState == .blockedByOpenHandoff
     else { return nil }
@@ -424,6 +432,7 @@ struct AccountsSettingsTile: View {
                     recoveryButtons(
                         for: account,
                         status: status,
+                        setupState: setupState,
                         recoveryActions: recoveryActions
                     )
                 }
@@ -439,6 +448,7 @@ struct AccountsSettingsTile: View {
                     recoveryButtons(
                         for: account,
                         status: status,
+                        setupState: setupState,
                         recoveryActions: recoveryActions
                     )
                 }
@@ -535,6 +545,49 @@ struct AccountsSettingsTile: View {
     }
 
     @ViewBuilder private func recoveryButtons(
+        for account: ProviderAccount,
+        status: AccountStatus,
+        setupState: SetupSessionState,
+        recoveryActions: AccountsSettingsInteractions.RecoveryRowActions?
+    ) -> some View {
+        switch setupRowRecovery(for: setupState) {
+        case .sessionOnly:
+            // R13: the session's own control is Stop Waiting, in the row's trailing slot.
+            EmptyView()
+        case .tryAgain:
+            // KTD12: not `.checkNow` and never labelled "Check Now" — Try Again brings the
+            // still-open window forward and resumes the wait (R10).
+            Button("Try Again") {
+                SetupSessions.tryAgain(
+                    for: account,
+                    onRetry: { store.refreshAccountNow(account.key) }
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Try signing in again for \(account.label)")
+        case .checkNow:
+            // R6: the one action that tells Headroom the update landed.
+            Button("Check Now") {
+                SetupSessions.performRecovery(
+                    .checkNow,
+                    for: account,
+                    onRetry: { store.refreshAccountNow(account.key) }
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Check Now for \(account.label)")
+        case .outcomeRecovery:
+            outcomeRecoveryButtons(
+                for: account,
+                status: status,
+                recoveryActions: recoveryActions
+            )
+        }
+    }
+
+    @ViewBuilder private func outcomeRecoveryButtons(
         for account: ProviderAccount,
         status: AccountStatus,
         recoveryActions: AccountsSettingsInteractions.RecoveryRowActions?

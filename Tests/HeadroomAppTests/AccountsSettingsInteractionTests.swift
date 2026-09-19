@@ -1441,7 +1441,12 @@ private final class GrokDeviceCodeSetupHarness {
         )
         #expect(providerCardStopWaitingAccount(
             entries: [ProviderAccountEntry(account: account, snapshot: liveSnapshot)],
-            hasActiveHandoff: hasActiveHandoff
+            offersStopWaiting: {
+                setupSessionOffersStopWaiting(
+                    state: coordinator.state(for: $0.key),
+                    hasActiveHandoff: hasActiveHandoff($0)
+                )
+            }
         ) == account)
     }
 
@@ -1673,5 +1678,279 @@ private final class GrokDeviceCodeSetupHarness {
             state: .inconclusive(.shellTimeout)
         ) == "Claude Code availability. Couldn’t confirm where Claude Code is\u{00A0}—\u{00A0}will retry")
         #expect(dedupe.announcement(for: .claude, state: .inconclusive(.shellTimeout)) == nil)
+    }
+}
+
+/// R13/KTD12 (2026-09-19 sign-in plan): the Settings row's controls while a handoff runs.
+@Suite struct SettingsWaitingRowTests {
+    private var claudeSnapshot: UsageSnapshot {
+        .stale(for: .claude, reason: .providerSetup(.claudeLoginRequired))
+    }
+
+    @MainActor @Test func waitingRowsOfferNoFetchRecoveryPair() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        for state in [SetupSessionState.preparing, .waiting(attempt: 0), .waiting(attempt: 3), .verifying] {
+            #expect(settingsRecoveryActions(
+                snapshot: claudeSnapshot,
+                account: account,
+                setupState: state
+            ) == nil, "\(state) still offers the outcome's recovery pair")
+            #expect(setupRowRecovery(for: state) == .sessionOnly)
+        }
+    }
+
+    /// KTD12: the timeout swaps the row's primary to Try Again; the too-old CLI swaps it to
+    /// the one check that proves the update landed. Neither leaves the outcome's pair behind.
+    @MainActor @Test func theTwoSessionOwnedFailuresReplaceTheRecoveryPair() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        for state in [SetupSessionState.failed(.waitingTimedOut), .failed(.updateRequired)] {
+            #expect(settingsRecoveryActions(
+                snapshot: claudeSnapshot,
+                account: account,
+                setupState: state
+            ) == nil)
+        }
+        #expect(setupRowRecovery(for: .failed(.waitingTimedOut)) == .tryAgain)
+        #expect(setupRowRecovery(for: .failed(.updateRequired)) == .checkNow)
+        #expect(settingsStopWaitingAccount(
+            account,
+            removalState: nil,
+            setupState: .failed(.waitingTimedOut),
+            hasActiveHandoff: { _ in true }
+        ) == account)
+    }
+
+    /// Every other failed state keeps the actions it returns today.
+    @MainActor @Test func everyOtherFailedStateKeepsItsActionsUnchanged() {
+        let account = ProviderAccount.builtIn(for: .codex)
+        let snapshot = UsageSnapshot.stale(for: .codex, reason: .providerSetup(.codexAuthAbsent))
+        for failure in [SetupSessionFailure.retryExhausted, .closedBeforeSignIn,
+                        .terminalRejected, .stagingFailed, .executableMissing] {
+            let actions = settingsRecoveryActions(
+                snapshot: snapshot,
+                account: account,
+                setupState: .failed(failure)
+            )
+            #expect(actions?.primaryLabel == ProviderSignInCopy.button, "\(failure)")
+            #expect(actions?.secondaryLabel == "Use Device Code", "\(failure)")
+            #expect(setupRowRecovery(for: .failed(failure)) == .outcomeRecovery)
+        }
+        #expect(settingsRecoveryActions(
+            snapshot: snapshot,
+            account: account,
+            setupState: .idle
+        )?.primaryLabel == ProviderSignInCopy.button)
+    }
+
+    @MainActor @Test func stopWaitingSurvivesTheConfirmingPhase() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        #expect(settingsStopWaitingAccount(
+            account,
+            removalState: nil,
+            setupState: .verifying,
+            hasActiveHandoff: { _ in false }
+        ) == account)
+        #expect(providerCardStopWaitingAccount(
+            entries: [ProviderAccountEntry(account: account, snapshot: claudeSnapshot)],
+            offersStopWaiting: {
+                setupSessionOffersStopWaiting(state: .verifying, hasActiveHandoff: false)
+                    && $0.key == account.key
+            }
+        ) == account)
+    }
+
+    /// Nothing that was not waiting starts offering Stop Waiting.
+    @MainActor @Test func settledSessionsStillOfferNoStopWaiting() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        for state in [SetupSessionState.idle, .connected, .cancelled,
+                      .failed(.retryExhausted), .failed(.closedBeforeSignIn)] {
+            #expect(settingsStopWaitingAccount(
+                account,
+                removalState: nil,
+                setupState: state,
+                hasActiveHandoff: { _ in false }
+            ) == nil, "\(state) should not offer Stop Waiting")
+        }
+    }
+}
+
+/// KTD12/R10: Try Again is one handler with two branches, and the announcement it can
+/// trigger speaks once per handoff rather than once per press.
+@Suite struct SetupSessionTryAgainTests {
+    @MainActor @Test func tryAgainFrontsTheTerminalAppAndResumesWhenAHandoffIsOpen() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        var activated: [String] = []
+        let original = SetupSessions.activateApplication
+        defer { SetupSessions.activateApplication = original }
+        SetupSessions.activateApplication = { identifier in
+            activated.append(identifier)
+            return true
+        }
+        SetupSessions.noteHandoffTerminalApp("com.apple.Terminal", for: account.key)
+        defer { SetupSessions.noteHandoffTerminalApp(nil, for: account.key) }
+
+        // KTD12: with the window still open Try Again fronts it and resumes; it never
+        // stages a second handoff for the same account. The route is passed in because the
+        // coordinator that would decide it is process-wide shared state in this target.
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: true, purpose: .setup)
+            == .showTerminalAndResume)
+        SetupSessions.tryAgain(for: account, route: .showTerminalAndResume, onRetry: {})
+        #expect(activated == ["com.apple.Terminal"])
+    }
+
+    /// R10: with no handoff open Try Again starts a fresh one, of the purpose the session
+    /// was already running — an approval restarts as an approval, not as a sign-in.
+    @MainActor @Test func tryAgainStartsAFreshHandoffWhenNoneIsOpen() {
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: .setup)
+            == .startNewHandoff(.setup))
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: .trust)
+            == .startNewHandoff(.trust))
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: nil)
+            == .startNewHandoff(.setup))
+    }
+
+    /// R14: with no handler recorded nothing is fronted, and no handoff is begun or restaged.
+    @MainActor @Test func showTerminalIsSilentWithNoRecordedHandler() {
+        let account = ProviderAccount(
+            id: AccountID("claude-no-handler"),
+            providerID: .claude,
+            label: "Work",
+            isBuiltIn: false
+        )
+        let original = SetupSessions.activateApplication
+        defer { SetupSessions.activateApplication = original }
+        var activations = 0
+        SetupSessions.activateApplication = { _ in
+            activations += 1
+            return true
+        }
+        #expect(!SetupSessions.showTerminal(for: account))
+        #expect(activations == 0)
+    }
+
+    /// KTD12: a timeout, Try Again, timeout sequence announces the sentence once. The dedupe
+    /// used to clear whenever the state left `.failed`, which Try Again does on every press.
+    @MainActor @Test func aTryAgainLoopAnnouncesTheTimeoutOnce() {
+        var announcer = SetupFailureAnnouncer()
+        let key = AccountKey(providerID: .claude, accountID: .primary)
+
+        let firstTimeout = announcer.shouldAnnounce(.waitingTimedOut, for: key, hasActiveHandoff: true)
+        // Try Again returns the session to `.waiting` with the same window still open.
+        let duringResume = announcer.shouldAnnounce(nil, for: key, hasActiveHandoff: true)
+        let secondTimeout = announcer.shouldAnnounce(.waitingTimedOut, for: key, hasActiveHandoff: true)
+        // A genuinely different failure is never silenced.
+        let differentFailure = announcer.shouldAnnounce(.closedBeforeSignIn, for: key, hasActiveHandoff: true)
+        // Once the handoff ends the claim is released, so a later handoff speaks again.
+        let afterHandoffEnded = announcer.shouldAnnounce(nil, for: key, hasActiveHandoff: false)
+        let laterHandoff = announcer.shouldAnnounce(.waitingTimedOut, for: key, hasActiveHandoff: true)
+
+        #expect(firstTimeout)
+        #expect(!duringResume)
+        #expect(!secondTimeout)
+        #expect(differentFailure)
+        #expect(!afterHandoffEnded)
+        #expect(laterHandoff)
+    }
+}
+
+/// R2B1/R2C6/KTD12: `SetupSessions.failureMessage` lives in the app target, so the copy rules
+/// Core enforces on `ProviderSetupOutcome` are asserted for it here.
+@Suite struct SetupFailureCopyTests {
+    private let accounts: [ProviderAccount] = [
+        .builtIn(for: .claude), .builtIn(for: .codex), .builtIn(for: .grok), .builtIn(for: .cursor),
+    ]
+    private let failures: [SetupSessionFailure] = [
+        .executableMissing, .updateRequired, .stagingFailed, .terminalRejected,
+        .pasteboardFailed, .retryExhausted, .waitingTimedOut, .closedBeforeSignIn,
+        .provider(.claudeLoginRequired), .providerCapability(.confirmedAbsent),
+        .providerCapability(.inconclusive(.shellTimeout)),
+    ]
+
+    @MainActor private var allStrings: [String] {
+        var strings: [String] = []
+        for account in accounts {
+            for failure in failures {
+                for purpose in [SetupHandoffPurpose.setup, .reset, .trust, .approval] {
+                    strings.append(SetupSessions.failureMessage(
+                        for: failure,
+                        account: account,
+                        purpose: purpose
+                    ))
+                }
+                if let detail = SetupSessions.failureDetail(for: failure) {
+                    strings.append(detail)
+                }
+            }
+        }
+        return strings
+    }
+
+    @MainActor @Test func everyFailureSentenceUsesCurlyApostrophesAndNonBreakingDashes() {
+        for text in allStrings {
+            #expect(!text.isEmpty)
+            #expect(!text.contains("'"), "\(text) carries a straight apostrophe")
+            let characters = Array(text)
+            for (index, character) in characters.enumerated() where character == "\u{2014}" {
+                #expect(index > 0 && characters[index - 1] == "\u{00A0}",
+                        "\(text) has a breaking space before its em dash")
+                #expect(index + 1 < characters.count && characters[index + 1] == "\u{00A0}",
+                        "\(text) has a breaking space after its em dash")
+            }
+        }
+    }
+
+    /// R2C6: "connect" is not a word for signing in. PA11: "Check Again" and "Refresh" are
+    /// not words for a forced poll.
+    @MainActor @Test func noFailureSentenceUsesARetiredSynonym() {
+        for text in allStrings {
+            #expect(!text.localizedCaseInsensitiveContains("connect"),
+                    "\(text) still names signing in \"connect\"")
+            #expect(!text.localizedCaseInsensitiveContains("Check Again"))
+            #expect(!text.localizedCaseInsensitiveContains("Refresh"))
+        }
+    }
+
+    /// KTD12: the timeout state offers Try Again and Stop Waiting only, so its sentence must
+    /// not point at a button that is not there. `.retryExhausted` keeps its Check Now,
+    /// because the providers that still reach it keep that chip.
+    @MainActor @Test func theTimeoutSentenceNamesNoButtonAbsentFromItsState() {
+        let account = ProviderAccount.builtIn(for: .claude)
+        let present = Set(claudeWaitingCardActions(
+            state: .failed(.waitingTimedOut),
+            hasActiveHandoff: true
+        ).map(\.label) + ["Stop Waiting"])
+        let absent = ["Check Now", "Sign In", "Sign In Again", "Show Terminal",
+                      "Continue Setup", "Open Claude Workspace"]
+        for purpose in [SetupHandoffPurpose.setup, .reset, .trust] {
+            let message = SetupSessions.failureMessage(
+                for: .waitingTimedOut,
+                account: account,
+                purpose: purpose
+            )
+            let detail = SetupSessions.failureDetail(for: .waitingTimedOut) ?? ""
+            for label in absent {
+                #expect(!message.localizedCaseInsensitiveContains(label),
+                        "the timeout sentence names \(label), which is not in its state")
+                #expect(!detail.localizedCaseInsensitiveContains(label))
+            }
+            // The sentence states the cause; the detail may point only at what is on screen.
+            #expect(!message.localizedCaseInsensitiveContains("try again"))
+            #expect(present.contains("Try Again"))
+        }
+        #expect(SetupSessions.failureMessage(
+            for: .retryExhausted,
+            account: .builtIn(for: .codex),
+            purpose: .setup
+        ).contains("Check Now"))
+    }
+
+    /// KTD12: only the timeout carries a second line, and only because its window is still
+    /// open — the fact a one-line sentence cannot hold.
+    @MainActor @Test func onlyTheTimeoutCarriesASecondLine() {
+        for failure in failures where failure != .waitingTimedOut {
+            #expect(SetupSessions.failureDetail(for: failure) == nil, "\(failure)")
+        }
+        #expect(SetupSessions.failureDetail(for: .waitingTimedOut)
+            == "Terminal is still open. Finish there, or try again to keep waiting.")
     }
 }

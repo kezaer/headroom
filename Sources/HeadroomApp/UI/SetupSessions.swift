@@ -49,6 +49,29 @@ final class SetupSessionActivity {
     }
 }
 
+/// KTD12 (2026-09-19 sign-in plan): one VoiceOver announcement per distinct failure **per
+/// handoff**. The dedupe used to clear the moment the state left `.failed`, which a Try Again
+/// loop does on every press — so a user holding one Terminal window open heard "Sign-in
+/// wasn’t confirmed" at high priority every five minutes. The claim is released when the
+/// handoff ends instead, and a genuinely different failure still speaks.
+struct SetupFailureAnnouncer {
+    private var announced: [AccountKey: SetupSessionFailure] = [:]
+
+    mutating func shouldAnnounce(
+        _ failure: SetupSessionFailure?,
+        for key: AccountKey,
+        hasActiveHandoff: Bool
+    ) -> Bool {
+        guard let failure else {
+            if !hasActiveHandoff { announced.removeValue(forKey: key) }
+            return false
+        }
+        guard announced[key] != failure else { return false }
+        announced[key] = failure
+        return true
+    }
+}
+
 /// The single provider→session routing switch. Views call these instead of
 /// switching on `providerID` themselves — four parallel copies of that switch is
 /// how a future provider ends up with a Sign In button that silently no-ops
@@ -77,6 +100,8 @@ enum SetupSessions {
         /// KTD1 (2026-09-19 sign-in plan): the kind this script was written as, nil for the
         /// providers that stage one kind.
         var claudeScriptKind: ClaudeSetupScriptKind?
+        /// KTD11: why that kind is `interactive`, which is what the waiting copy turns on.
+        var claudeInteractiveReason: ClaudeInteractiveLaunchReason?
     }
 
     private static var coordinator: SetupSessionCoordinator?
@@ -87,9 +112,13 @@ enum SetupSessions {
     /// account's open handoff. Show Terminal fronts that app rather than the current default
     /// `.command` handler, which the user can change while the handoff is still running.
     private static var handoffTerminalApps: [AccountKey: String] = [:]
+    /// KTD11: why the account's open handoff was staged as the interactive launch, so the
+    /// waiting surface can tell the `/login` case (R6) from a never-onboarded extra config
+    /// (AE7) without re-reading the CLI version from a view.
+    private static var handoffInteractiveReasons: [AccountKey: ClaudeInteractiveLaunchReason] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var checkNowTasks: [AccountKey: Task<Void, Never>] = [:]
-    private static var announcedFailures: [AccountKey: SetupSessionFailure] = [:]
+    private static var failureAnnouncer = SetupFailureAnnouncer()
     private static var capabilityAnnouncementDedupe = CapabilityAnnouncementDedupe()
     private static var claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
     private static var builtInClaudeWorkspace = ClaudeUsageWorkspace.defaultDirectoryURL
@@ -113,6 +142,19 @@ enum SetupSessions {
     /// resolve, so its restored handler is written back through here.
     static func noteHandoffTerminalApp(_ bundleIdentifier: String?, for key: AccountKey) {
         handoffTerminalApps[key] = bundleIdentifier
+    }
+
+    /// KTD11: the same write-back for the staged interactive reason, used by `configure`
+    /// when it restores a handoff from its durable record.
+    static func noteHandoffInteractiveReason(
+        _ reason: ClaudeInteractiveLaunchReason?,
+        for key: AccountKey
+    ) {
+        handoffInteractiveReasons[key] = reason
+    }
+
+    static func handoffInteractiveReason(for key: AccountKey) -> ClaudeInteractiveLaunchReason? {
+        handoffInteractiveReasons[key]
     }
 
     /// KTD13: the only AppKit call Show Terminal makes, replaceable so tests never front a
@@ -188,6 +230,7 @@ enum SetupSessions {
                         startedAt: startedAt
                     )
                     noteHandoffTerminalApp(record?.terminalBundleIdentifier, for: account.key)
+                    noteHandoffInteractiveReason(record?.claudeInteractiveReason, for: account.key)
                     restoreWaitingStart(for: account.key, marker: marker)
                     monitorCompletion(marker, for: account.key)
                 } else {
@@ -356,6 +399,86 @@ enum SetupSessions {
         coordinator?.sessionMode(for: account.key) ?? .standard
     }
 
+    static func purpose(for account: ProviderAccount) -> SetupHandoffPurpose? {
+        coordinator?.sessionPurpose(for: account.key)
+    }
+
+    static func waitingPolicy(for account: ProviderAccount) -> SetupWaitingPolicy? {
+        coordinator?.waitingPolicy(for: account.key)
+    }
+
+    static func finalVerificationCompletion(for account: ProviderAccount) -> SetupHandoffCompletion? {
+        coordinator?.finalVerificationCompletion(for: account.key)
+    }
+
+    /// R7/KTD11: the account's waiting phase, assembled once here from the typed session
+    /// state and the decisions its handoff recorded. Nil when the session is not waiting —
+    /// including the timeout, which is a failure with its own copy and actions (KTD12).
+    static func waitingPhase(for account: ProviderAccount) -> SetupWaitingPhase? {
+        SetupWaitingPhase.resolve(
+            state: state(for: account),
+            hasActiveHandoff: hasActiveHandoff(for: account),
+            purpose: purpose(for: account),
+            mode: mode(for: account),
+            interactiveReason: handoffInteractiveReasons[account.key],
+            reportedCompletion: finalVerificationCompletion(for: account)
+        )
+    }
+
+    /// KTD8/R10: return an already-open handoff to waiting without restaging anything.
+    static func resumeWaiting(for account: ProviderAccount) {
+        coordinator?.resumeWaiting(for: account.key)
+    }
+
+    /// KTD12/R10: Try Again is one handler with two branches, kept here so the popover card,
+    /// the account row and the Settings row cannot drift apart. With the window still open it
+    /// fronts the terminal app and resumes the five-minute wait; with none open it starts a
+    /// fresh handoff of the same purpose. It is deliberately not `.checkNow` — PA11 pins that
+    /// label to the forced poll.
+    static func tryAgain(for account: ProviderAccount, onRetry: @escaping () -> Void) {
+        tryAgain(
+            for: account,
+            route: tryAgainRoute(
+                hasActiveHandoff: hasActiveHandoff(for: account),
+                purpose: purpose(for: account)
+            ),
+            onRetry: onRetry
+        )
+    }
+
+    /// The route is a parameter here so a test can drive each branch without owning the
+    /// process-wide coordinator that decides which one applies.
+    static func tryAgain(
+        for account: ProviderAccount,
+        route: TryAgainRoute,
+        onRetry: @escaping () -> Void
+    ) {
+        switch route {
+        case .showTerminalAndResume:
+            showTerminal(for: account)
+            resumeWaiting(for: account)
+        case .startNewHandoff(.trust):
+            performRecovery(.openClaudeWorkspace, for: account, onRetry: onRetry)
+        case .startNewHandoff:
+            openSetup(for: account, onRetry: onRetry)
+        }
+    }
+
+    /// KTD12: the two branches, pure, so the choice is provable without opening Terminal.
+    enum TryAgainRoute: Equatable {
+        case showTerminalAndResume
+        /// The purpose survives the failure, so an approval handoff that timed out and was
+        /// then closed restarts as an approval rather than as a sign-in (AE3).
+        case startNewHandoff(SetupHandoffPurpose)
+    }
+
+    static func tryAgainRoute(
+        hasActiveHandoff: Bool,
+        purpose: SetupHandoffPurpose?
+    ) -> TryAgainRoute {
+        hasActiveHandoff ? .showTerminalAndResume : .startNewHandoff(purpose ?? .setup)
+    }
+
     /// Redaction-safe, actionable copy for coordinator failures. Views use the typed
     /// state so preparation/open/retry failures do not collapse back into a dead-looking
     /// Connect button or expose caught filesystem/AppKit errors.
@@ -411,6 +534,18 @@ enum SetupSessions {
         }
     }
 
+    /// KTD12: the second line the compact waiting shell prints under a failure sentence.
+    /// Only the timeout has one: its Terminal window is still open, which is the fact the
+    /// one-line sentence cannot carry and the thing that makes Try Again mean something.
+    static func failureDetail(for failure: SetupSessionFailure) -> String? {
+        switch failure {
+        case .waitingTimedOut:
+            return "Terminal is still open. Finish there, or try again to keep waiting."
+        default:
+            return nil
+        }
+    }
+
     /// The product a failure sentence points the user at, named the way they would go and
     /// get it rather than the way they invoke it.
     private static func cliProductName(for account: ProviderAccount) -> String {
@@ -427,14 +562,13 @@ enum SetupSessions {
     /// VoiceOver announcement at the session boundary so a single transition is spoken
     /// once even when both Settings and the popover are mounted.
     static func announceFailureIfNeeded(for account: ProviderAccount) {
-        guard case .failed(let failure) = state(for: account) else {
-            announcedFailures.removeValue(forKey: account.key)
-            return
-        }
-        guard announcedFailures[account.key] != failure,
-              let message = failureMessage(for: account)
-        else { return }
-        announcedFailures[account.key] = failure
+        var failure: SetupSessionFailure?
+        if case .failed(let typed) = state(for: account) { failure = typed }
+        guard failureAnnouncer.shouldAnnounce(
+            failure,
+            for: account.key,
+            hasActiveHandoff: hasActiveHandoff(for: account)
+        ), let message = failureMessage(for: account) else { return }
         NSAccessibility.post(
             element: NSApplication.shared,
             notification: .announcementRequested,
@@ -498,6 +632,7 @@ enum SetupSessions {
     static func forceCancel(for account: ProviderAccount) {
         completionTasks.removeValue(forKey: account.key)?.cancel()
         handoffTerminalApps.removeValue(forKey: account.key)
+        handoffInteractiveReasons.removeValue(forKey: account.key)
         let prepared = preparedScripts.removeValue(forKey: account.key)
             ?? activeScripts.removeValue(forKey: account.key)
         let marker = prepared?.completionMarker ?? completionMarker(
@@ -561,6 +696,7 @@ enum SetupSessions {
                 let script: String
                 let manualCommand: String
                 var stagedScriptKind: ClaudeSetupScriptKind?
+                var stagedInteractiveReason: ClaudeInteractiveLaunchReason?
                 switch account.providerID {
                 case .claude:
                     let location = await claudeExecutableLocator.locate(forceRefresh: true)
@@ -589,10 +725,11 @@ enum SetupSessions {
                         configDirectory: configuration.claudeConfigDirectory?.path,
                         readVersion: claudeVersionReader
                     )
-                    guard case .stage(let stagedKind) = kind else {
+                    guard case .stage(let stagedKind, let interactiveReason) = kind else {
                         return .failure(.updateRequired)
                     }
                     stagedScriptKind = stagedKind
+                    stagedInteractiveReason = interactiveReason
                     let fallback = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
                     let descriptor = ClaudeSetupDescriptor(
                         accountKey: account.key,
@@ -686,7 +823,8 @@ enum SetupSessions {
                     scriptURL: scriptURL,
                     completionMarker: completionMarker,
                     manualCommand: manualCommand,
-                    claudeScriptKind: stagedScriptKind
+                    claudeScriptKind: stagedScriptKind,
+                    claudeInteractiveReason: stagedInteractiveReason
                 ))
             } catch {
                 return .failure(.stagingFailed)
@@ -708,8 +846,10 @@ enum SetupSessions {
     }
 
     /// KTD1: staging either writes one of the two Claude scripts or refuses outright.
+    /// KTD11: an `interactive` decision also carries *why*, because the waiting copy turns
+    /// on it and no view may re-read the CLI version to find out.
     private enum ClaudeStagingDecision {
-        case stage(ClaudeSetupScriptKind)
+        case stage(ClaudeSetupScriptKind, ClaudeInteractiveLaunchReason?)
         case refuseUpdateRequired
     }
 
@@ -727,7 +867,7 @@ enum SetupSessions {
         // status guard would exit before it on an account that is already signed in (AE3).
         // No version gates it: refusing would leave an approvable account with nothing to
         // click.
-        guard purpose == .setup || purpose == .reset else { return .stage(.interactive) }
+        guard purpose == .setup || purpose == .reset else { return .stage(.interactive, nil) }
 
         let versionOutput = await readVersion(
             executablePath,
@@ -740,7 +880,7 @@ enum SetupSessions {
             return .refuseUpdateRequired
         case .unreadable:
             // R6: a change to the CLI's version format must not lock everyone out of sign-in.
-            return .stage(.interactive)
+            return .stage(.interactive, .versionUnreadable)
         case .supported:
             break
         }
@@ -750,11 +890,13 @@ enum SetupSessions {
         let belowPrintModeFloor = !(versionOutput.map(
             ClaudeUsageCLIProbe.printUsageSupported(versionOutput:)
         ) ?? false)
-        if !account.isBuiltIn, belowPrintModeFloor { return .stage(.interactive) }
+        if !account.isBuiltIn, belowPrintModeFloor {
+            return .stage(.interactive, .neverOnboardedExtraAccount)
+        }
         // KTD1: `.reset` keeps its own `auth logout && auth login` script — the descriptor
         // selects that by purpose — so the kind stamped here only describes the shape the
         // waiting policy sees: a CLI auth command that drives the window and exits.
-        return .stage(.signIn)
+        return .stage(.signIn, nil)
     }
 
     private static func openPreparedHandoff(_ handoff: PreparedSetupHandoff) -> SetupOpenResult {
@@ -787,7 +929,8 @@ enum SetupSessions {
                     purpose: handoff.purpose,
                     claudeScriptKind: handoff.claudeScriptKind
                 ),
-                terminalBundleIdentifier: handlerBundleIdentifier
+                terminalBundleIdentifier: handlerBundleIdentifier,
+                claudeInteractiveReason: prepared.claudeInteractiveReason
             ),
             marker: prepared.completionMarker,
             generation: generation
@@ -801,6 +944,7 @@ enum SetupSessions {
         }
         activeScripts[handoff.accountKey] = prepared
         noteHandoffTerminalApp(handlerBundleIdentifier, for: handoff.accountKey)
+        noteHandoffInteractiveReason(prepared.claudeInteractiveReason, for: handoff.accountKey)
         monitorCompletion(prepared.completionMarker, for: handoff.accountKey)
         return .success(())
     }
@@ -842,6 +986,7 @@ enum SetupSessions {
             AccountStorage.clearFinishedSetupCompletionMarkers(marker)
             activeScripts.removeValue(forKey: key)
             handoffTerminalApps.removeValue(forKey: key)
+            handoffInteractiveReasons.removeValue(forKey: key)
             completionTasks[key] = nil
         }
     }

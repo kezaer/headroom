@@ -379,8 +379,12 @@ public enum AccountStorage {
     ) throws {
         guard isMarkerGeneration(generation) else { return }
         let identifier = record.terminalBundleIdentifier.flatMap(bundleIdentifier(_:)) ?? ""
+        // KTD11: the interactive reason joins the record for the same reason the policy did
+        // — R15 asks a restored handoff to state its phase, and the CLI version the reason
+        // was read from can change while the original Terminal is still open.
+        let reason = record.claudeInteractiveReason?.rawValue ?? ""
         try writeOwnerOnly(
-            "record:\(record.waitingPolicy.rawValue):\(identifier)\n",
+            "record:\(record.waitingPolicy.rawValue):\(identifier):\(reason)\n",
             to: URL(fileURLWithPath: setupHandoffRecordPath(marker, generation: generation))
         )
     }
@@ -396,13 +400,18 @@ public enum AccountStorage {
               )
         else { return nil }
         let parts = value.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 3,
+        // A three-field record was written by a build before KTD11's reason field; it reads
+        // back with no reason, which is the safe default (the plain sign-in copy).
+        guard parts.count == 3 || parts.count == 4,
               parts[0] == "record",
               let policy = SetupWaitingPolicy(rawValue: String(parts[1]))
         else { return nil }
         return SetupHandoffRecord(
             waitingPolicy: policy,
-            terminalBundleIdentifier: bundleIdentifier(String(parts[2]))
+            terminalBundleIdentifier: bundleIdentifier(String(parts[2])),
+            claudeInteractiveReason: parts.count == 4
+                ? ClaudeInteractiveLaunchReason(rawValue: String(parts[3]))
+                : nil
         )
     }
 
@@ -745,10 +754,19 @@ public struct SetupHandoffRecord: Sendable, Equatable {
     /// The app LaunchServices resolved when the handoff opened, so Show Terminal fronts
     /// the window that actually holds it. Nil when none was resolved.
     public let terminalBundleIdentifier: String?
+    /// KTD11/R6: why staging chose the interactive launch, which decides whether the
+    /// waiting copy tells the user to type `/login`. Nil for a sign-in script, for a
+    /// non-Claude handoff, and for a record written before this field existed.
+    public let claudeInteractiveReason: ClaudeInteractiveLaunchReason?
 
-    public init(waitingPolicy: SetupWaitingPolicy, terminalBundleIdentifier: String?) {
+    public init(
+        waitingPolicy: SetupWaitingPolicy,
+        terminalBundleIdentifier: String?,
+        claudeInteractiveReason: ClaudeInteractiveLaunchReason? = nil
+    ) {
         self.waitingPolicy = waitingPolicy
         self.terminalBundleIdentifier = terminalBundleIdentifier
+        self.claudeInteractiveReason = claudeInteractiveReason
     }
 }
 

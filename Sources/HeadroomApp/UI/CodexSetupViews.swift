@@ -268,7 +268,6 @@ struct CodexAccessRecoveryCard: View {
 
 struct CodexWaitingCard: View {
     var mode: SetupHandoffMode = .standard
-    let onCheckNow: () -> Void
     let onReopen: () -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -302,12 +301,13 @@ struct CodexWaitingCard: View {
                 .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
                 .padding(.top, SetupCardMetrics.siblingGap)
-            // B3A/P4C/B3: same as the Claude waiting card — two thin chips, leading-aligned
-            // at the card's foot, with "Check Now" first and no icon inside either one.
+            // B3A/P4C/B3: same as the Claude waiting card — a thin chip, leading-aligned at
+            // the card's foot, with no icon inside it.
+            // R13/KTD12 (2026-09-19 sign-in plan): Check Now left every waiting surface. The
+            // row is shared with Claude, and nothing the user could force is outstanding
+            // while the official CLI still owns the Terminal window.
             // B3X: same as the Claude waiting card — the guided card's own leading edge.
             CardActionRow(labelInset: 0) {
-                Button("Check Now", action: onCheckNow)
-                    .buttonStyle(SetupChipButtonStyle(size: .small))
                 Button("Reopen Terminal", action: onReopen)
                     .buttonStyle(SetupChipButtonStyle(size: .small))
             }
