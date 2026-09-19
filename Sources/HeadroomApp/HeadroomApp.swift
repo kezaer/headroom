@@ -1033,8 +1033,26 @@ enum AppComposition {
         ]
     }
 
-    static func widgetExporter() -> any WidgetSnapshotExporting {
-        WidgetSnapshotExporter(cache: .appGroup()) {
+    /// `HeadroomAppTests` runs inside this app as its XCTest host, so every run launches the
+    /// real app: `UsageStore.start()` → `refreshAll` → `exportWidgetSnapshot` reaches for the
+    /// App Group container, and macOS answers the first reach with the "would like to access
+    /// data from other apps" consent alert. That alert blocks the container call on the main
+    /// thread until a human dismisses it, which stalls the whole test run — on every rebuild.
+    /// Nothing under test observes the export, so the test host gets an exporter that writes
+    /// nothing. The environment is a parameter so the decision is provable without a launch.
+    static func usesNoOpWidgetExporter(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    static func widgetExporter(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> any WidgetSnapshotExporting {
+        guard !usesNoOpWidgetExporter(environment: environment) else {
+            return NoOpWidgetSnapshotExporter()
+        }
+        return WidgetSnapshotExporter(cache: .appGroup()) {
             WidgetCenter.shared.reloadAllTimelines()
         }
     }
@@ -1042,6 +1060,12 @@ enum AppComposition {
     static func phoneSyncExporter() -> any WidgetSnapshotExporting {
         iCloudSnapshotPublisher(sync: iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore()))
     }
+}
+
+/// The exporter the XCTest host composes in place of the App Group one. See
+/// `AppComposition.usesNoOpWidgetExporter`.
+struct NoOpWidgetSnapshotExporter: WidgetSnapshotExporting {
+    func export(_ envelope: WidgetSnapshotEnvelope) {}
 }
 
 private struct UnavailableAccountProvider: UsageProvider {
