@@ -250,7 +250,7 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     /// `/usage` locally under `-p`; an unverified older build could forward it to the
     /// model as a prompt — spending real usage every poll — so anything below the
     /// floor (or unparseable) stays on the PTY path.
-    static func printUsageSupported(versionOutput: String) -> Bool {
+    public static func printUsageSupported(versionOutput: String) -> Bool {
         guard let version = parsedVersion(versionOutput) else { return false }
         return version >= (2, 1, 217)
     }
@@ -268,10 +268,14 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
         return version >= (2, 1, 41) ? .supported : .tooOld
     }
 
-    public static func versionBand(
+    /// KTD4 (2026-09-19 sign-in plan): the raw `--version` output, off the main actor, for
+    /// callers that apply more than one floor to it — the sign-in handoff reads both
+    /// `signInSupport` and `printUsageSupported` from a single capture. Nil when the CLI
+    /// could not be launched or did not exit cleanly.
+    public static func versionOutput(
         executablePath: String,
         environmentOverrides: [String: String] = [:]
-    ) async -> ClaudeCLIVersionBand {
+    ) async -> String? {
         await Task.detached(priority: .utility) {
             switch runForOutput(
                 claudePath: executablePath,
@@ -280,11 +284,22 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
                 deadline: 5
             ) {
             case .launchNotFound, .failed:
-                return .unknown
+                return nil
             case .data(let data):
-                return classifyVersionBand(String(decoding: data, as: UTF8.self))
+                return String(decoding: data, as: UTF8.self)
             }
         }.value
+    }
+
+    public static func versionBand(
+        executablePath: String,
+        environmentOverrides: [String: String] = [:]
+    ) async -> ClaudeCLIVersionBand {
+        guard let output = await versionOutput(
+            executablePath: executablePath,
+            environmentOverrides: environmentOverrides
+        ) else { return .unknown }
+        return classifyVersionBand(output)
     }
 
     static func classifyVersionBand(_ versionOutput: String) -> ClaudeCLIVersionBand {

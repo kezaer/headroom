@@ -27,6 +27,10 @@ public enum SetupHandoffCompletion: Sendable, Equatable {
 
 public enum SetupSessionFailure: Error, Sendable, Equatable {
     case executableMissing
+    /// R6/KTD1 (2026-09-19 sign-in plan): the installed CLI is too old for the handoff to
+    /// finish, so staging refuses instead of opening a Terminal window that cannot be
+    /// confirmed. Distinct from `executableMissing`, which points at installation.
+    case updateRequired
     case stagingFailed
     case terminalRejected
     case pasteboardFailed
@@ -57,14 +61,21 @@ public struct PreparedSetupHandoff: Sendable, Equatable {
     public let accountKey: AccountKey
     public let mode: SetupHandoffMode
     public let purpose: SetupHandoffPurpose
+    /// KTD1/KTD6 (2026-09-19 sign-in plan): which Claude script staging actually wrote, so
+    /// the waiting policy reads the staged decision instead of re-deriving it from a CLI
+    /// version that can change while the original Terminal is still open. Nil for providers
+    /// that stage one script kind.
+    public let claudeScriptKind: ClaudeSetupScriptKind?
     public init(
         accountKey: AccountKey,
         mode: SetupHandoffMode = .standard,
-        purpose: SetupHandoffPurpose = .setup
+        purpose: SetupHandoffPurpose = .setup,
+        claudeScriptKind: ClaudeSetupScriptKind? = nil
     ) {
         self.accountKey = accountKey
         self.mode = mode
         self.purpose = purpose
+        self.claudeScriptKind = claudeScriptKind
     }
 }
 
@@ -218,7 +229,8 @@ public final class SetupSessionCoordinator {
                     PreparedSetupHandoff(
                         accountKey: handoff.accountKey,
                         mode: handoff.mode,
-                        purpose: purpose
+                        purpose: purpose,
+                        claudeScriptKind: handoff.claudeScriptKind
                     )
                 }
             },

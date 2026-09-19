@@ -39,7 +39,7 @@ import Testing
         let expectations: [(ProviderSetupOutcome, SetupRecoveryAction, SetupRecoveryAction?, SetupAutomaticPolicy)] = [
             (.claudeCLIMissing, .installClaudeCLI, .checkNow, .none),
             (.claudeLoginRequired, .openClaudeSetup, .checkNow, .boundedChecksAfterHandoff),
-            (.claudeTrustRequired, .openClaudeSetup, .checkNow, .boundedChecksAfterHandoff),
+            (.claudeTrustRequired, .openClaudeWorkspace, .checkNow, .boundedChecksAfterHandoff),
             (.claudeUnknownUI, .checkNow, .openClaudeSetup, .none),
             (.claudeTransientCapture, .checkNow, .openClaudeSetup, .none),
             (.codexCLIMissing, .installCodexCLI, nil, .none),
@@ -80,8 +80,19 @@ import Testing
     @Test func changingDisplayCopyCannotChangeRecoveryAction() {
         let reason = FailureReason.providerSetup(.claudeTrustRequired)
         #expect(reason.providerSetupOutcome == .claudeTrustRequired)
-        #expect(reason.providerSetupOutcome?.recoveryPresentation.primaryAction == .openClaudeSetup)
+        #expect(reason.providerSetupOutcome?.recoveryPresentation.primaryAction == .openClaudeWorkspace)
         #expect(reason.message == ProviderSetupOutcome.claudeTrustRequired.message)
+    }
+
+    /// AE3/KTD5: workspace approval is its own act. While it shared Sign In's action it
+    /// staged Sign In's script, which on an account that is already signed in prints
+    /// "already signed in", exits, and leaves the approval prompt to be detected again.
+    @Test func claudeWorkspaceApprovalIsNotTheSignInAction() {
+        let approval = ProviderSetupOutcome.claudeTrustRequired.recoveryPresentation
+        #expect(approval.primaryAction == .openClaudeWorkspace)
+        #expect(approval.primaryLabel == "Open Claude Workspace")
+        #expect(ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation.primaryAction
+            == .openClaudeSetup)
     }
 
     @Test func onlyTransientSetupOutcomesAreRetryableWithoutUserAction() {

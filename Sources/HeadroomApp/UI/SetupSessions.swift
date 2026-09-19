@@ -58,7 +58,10 @@ enum SetupSessions {
     enum RecoveryRoute: Equatable {
         case documentation(URL)
         case setup(SetupHandoffMode)
-        case cursorWorkspace
+        /// KTD5 (2026-09-19 sign-in plan): workspace approval, for Claude as well as Cursor.
+        /// It was `cursorWorkspace` while Cursor was the only provider whose approval prompt
+        /// needed its own handoff purpose.
+        case workspaceTrust
         case cursorTools
         case privacyGuidance(URL)
         case checkNow
@@ -71,6 +74,9 @@ enum SetupSessions {
         let scriptURL: URL
         let completionMarker: SetupCompletionMarker
         let manualCommand: String
+        /// KTD1 (2026-09-19 sign-in plan): the kind this script was written as, nil for the
+        /// providers that stage one kind.
+        var claudeScriptKind: ClaudeSetupScriptKind?
     }
 
     private static var coordinator: SetupSessionCoordinator?
@@ -255,7 +261,7 @@ enum SetupSessions {
             NSWorkspace.shared.open(url)
         case .setup(.standard):
             openSetup(for: account, onRetry: onRetry)
-        case .cursorWorkspace:
+        case .workspaceTrust:
             noteHandoffBegan(for: account)
             coordinator?.beginWorkspaceTrust(for: account)
         case .cursorTools:
@@ -300,8 +306,8 @@ enum SetupSessions {
             .documentation(URL(string: "https://x.ai/news/grok-build")!)
         case .installCursorAgent:
             .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)
-        case .openCursorWorkspace:
-            .cursorWorkspace
+        case .openClaudeWorkspace, .openCursorWorkspace:
+            .workspaceTrust
         case .reviewCursorTools:
             .cursorTools
         case .showPrivacyGuidance:
@@ -344,16 +350,22 @@ enum SetupSessions {
     /// Connect button or expose caught filesystem/AppKit errors.
     static func failureMessage(for account: ProviderAccount) -> String? {
         guard case .failed(let failure) = state(for: account) else { return nil }
+        return failureMessage(for: failure, account: account)
+    }
+
+    /// Pure over the typed failure, so the copy for a staging refusal is testable without
+    /// an open session.
+    static func failureMessage(
+        for failure: SetupSessionFailure,
+        account: ProviderAccount
+    ) -> String {
         switch failure {
         case .executableMissing:
-            let name = switch account.providerID {
-            case .claude: "Claude Code"
-            case .codex: "Codex"
-            case .grok: "Grok Build"
-            case .cursor: "Cursor Agent"
-            default: account.providerID.raw.capitalized
-            }
-            return "\(name) CLI wasn’t found. Install or update it, then try again."
+            return "\(cliProductName(for: account)) CLI wasn’t found. Install or update it, then try again."
+        case .updateRequired:
+            // R6: the sentence names the product the user updates, not the command they
+            // type — the installed CLI is the thing that is too old, not this account.
+            return "Update \(cliProductName(for: account)), then try again."
         case .stagingFailed:
             return "Headroom couldn’t prepare the Terminal handoff. Try again."
         case .terminalRejected:
@@ -369,6 +381,18 @@ enum SetupSessions {
         case .providerCapability(let capability):
             return capability.recoveryPresentation?.status
                 ?? "Claude Code availability couldn’t be confirmed. Try again."
+        }
+    }
+
+    /// The product a failure sentence points the user at, named the way they would go and
+    /// get it rather than the way they invoke it.
+    private static func cliProductName(for account: ProviderAccount) -> String {
+        switch account.providerID {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        case .grok: "Grok Build"
+        case .cursor: "Cursor Agent"
+        default: account.providerID.raw.capitalized
         }
     }
 
@@ -463,12 +487,25 @@ enum SetupSessions {
         SetupSessionActivity.shared.endWaiting(for: account.key)
     }
 
+    /// KTD1/KTD4 (2026-09-19 sign-in plan): resolved executable plus the account's
+    /// environment overrides in, the CLI's raw `--version` output out, or nil when it
+    /// cannot be read. Injected so staging tests never spawn the real CLI.
+    typealias ClaudeVersionReading = @Sendable (String, [String: String]) async -> String?
+
+    static let readClaudeVersion: ClaudeVersionReading = { executablePath, environmentOverrides in
+        await ClaudeUsageCLIProbe.versionOutput(
+            executablePath: executablePath,
+            environmentOverrides: environmentOverrides
+        )
+    }
+
     static func prepareHandoff(
         for account: ProviderAccount,
         mode: SetupHandoffMode,
         purpose: SetupHandoffPurpose = .setup,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
-        claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude()
+        claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude(),
+        claudeVersionReader: @escaping ClaudeVersionReading = readClaudeVersion
     ) async -> SetupPreparationResult {
         let accountCompletionMarker = completionMarker(
             for: account,
@@ -496,6 +533,7 @@ enum SetupSessions {
                 let completionMarker = accountCompletionMarker
                 let script: String
                 let manualCommand: String
+                var stagedScriptKind: ClaudeSetupScriptKind?
                 switch account.providerID {
                 case .claude:
                     let location = await claudeExecutableLocator.locate(forceRefresh: true)
@@ -517,6 +555,17 @@ enum SetupSessions {
                         return .failure(.stagingFailed)
                     }
                     try ClaudeUsageWorkspace.ensureDirectory(at: workspace)
+                    let kind = await claudeScriptKind(
+                        for: account,
+                        purpose: purpose,
+                        executablePath: executable,
+                        configDirectory: configuration.claudeConfigDirectory?.path,
+                        readVersion: claudeVersionReader
+                    )
+                    guard case .stage(let stagedKind) = kind else {
+                        return .failure(.updateRequired)
+                    }
+                    stagedScriptKind = stagedKind
                     let fallback = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
                     let descriptor = ClaudeSetupDescriptor(
                         accountKey: account.key,
@@ -525,7 +574,8 @@ enum SetupSessions {
                         workspaceDirectory: workspace.path,
                         configDirectory: configuration.claudeConfigDirectory?.path,
                         purpose: purpose,
-                        completionMarker: completionMarker
+                        completionMarker: completionMarker,
+                        scriptKind: stagedKind
                     )
                     script = ClaudeSetupCommand.script(for: descriptor)
                     // KTD5: the descriptor carries the validated executable resolved
@@ -608,7 +658,8 @@ enum SetupSessions {
                 return .success(PreparedScript(
                     scriptURL: scriptURL,
                     completionMarker: completionMarker,
-                    manualCommand: manualCommand
+                    manualCommand: manualCommand,
+                    claudeScriptKind: stagedScriptKind
                 ))
             } catch {
                 return .failure(.stagingFailed)
@@ -621,11 +672,62 @@ enum SetupSessions {
             return .success(PreparedSetupHandoff(
                 accountKey: account.key,
                 mode: mode,
-                purpose: purpose
+                purpose: purpose,
+                claudeScriptKind: preparedScript.claudeScriptKind
             ))
         case .failure(let failure):
             return .failure(failure)
         }
+    }
+
+    /// KTD1: staging either writes one of the two Claude scripts or refuses outright.
+    private enum ClaudeStagingDecision {
+        case stage(ClaudeSetupScriptKind)
+        case refuseUpdateRequired
+    }
+
+    /// KTD1 (2026-09-19 sign-in plan): the whole staging rule, read once from one `--version`
+    /// capture. Nothing here runs an `auth` subcommand to probe support — an older CLI could
+    /// take one as a paid model prompt (`docs/solutions/claude-print-mode-usage-probe.md`).
+    private static func claudeScriptKind(
+        for account: ProviderAccount,
+        purpose: SetupHandoffPurpose,
+        executablePath: String,
+        configDirectory: String?,
+        readVersion: ClaudeVersionReading
+    ) async -> ClaudeStagingDecision {
+        // The approval prompt appears only in the interactive CLI, and the sign-in script's
+        // status guard would exit before it on an account that is already signed in (AE3).
+        // No version gates it: refusing would leave an approvable account with nothing to
+        // click.
+        guard purpose == .setup || purpose == .reset else { return .stage(.interactive) }
+
+        let versionOutput = await readVersion(
+            executablePath,
+            configDirectory.map { ["CLAUDE_CONFIG_DIR": $0] } ?? [:]
+        )
+        switch versionOutput.map(ClaudeUsageCLIProbe.signInSupport(versionOutput:)) ?? .unreadable {
+        case .tooOld:
+            // R6: these CLIs can sign in and still never be confirmed, because every usage
+            // check reads `auth status`.
+            return .refuseUpdateRequired
+        case .unreadable:
+            // R6: a change to the CLI's version format must not lock everyone out of sign-in.
+            return .stage(.interactive)
+        case .supported:
+            break
+        }
+        // AE7: an extra account below the print-mode floor is a never-onboarded config on the
+        // PTY path, where the bare launch shows the CLI's own login selector and then the
+        // approval prompt in one Terminal trip.
+        let belowPrintModeFloor = !(versionOutput.map(
+            ClaudeUsageCLIProbe.printUsageSupported(versionOutput:)
+        ) ?? false)
+        if !account.isBuiltIn, belowPrintModeFloor { return .stage(.interactive) }
+        // KTD1: `.reset` keeps its own `auth logout && auth login` script — the descriptor
+        // selects that by purpose — so the kind stamped here only describes the shape the
+        // waiting policy sees: a CLI auth command that drives the window and exits.
+        return .stage(.signIn)
     }
 
     private static func openPreparedHandoff(_ handoff: PreparedSetupHandoff) -> SetupOpenResult {

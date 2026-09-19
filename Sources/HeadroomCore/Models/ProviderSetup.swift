@@ -198,7 +198,10 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
                   secondaryLabel: "Check Now", secondaryAction: .checkNow,
                   automaticPolicy: .boundedChecksAfterHandoff)
         case .claudeTrustRequired:
-            .init(status: message, primaryLabel: "Open Claude Workspace", primaryAction: .openClaudeSetup,
+            // KTD5 (2026-09-19 sign-in plan): approval is its own handoff purpose. Sharing
+            // Sign In's action staged the sign-in script, which exits on an already
+            // signed-in account before the approval prompt can appear (AE3).
+            .init(status: message, primaryLabel: "Open Claude Workspace", primaryAction: .openClaudeWorkspace,
                   secondaryLabel: "Check Now", secondaryAction: .checkNow,
                   automaticPolicy: .boundedChecksAfterHandoff)
         case .claudeUnknownUI, .claudeTransientCapture:
@@ -274,6 +277,7 @@ public enum SetupRecoveryAction: Sendable, Equatable, Hashable {
     case reconnectGrok
     case installCursorAgent
     case connectCursor
+    case openClaudeWorkspace
     case openCursorWorkspace
     case reviewCursorTools
     case showPrivacyGuidance

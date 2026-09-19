@@ -333,7 +333,10 @@ struct AccountsSettingsInteractionTests {
             (.reconnectGrok, .setup(.standard)),
             (.installCursorAgent, .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)),
             (.connectCursor, .setup(.standard)),
-            (.openCursorWorkspace, .cursorWorkspace),
+            // KTD5 (2026-09-19 sign-in plan): Claude's approval handoff shares Cursor's
+            // trust route; only Sign In still routes to `.setup(.standard)`.
+            (.openClaudeWorkspace, .workspaceTrust),
+            (.openCursorWorkspace, .workspaceTrust),
             (.reviewCursorTools, .cursorTools),
             (.showPrivacyGuidance, .privacyGuidance(URL(string: "https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac")!)),
             (.resolveCodexStorage, .setup(.standard)),
