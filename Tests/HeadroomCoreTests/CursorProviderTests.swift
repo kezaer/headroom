@@ -221,6 +221,10 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(snapshot.freshness == .live)
         #expect(snapshot.planLabel == "Pro+")
         #expect(snapshot.windows.first?.utilization == 1)
+        // The probe trusts only its own empty workspace up front; current CLIs honour
+        // the flag, so most users never see the trust handoff.
+        let argv = try String(contentsOf: workspace.appendingPathComponent("argv"), encoding: .utf8)
+        #expect(argv.contains("--trust"))
     }
 
     private func fakeCursorAgent(named name: String) throws -> (URL, URL) {
@@ -282,6 +286,7 @@ private final class MutableCursorExecutablePath: @unchecked Sendable {
         #expect(script.contains("--mode ask --workspace '/Users/test/Library/Application Support/Headroom/CursorProbe'"))
         #expect(script.contains("unset CURSOR_API_KEY CURSOR_API_ENDPOINT"))
         #expect(script.contains("[a] Trust this workspace"))
+        // The handoff exists for CLIs that ignore `--trust`; the user decides there.
         #expect(!script.contains("--trust"))
         #expect(!script.contains("--force"))
 

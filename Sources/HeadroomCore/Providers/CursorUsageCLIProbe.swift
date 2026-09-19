@@ -218,7 +218,12 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
         posix_spawnattr_init(&attributes)
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
 
-        let arguments = [cursorPath, "--mode", "ask", "--workspace", workingDirectory]
+        // `--trust` covers only Headroom's own empty, owner-only workspace, so it
+        // approves nothing the user owns. Cursor Agent 2026.09.15 honours it in
+        // interactive mode and persists trust for the path (verified 2026-09-18); older
+        // builds ignore it, and for those the trust classifier below hands the decision
+        // to the user instead of typing into the menu.
+        let arguments = [cursorPath, "--mode", "ask", "--trust", "--workspace", workingDirectory]
         var env = environment(workingDirectory: workingDirectory)
         env["TERM"] = "xterm-256color"
         env["COLUMNS"] = "140"

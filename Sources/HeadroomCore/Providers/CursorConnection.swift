@@ -56,11 +56,12 @@ public enum CursorCLI {
         """
     }
 
-    /// Cursor's `--trust` flag does not skip the trust menu in interactive mode (it is
-    /// an open Cursor feature request, forum.cursor.com/t/162011). The user makes that
-    /// decision in the official CLI; Headroom only stages the same empty workspace used
-    /// by its usage probe. The interactive CLI exits on `/quit` or a double Ctrl+C; a
-    /// single Ctrl+C is swallowed, which is why the instructions name both.
+    /// Fallback for CLI builds that ignore `--trust` in interactive mode (current builds
+    /// honour it, so the probe normally never reaches this). The user makes the decision
+    /// in the official CLI; Headroom only stages the same empty workspace used by its
+    /// usage probe and passes no flag here. The interactive CLI exits on `/quit` or a
+    /// double Ctrl+C; a single Ctrl+C is swallowed, which is why the instructions name
+    /// both.
     public static func workspaceTrustCommand(executablePath: String, workspaceDirectory: String) -> String {
         let workspace = shellQuoted(workspaceDirectory)
         return "unset CURSOR_API_KEY CURSOR_API_ENDPOINT; cd \(workspace) && \(shellQuoted(executablePath)) --mode ask --workspace \(workspace)"

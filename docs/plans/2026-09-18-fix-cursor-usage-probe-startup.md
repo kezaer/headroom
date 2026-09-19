@@ -97,6 +97,16 @@ acceptance step.
 4. Run `swift run Headroom --probe-cursor` offscreen only if the installed CLI is available; report its typed outcome without exposing account details. Do not drive or capture the user's live desktop.
 5. Review the diff for unsafe PTY keystrokes, process cleanup, accidental prompts, and leakage of CLI output or account information.
 
+## Amendment after live verification (2026-09-19)
+
+R2 and KTD3 are narrowed, not reversed: the probe passes `--trust` for Headroom's own
+empty, owner-only `CursorProbe` directory, because Cursor Agent `2026.09.15-d2fe57e`
+honours the flag interactively and persists it, which removes the handoff for most
+users. Headroom still never types into a trust or MCP screen and never uses
+`--approve-mcps`; the trust classifier and handoff remain as the fallback for CLI
+builds that ignore the flag. Evidence and the corrected `--trust` history live in
+`docs/solutions/cursor-agent-usage-feasibility.md`.
+
 ## Definition of Done
 
 - U1 and U2 satisfy their acceptance examples with meaningful regression tests.

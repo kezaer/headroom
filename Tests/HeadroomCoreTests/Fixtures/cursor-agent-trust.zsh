@@ -3,9 +3,6 @@ if [[ "$1" == status ]]; then
   print -n '{"isAuthenticated":true}'
   exit 0
 fi
-if [[ " $* " == *" --trust "* ]]; then
-  print -r -- "unexpected --trust flag" > "$PWD/unexpected-input"
-fi
 stty raw -echo
 print -n $'/!\\ Workspace Trust Required\r\nCursor Agent can execute code and access files in this directory.\r\n[a] Trust this workspace\r\n[q] Quit\r\n'
 buffer=''

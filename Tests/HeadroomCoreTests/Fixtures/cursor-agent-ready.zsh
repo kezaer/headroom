@@ -3,6 +3,7 @@ if [[ "$1" == status ]]; then
   print -n '{"isAuthenticated":true}'
   exit 0
 fi
+print -r -- "$*" > "$PWD/argv"
 stty raw -echo
 print -n $'Cursor Agent\r\nv2026.09.15-d2fe57e\r\nPlan, search, build anything\r\nAuto Balance\r\n'
 buffer=''

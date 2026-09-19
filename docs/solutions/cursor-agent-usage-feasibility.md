@@ -49,7 +49,8 @@ Headroom 1.4.1 could fail before `/usage` even when `cursor-agent status` report
 valid login. A new `CursorProbe` directory opens Cursor Agent's **Workspace Trust Required**
 screen. Headroom must report that state separately and offer to open the exact probe
 workspace in the official CLI for the user to approve. The background probe must never
-send the trust key, and interactive `--trust` does not reliably skip the menu.
+send the trust key. It does pass `--trust`, which covers only Headroom's own empty
+workspace; the classifier and handoff exist for CLI builds that ignore the flag.
 
 The reported Cursor Agent `2026.09.15-d2fe57e` session displayed `Plan, search,
 build anything`; other sessions still display `Ask (shift+tab to cycle)`. Both are
@@ -75,10 +76,15 @@ Ctrl+C; a single Ctrl+C is swallowed by the TUI. The trust and MCP handoff scrip
 so. Either way the wrapper may report a nonzero status, which is why the coordinator
 settles those handoffs on the next live probe rather than on the exit code.
 
-**Interactive `--trust` is confirmed not to skip the menu.** Auto-trusting new
-workspaces from the interactive CLI is an open Cursor feature request
-(forum.cursor.com/t/162011), so the flag was removed from the probe rather than left
-as a false reassurance.
+**`--trust` stays on the probe.** A live check on Cursor Agent `2026.09.15-d2fe57e`
+(below) showed the flag bypasses the menu in interactive mode and persists trust for
+the path, so on current builds users never see the trust handoff at all. The flag is
+scoped to Headroom's own empty, owner-only `CursorProbe` directory and approves
+nothing the user owns. Older builds that ignore the flag (auto-trust was an open
+feature request, forum.cursor.com/t/162011) fall through to the trust classifier and
+the Open Cursor Workspace handoff. That is also why the 1.4.1 report, captured with
+`--trust` present on this same CLI version, was most likely the new input placeholder
+rather than the trust screen.
 
 **MCP approval is fixture-verified only.** The `MCP Server Approval Required` text
 comes from a reported older CLI screen, and no machine with an unapproved server was
@@ -125,7 +131,7 @@ Moving aside the existing `~/Library/Application Support/Headroom/CursorProbe` a
   ╰──────────────────────────────────────────────────────────────────────────╯
 ```
 
-`q` declined the screen and exited with status 0. A later interactive launch with `--trust` bypassed the menu for that throwaway workspace; a subsequent launch without `--trust` also skipped it. Running that flag was a verification mistake because the plan's hard rule prohibited it, even though a later step asked to test it. The workspace was empty and was removed after the test; no Headroom code or normal workspace used the flag. This contradicts the earlier note that `--trust` does not reliably skip the menu on this CLI version. Headroom still does not pass `--trust`, because its background probe must not approve workspace access. On the trusted workspace, `/quit` exited with status 0. One Ctrl+C left the CLI running and printed `Press Ctrl+C again to exit`; a second Ctrl+C exited, but the PTY runner aborted before it reported the process status.
+`q` declined the screen and exited with status 0. A later interactive launch with `--trust` bypassed the menu for that throwaway workspace; a subsequent launch without `--trust` also skipped it. Running that flag was a verification mistake because the plan's hard rule prohibited it, even though a later step asked to test it. The workspace was empty and was removed after the test; no Headroom code or normal workspace used the flag. This contradicts the earlier note that `--trust` does not reliably skip the menu on this CLI version, and it is why the probe passes the flag again for its own workspace (see above). On the trusted workspace, `/quit` exited with status 0. One Ctrl+C left the CLI running and printed `Press Ctrl+C again to exit`; a second Ctrl+C exited, but the PTY runner aborted before it reported the process status.
 
 Adding `headroom-probe-test` (`/usr/bin/true`) to `~/.cursor/mcp.json` did **not** trigger an approval screen: the next Headroom probe returned live usage. Only the `privacyCache/updatedAt` and `serverConfigCache/updatedAt` fields changed in `cli-config.json`; no approval decision or persistence was observed. `cursor-agent --help` lists `--approve-mcps`, which would approve automatically, but shows no option to start without MCP servers. Both config files were restored byte for byte from backups. The MCP classifier wording and app handoff remain unverified live.
 
