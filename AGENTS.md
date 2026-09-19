@@ -10,6 +10,17 @@ usage — 5-hour and weekly windows, reset times, manual renewal dates — for *
 **ChatGPT/Codex**, behind one provider abstraction so more can be added. Tahoe uses Liquid
 Glass; Sequoia uses a native material popover surface.
 
+## Product principles (Sep 2026)
+
+- **The goal is real-time usage data for every provider and every account, as smoothly,
+  reliably, and solidly as possible.** A growing number of people rely on Headroom to manage
+  their usage; reliability and honesty of the numbers come before new surface area.
+- **Provider parity by default.** Any feature, enhancement, or behavior change applies to all
+  providers (Claude, Codex, Grok, Cursor) and to every account of each, unless a provider's
+  transport or official-client boundary genuinely prevents it. When parity is not possible,
+  say so explicitly in the plan, PR, or reply, with the reason, rather than silently scoping
+  the change to one provider. "Cheap for this provider" is never a reason to leave it out.
+
 ## ⚠️ Hard constraint — do NOT reintroduce Claude subscription-OAuth
 
 Claude usage is read by driving the **official `claude` CLI's `/usage` panel** in a
