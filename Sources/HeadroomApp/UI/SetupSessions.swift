@@ -58,6 +58,8 @@ enum SetupSessions {
     enum RecoveryRoute: Equatable {
         case documentation(URL)
         case setup(SetupHandoffMode)
+        case cursorWorkspace
+        case cursorTools
         case privacyGuidance(URL)
         case checkNow
     }
@@ -215,6 +217,12 @@ enum SetupSessions {
             NSWorkspace.shared.open(url)
         case .setup(.standard):
             openSetup(for: account, onRetry: onRetry)
+        case .cursorWorkspace:
+            noteHandoffBegan(for: account)
+            coordinator?.beginWorkspaceTrust(for: account)
+        case .cursorTools:
+            noteHandoffBegan(for: account)
+            coordinator?.beginCursorMCPApproval(for: account)
         case .setup(.deviceCode):
             noteHandoffBegan(for: account)
             if let coordinator {
@@ -254,6 +262,10 @@ enum SetupSessions {
             .documentation(URL(string: "https://x.ai/news/grok-build")!)
         case .installCursorAgent:
             .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)
+        case .openCursorWorkspace:
+            .cursorWorkspace
+        case .reviewCursorTools:
+            .cursorTools
         case .showPrivacyGuidance:
             .privacyGuidance(URL(string: "https://support.apple.com/guide/mac-help/control-access-to-files-and-folders-on-mac-mchld5a35146/mac")!)
         case .checkNow:
@@ -509,16 +521,46 @@ enum SetupSessions {
                     )
                     manualCommand = GrokCLI.accountLoginCommand(
                         grokHome: configuration.grokHomeDirectory?.path,
-                        mode: mode
+                        mode: mode,
+                        executablePath: executable
                     )
                 case .cursor:
-                    let executable = CursorCLI.resolveExecutable()
-                    guard executable != nil else { return .failure(.executableMissing) }
-                    script = CursorCLI.loginScript(
-                        executablePath: executable,
-                        completionMarker: completionMarker
-                    )
-                    manualCommand = CursorCLI.loginCommand
+                    guard let executable = CursorCLI.resolveExecutable() else {
+                        return .failure(.executableMissing)
+                    }
+                    if purpose == .trust || purpose == .approval {
+                        let workspace = CursorUsageCLIProbe.defaultWorkspace
+                        try FileManager.default.createDirectory(
+                            at: workspace,
+                            withIntermediateDirectories: true,
+                            attributes: [.posixPermissions: 0o700]
+                        )
+                        try FileManager.default.setAttributes(
+                            [.posixPermissions: 0o700],
+                            ofItemAtPath: workspace.path
+                        )
+                        script = purpose == .trust
+                            ? CursorCLI.workspaceTrustScript(
+                                executablePath: executable,
+                                workspaceDirectory: workspace.path,
+                                completionMarker: completionMarker
+                            )
+                            : CursorCLI.mcpApprovalScript(
+                                executablePath: executable,
+                                workspaceDirectory: workspace.path,
+                                completionMarker: completionMarker
+                            )
+                        manualCommand = CursorCLI.workspaceTrustCommand(
+                            executablePath: executable,
+                            workspaceDirectory: workspace.path
+                        )
+                    } else {
+                        script = CursorCLI.loginScript(
+                            executablePath: executable,
+                            completionMarker: completionMarker
+                        )
+                        manualCommand = CursorCLI.manualLoginCommand(executablePath: executable)
+                    }
                 default:
                     return .failure(.stagingFailed)
                 }

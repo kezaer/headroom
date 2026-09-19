@@ -51,6 +51,22 @@ scheduled weekly-period evidence for Headroom's meter:
 - <https://x.ai/pricing>
 - <https://x.ai/build/changelog>
 
+## September 2026 onboarding recheck
+
+On 2026-09-18, the installed Grok Build `1.0.13` again returned a live weekly
+snapshot through the HTTP fallback, including under `PATH=/usr/bin:/bin`. A fresh
+isolated `GROK_HOME` reported login required rather than reading the built-in account.
+Generated Terminal scripts were executed against a fake CLI to verify that built-in
+login clears `GROK_HOME` and an extra account uses only its selected home. The
+clipboard fallback now names the resolved executable path, since Terminal may not
+have `~/.grok/bin` on `PATH` even when Headroom found the CLI.
+
+## PR 125 local verification (2026-09-18)
+
+Grok Build `1.0.34 (3736acbc8658) [stable]` returned `RESULT: live Grok snapshot via http, parsed 1 window(s)` with a Weekly 0% used window and scheduled reset evidence. A fresh isolated home returned `RESULT: login required`. The attachment's `GROK_HOME=$(mktemp -d) swift run Headroom --probe-grok` command did not isolate the diagnostic: `--probe-grok` intentionally clears the inherited variable for its built-in account. The working diagnostic was `swift run Headroom --probe-grok --grok-home <fresh-directory>`.
+
+With `PATH=/usr/bin:/bin`, the clipboard fallback's resolved executable command (`env -u GROK_HOME '<resolved grok path>' login`) started the official device sign-in flow. It was cancelled before authorization (exit status 1); the built-in account was not signed out or replaced. No extra-account login was attempted.
+
 ## Remaining boundaries
 
 This run does not validate active subscription overage semantics because the live account had

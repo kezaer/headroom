@@ -218,6 +218,11 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
         posix_spawnattr_init(&attributes)
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
 
+        // `--trust` covers only Headroom's own empty, owner-only workspace, so it
+        // approves nothing the user owns. Cursor Agent 2026.09.15 honours it in
+        // interactive mode and persists trust for the path (verified 2026-09-18); older
+        // builds ignore it, and for those the trust classifier below hands the decision
+        // to the user instead of typing into the menu.
         let arguments = [cursorPath, "--mode", "ask", "--trust", "--workspace", workingDirectory]
         var env = environment(workingDirectory: workingDirectory)
         env["TERM"] = "xterm-256color"
@@ -253,9 +258,17 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
             master: master,
             maxSeconds: boot,
             into: &buffer,
-            condition: isReadyPrompt
+            condition: { isReadyPrompt($0) || isWorkspaceTrustPrompt($0) || isMCPApprovalPrompt($0) }
         )
         let bootText = ANSI.strip(String(decoding: buffer, as: UTF8.self))
+        if isWorkspaceTrustPrompt(bootText) {
+            teardown()
+            return .workspaceTrustRequired
+        }
+        if isMCPApprovalPrompt(bootText) {
+            teardown()
+            return .mcpApprovalRequired
+        }
         guard isReadyPrompt(bootText)
         else {
             teardown()
@@ -263,7 +276,22 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
                 ? .transientCapture : .unknownUI
         }
 
-        usleep(1_500_000)
+        // Cursor can paint the trust or MCP gate a beat after the banner and input
+        // placeholder, so a match on the first ready frame is not proof the screen is
+        // still the prompt. Keep reading for the settle window instead of sleeping
+        // through it, then classify again before the first keystroke: `/usage` contains
+        // the trust menu's `[a]` key, so typing it into a late gate would approve the
+        // workspace on the user's behalf (R2).
+        drain(master: master, maxSeconds: 1.5, quiet: 1.5, into: &buffer)
+        let settledText = ANSI.strip(String(decoding: buffer, as: UTF8.self))
+        if isWorkspaceTrustPrompt(settledText) {
+            teardown()
+            return .workspaceTrustRequired
+        }
+        if isMCPApprovalPrompt(settledText) {
+            teardown()
+            return .mcpApprovalRequired
+        }
         writeText("/usage", to: master)
         var autocompleteBuffer = Data()
         _ = drainUntil(
@@ -304,8 +332,21 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     /// also appear on onboarding and update screens, so they never authorize typing by
     /// themselves.
     static func isReadyPrompt(_ strippedText: String) -> Bool {
-        strippedText.localizedCaseInsensitiveContains("Cursor Agent")
-            && strippedText.localizedCaseInsensitiveContains("Ask (shift+tab to cycle)")
+        guard !isWorkspaceTrustPrompt(strippedText),
+              !isMCPApprovalPrompt(strippedText)
+        else { return false }
+        return strippedText.localizedCaseInsensitiveContains("Cursor Agent")
+            && (strippedText.localizedCaseInsensitiveContains("Ask (shift+tab to cycle)")
+                || strippedText.localizedCaseInsensitiveContains("Plan, search, build anything"))
+    }
+
+    static func isWorkspaceTrustPrompt(_ strippedText: String) -> Bool {
+        strippedText.localizedCaseInsensitiveContains("Workspace Trust Required")
+            && strippedText.localizedCaseInsensitiveContains("Trust this workspace")
+    }
+
+    static func isMCPApprovalPrompt(_ strippedText: String) -> Bool {
+        strippedText.localizedCaseInsensitiveContains("MCP Server Approval Required")
     }
 
     /// Cursor paints an arrow beside the active slash-command completion. Requiring the

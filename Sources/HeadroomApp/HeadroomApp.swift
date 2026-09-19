@@ -274,6 +274,10 @@ enum Entry {
                 print("  on-demand: \(parsed.onDemand.isEnabled ? "enabled" : "disabled")")
             case .loginRequired:
                 print("RESULT: login required")
+            case .workspaceTrustRequired:
+                print("RESULT: Cursor workspace trust required (no input sent)")
+            case .mcpApprovalRequired:
+                print("RESULT: Cursor MCP server approval required (no input sent)")
             case .cliNotFound:
                 print("RESULT: Cursor Agent CLI not found")
             case .unknownUI:

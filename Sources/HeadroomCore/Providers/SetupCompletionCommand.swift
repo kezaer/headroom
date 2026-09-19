@@ -49,7 +49,7 @@ enum SetupCompletionCommand {
         IFS= read -r prepared_marker < "$HEADROOM_SETUP_PENDING" 2>/dev/null || exit 73
         IFS=: read -r marker_kind setup_purpose marker_mode marker_generation marker_timestamp trailing_field <<< "$prepared_marker"
         if [[ "$marker_kind" != "opening"
-              || ( "$setup_purpose" != "setup" && "$setup_purpose" != "reset" )
+              || ( "$setup_purpose" != "setup" && "$setup_purpose" != "reset" && "$setup_purpose" != "trust" && "$setup_purpose" != "approval" )
               || "$marker_mode" != "\(modeName)"
               || "$marker_generation" != "$handoff_generation"
               || -n "$trailing_field"

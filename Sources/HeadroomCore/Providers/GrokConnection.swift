@@ -12,10 +12,12 @@ public enum GrokCLI {
 
     public static func accountLoginCommand(
         grokHome: String?,
-        mode: SetupHandoffMode = .standard
+        mode: SetupHandoffMode = .standard,
+        executablePath: String? = nil
     ) -> String {
         let home = grokHome.map { "GROK_HOME=\(shellQuoted($0)) " } ?? "env -u GROK_HOME "
-        return "\(home)grok \(loginArguments(for: mode).joined(separator: " "))"
+        let executable = executablePath.map(shellQuoted) ?? "grok"
+        return "\(home)\(executable) \(loginArguments(for: mode).joined(separator: " "))"
     }
 
     public static func loginScript(

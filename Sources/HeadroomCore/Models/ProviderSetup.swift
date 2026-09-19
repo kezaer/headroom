@@ -100,6 +100,8 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
     case grokTransientCapture
     case cursorCLIMissing
     case cursorAuthAbsent
+    case cursorTrustRequired
+    case cursorMCPApprovalRequired
     case cursorUnknownUI
     case cursorTransientCapture
 
@@ -143,6 +145,8 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         case .grokTransientCapture: "Couldn’t read Grok usage\u{00A0}—\u{00A0}will retry"
         case .cursorCLIMissing: ProviderSignInCopy.cliMissing(for: .cursor)
         case .cursorAuthAbsent: ProviderSignInCopy.status(for: .cursor)
+        case .cursorTrustRequired: "Approve Headroom’s workspace in the Cursor Agent CLI"
+        case .cursorMCPApprovalRequired: "Review Cursor Agent’s external tools"
         case .cursorUnknownUI: "Cursor Agent opened an unrecognized screen"
         case .cursorTransientCapture: "Couldn’t read Cursor usage\u{00A0}—\u{00A0}will retry"
         }
@@ -242,6 +246,14 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
             .init(status: message, primaryLabel: ProviderSignInCopy.button, primaryAction: .connectCursor,
                   secondaryLabel: "Check Now", secondaryAction: .checkNow,
                   automaticPolicy: .boundedChecksAfterHandoff)
+        case .cursorTrustRequired:
+            .init(status: message, primaryLabel: "Open Cursor Workspace", primaryAction: .openCursorWorkspace,
+                  secondaryLabel: "Check Now", secondaryAction: .checkNow,
+                  automaticPolicy: .boundedChecksAfterHandoff)
+        case .cursorMCPApprovalRequired:
+            .init(status: message, primaryLabel: "Review Cursor Tools", primaryAction: .reviewCursorTools,
+                  secondaryLabel: "Check Now", secondaryAction: .checkNow,
+                  automaticPolicy: .boundedChecksAfterHandoff)
         case .cursorUnknownUI, .cursorTransientCapture:
             .init(status: message, primaryLabel: "Check Now", primaryAction: .checkNow,
                   secondaryLabel: ProviderSignInCopy.buttonAgain, secondaryAction: .connectCursor)
@@ -262,6 +274,8 @@ public enum SetupRecoveryAction: Sendable, Equatable, Hashable {
     case reconnectGrok
     case installCursorAgent
     case connectCursor
+    case openCursorWorkspace
+    case reviewCursorTools
     case showPrivacyGuidance
     case resolveCodexStorage
     case checkNow
