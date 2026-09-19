@@ -24,7 +24,7 @@ execution: code
 
 ### Summary
 
-Accounts probed through a CLI lane (Claude, Grok, and Cursor) are refreshed one at a time from a per-provider queue ordered by how overdue each account is, instead of all together on every timer tick.
+Every account of every provider is refreshed from its own due time instead of all together on every timer tick. CLI-probed providers (Claude, Grok, Cursor) drain a per-provider queue one probe at a time, ordered by how overdue each account is; Codex, fetched over HTTP, refreshes its due accounts concurrently.
 The poll interval becomes a promise made to each account; when the lane cannot keep it, Headroom stretches the effective interval and shows both values in Settings.
 The five-per-provider cap goes away as a product limit and is replaced by a generous, tested envelope with load guardrails that keep the core app calm at any count.
 
@@ -39,6 +39,7 @@ The interval setting already reads as a promise about freshness; past a handful 
 ### Key Decisions
 
 - **No fixed product cap; a tested envelope instead.** Users can add accounts up to a bound the code, fixtures, and tests are proven at, presented as "tested up to", not as a limit. (session-settled: user-directed — no fixed cap chosen over 10 per provider, 20 per provider, and keeping 5: the request is for open-ended counts. session-settled: user-approved — tested envelope chosen over a truly unbounded constant: an untestable "unlimited" is how the core gets fragile.) Governs R14, R15.
+- **Provider parity.** Every scheduling, guardrail, envelope, and Settings behavior in this plan applies to all providers; where a provider's transport makes a behavior moot, the requirement says so rather than silently skipping that provider. (session-settled: user-directed — chosen over a CLI-only scheduler that left Codex on the old sweep: the product goal is uniform real-time data for all providers and all accounts.) Governs R1, R2, R8, R11.
 - **The interval is a per-account promise.** Each account is due its own refresh every interval; the lane's real cadence is derived from that. (session-settled: user-directed — chosen over keeping the primary on interval while extras share the remainder, over widening to parallel probes to hold every account on interval, and over on-demand refresh past a threshold: a single, honest per-account meaning is easier to reason about than three tiers of freshness.) Governs R1, R7, R20.
 - **Stretch and say so on overload.** When the lane cannot keep the promise, the effective interval grows and Settings shows it; nothing is blocked and nothing drifts silently. (session-settled: user-directed — chosen over warning before adding an account, over letting ages drift, and over a user-curated polled set: explicit degradation without gating.) Governs R7, R9, R10.
 - **Due-queue ordering.** The lane always probes the most overdue account next. (session-settled: user-directed — chosen over fixed round-robin slots and over attention-weighted ordering: self-healing after sleep, Check Now, and slow probes, with weighting available later as a refinement.) Governs R1, R3.
@@ -50,8 +51,8 @@ The interval setting already reads as a promise about freshness; past a handful 
 
 **Scheduling**
 
-- R1. Every account in a CLI lane carries its own due time, the last capture attempt plus the effective interval, and the lane always probes the most overdue account next.
-- R2. A lane runs one probe at a time; lanes for different providers and the Codex HTTP fetch continue to overlap.
+- R1. Every account of every provider carries its own due time, the last capture attempt plus the effective interval, and its lane always serves the most overdue account next.
+- R2. A CLI lane (Claude, Grok, Cursor) runs one probe at a time; the Codex HTTP lane fetches all of its due accounts concurrently; lanes for different providers overlap with each other.
 - R3. When the provider's primary account and any extra are both overdue, the primary is probed first.
 - R4. Account-level Check Now, provider-level Check Again, Make Main, and setup verification probe that account at the front of the queue without waiting for other due accounts, and reset its due time on completion.
 - R5. Manual actions in R4 keep their current semantics for locator epochs, capability recovery, and setup session completion.
@@ -60,13 +61,13 @@ The interval setting already reads as a promise about freshness; past a handful 
 **Promise and stretching**
 
 - R7. The effective interval for a lane is the chosen interval or, when larger, the shortest interval at which every account in the lane can be probed at its recently observed probe duration within the duty-cycle ceiling in R8.
-- R8. A lane is busy for no more than about half of wall-clock time over a recent window; the effective interval stretches rather than the lane exceeding that ceiling.
+- R8. A CLI lane is busy for no more than about half of wall-clock time over a recent window; the effective interval stretches rather than the lane exceeding that ceiling. The HTTP lane is not duty-cycled because its cost is a network request rather than a process, so its effective interval is the chosen interval.
 - R9. Settings shows, per provider, the chosen interval and the effective interval whenever they differ, with the account count as the stated reason.
 - R10. When the effective interval equals the chosen interval, no additional cadence UI appears.
 
 **Failure isolation**
 
-- R11. An account whose probe fails is retried with growing spacing up to a bound, and returns to the effective interval on its next successful capture.
+- R11. An account of any provider whose probe or fetch fails is retried with growing spacing up to a bound, and returns to the effective interval on its next successful capture.
 - R12. A failing account delays a healthy account by at most one probe's worth of time.
 - R13. Never-signed-in extra accounts keep an exemption equivalent to today's every-fourth-cycle timer behavior, expressed in due-time terms.
 
@@ -91,7 +92,7 @@ The interval setting already reads as a promise about freshness; past a handful 
 
 - F1. Timer refresh with twelve Claude accounts
   - **Trigger:** The polling timer fires with a 5 minute interval and twelve Claude accounts configured.
-  - **Steps:** The Claude lane takes the most overdue account, probes it, records its capture time, then takes the next. Codex fetches concurrently. Each account is probed roughly every 5 minutes, about 25 seconds apart on the print path.
+  - **Steps:** The Claude lane takes the most overdue account, probes it, records its attempt time, then takes the next. Codex accounts that are due fetch concurrently and record their own attempt times. Each Claude account is probed roughly every 5 minutes, about 25 seconds apart on the print path.
   - **Outcome:** Every account's age stays within the chosen interval plus one probe. Settings shows only the chosen interval.
   - **Covers:** R1, R2, R7, R10.
 - F2. Overload on a short interval
@@ -124,6 +125,7 @@ The interval setting already reads as a promise about freshness; past a handful 
 - AE5. **Covers R11.** Given an account whose last three probes failed, when its next due time is computed, then it is later than the effective interval and it returns to the effective interval after one successful capture.
 - AE6. **Covers R14, R15.** Given 20 Claude accounts configured, when the user opens Settings, then the add-account affordance is disabled and the provider header reads "tested up to 20".
 - AE7. **Covers R19.** Given the primary Claude account's probe completes while five extras are still queued, when the widget snapshot is next read, then it already reflects the primary's new capture.
+- AE8. **Covers R1, R2, R11.** Given three Codex accounts due at the same moment and one of them failing, when the HTTP lane runs, then all three fetch concurrently, each records its own attempt time, and only the failing one moves its next due time out.
 
 ### Success Criteria
 
@@ -136,7 +138,7 @@ The interval setting already reads as a promise about freshness; past a handful 
 - The side-by-side provider column layout for the popover is separate work.
 - Attention-weighted ordering (probing accounts near a limit or reset sooner) is a later refinement on top of the due-queue.
 - Cursor stays single-account; no config-home isolation exists for it.
-- Running more than one probe at a time within a lane is out of scope; the duty-cycle ceiling makes it unnecessary and the process-storm concern from the July stabilization work stands.
+- Running more than one probe at a time within a CLI lane is out of scope; the duty-cycle ceiling makes it unnecessary and the process-storm concern from the July stabilization work stands. Codex's concurrent HTTP fetches are unchanged.
 - Changing the per-probe sequence (auth status, version check, print, PTY fallback) is not required; planning may trim it where it is safe.
 
 <!-- ce-section: work-relationships -->
