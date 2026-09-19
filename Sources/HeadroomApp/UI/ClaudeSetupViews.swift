@@ -416,13 +416,11 @@ enum ClaudeWaitingCardAction: Equatable, Identifiable {
     /// session state.
     case showTerminal
     case tryAgain
-    case checkNow
 
     var label: String {
         switch self {
         case .showTerminal: "Show Terminal"
         case .tryAgain: "Try Again"
-        case .checkNow: "Check Now"
         }
     }
 
@@ -438,8 +436,6 @@ func claudeWaitingCardActions(
         // KTD12: Try Again already fronts the window, so a Show Terminal beside it would be
         // the same gesture twice. Stop Waiting is supplied by the card's own action row.
         return [.tryAgain]
-    case .checkNow:
-        return [.checkNow]
     case .sessionOnly:
         // R14: nothing to front once Terminal has closed, which is the confirming phase.
         return hasActiveHandoff ? [.showTerminal] : []

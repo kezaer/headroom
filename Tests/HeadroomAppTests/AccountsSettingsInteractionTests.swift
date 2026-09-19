@@ -1699,8 +1699,10 @@ private final class GrokDeviceCodeSetupHarness {
         }
     }
 
-    /// KTD12: the timeout swaps the row's primary to Try Again; the too-old CLI swaps it to
-    /// the one check that proves the update landed. Neither leaves the outcome's pair behind.
+    /// KTD12/R6: both session-owned failures swap the row's primary to Try Again — the
+    /// timeout to resume its still-open window, the too-old CLI to re-stage a handoff, which
+    /// is the only thing that re-reads the installed version. Neither leaves the outcome's
+    /// pair behind.
     @MainActor @Test func theTwoSessionOwnedFailuresReplaceTheRecoveryPair() {
         let account = ProviderAccount.builtIn(for: .claude)
         for state in [SetupSessionState.failed(.waitingTimedOut), .failed(.updateRequired)] {
@@ -1711,7 +1713,7 @@ private final class GrokDeviceCodeSetupHarness {
             ) == nil)
         }
         #expect(setupRowRecovery(for: .failed(.waitingTimedOut)) == .tryAgain)
-        #expect(setupRowRecovery(for: .failed(.updateRequired)) == .checkNow)
+        #expect(setupRowRecovery(for: .failed(.updateRequired)) == .tryAgain)
         #expect(settingsStopWaitingAccount(
             account,
             removalState: nil,

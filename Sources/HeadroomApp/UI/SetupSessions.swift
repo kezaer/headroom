@@ -153,10 +153,6 @@ enum SetupSessions {
         handoffInteractiveReasons[key] = reason
     }
 
-    static func handoffInteractiveReason(for key: AccountKey) -> ClaudeInteractiveLaunchReason? {
-        handoffInteractiveReasons[key]
-    }
-
     /// KTD13: the only AppKit call Show Terminal makes, replaceable so tests never front a
     /// real app. Returns whether a running instance was activated.
     static var activateApplication: @MainActor (String) -> Bool = activateRunningApplication(bundleIdentifier:)
@@ -401,10 +397,6 @@ enum SetupSessions {
 
     static func purpose(for account: ProviderAccount) -> SetupHandoffPurpose? {
         coordinator?.sessionPurpose(for: account.key)
-    }
-
-    static func waitingPolicy(for account: ProviderAccount) -> SetupWaitingPolicy? {
-        coordinator?.waitingPolicy(for: account.key)
     }
 
     static func finalVerificationCompletion(for account: ProviderAccount) -> SetupHandoffCompletion? {

@@ -556,8 +556,9 @@ struct AccountsSettingsTile: View {
             EmptyView()
         case .tryAgain:
             // KTD12: not `.checkNow` and never labelled "Check Now" — Try Again brings the
-            // still-open window forward and resumes the wait (R10).
-            Button("Try Again") {
+            // still-open window forward and resumes the wait (R10), or with none open stages
+            // a fresh handoff, which is what re-reads a too-old CLI's version (R6).
+            Button(SetupRowChip.tryAgain.label) {
                 SetupSessions.tryAgain(
                     for: account,
                     onRetry: { store.refreshAccountNow(account.key) }
@@ -566,18 +567,6 @@ struct AccountsSettingsTile: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .accessibilityLabel("Try signing in again for \(account.label)")
-        case .checkNow:
-            // R6: the one action that tells Headroom the update landed.
-            Button("Check Now") {
-                SetupSessions.performRecovery(
-                    .checkNow,
-                    for: account,
-                    onRetry: { store.refreshAccountNow(account.key) }
-                )
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .accessibilityLabel("Check Now for \(account.label)")
         case .outcomeRecovery:
             outcomeRecoveryButtons(
                 for: account,

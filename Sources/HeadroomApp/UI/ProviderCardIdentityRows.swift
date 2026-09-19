@@ -477,13 +477,15 @@ struct AccountSectionView: View {
 
     private var snapshot: UsageSnapshot { entry.snapshot }
     private var account: ProviderAccount { entry.account }
-    /// R2M1: what the section's second animation scope keys on. See
-    /// `providerCardSessionKey` — the raw state's retry counter must not restage anything.
-    private var sessionKey: SetupSessionState {
-        providerCardSessionKey(SetupSessions.state(for: account))
-    }
 
     var body: some View {
+        // The session is read once per render and handed down. Every scope below wants the
+        // same value, and the read stays here inside `body` so the `@Observable` coordinator
+        // dependency is still registered.
+        let setupState = SetupSessions.state(for: account)
+        // R2M1: what the section's second animation scope keys on. See
+        // `providerCardSessionKey` — the raw state's retry counter must not restage anything.
+        let sessionKey = providerCardSessionKey(setupState)
         // G3/R4A: the identity binds to its meters; the 26pt inter-section gap in
         // `multiAccountBody` does the separating (proximity, not chrome). The whole section
         // is one VoiceOver container so the rotor can jump account-to-account instead of the
@@ -495,14 +497,14 @@ struct AccountSectionView: View {
         // group; inside it the title sits a touch tighter than the row step, not half of it.
         // Kyle picked the values off the side-by-side mock: 4 over meters (≈14pt ink), 6 over
         // a sign-in sentence (≈12.5pt ink, the pre-round value).
-        VStack(alignment: .leading, spacing: identityToContentGap) {
+        return VStack(alignment: .leading, spacing: identityToContentGap) {
             identityRow
             // M4A/S2A: the innermost scope around the switching body, so the crossfade —
             // not the section's height change — is what this animation drives. The wrapper
             // repeats the parent's spacing so it stays layout-neutral for the multi-view
             // `signInContent` branch. Fill and numeral roll are `UsageBarView`'s.
             VStack(alignment: .leading, spacing: identityToContentGap) {
-                stateContent
+                stateContent(setupState: setupState)
             }
             .animation(
                 HeadroomMotion.resolved(HeadroomMotion.valueSpring, .crossfade, reduceMotion: reduceMotion),
@@ -515,8 +517,7 @@ struct AccountSectionView: View {
                 HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
                 value: sessionKey
             )
-            if showsStopWaiting,
-               SetupSessions.state(for: account) != .blockedByOpenHandoff {
+            if showsStopWaiting, setupState != .blockedByOpenHandoff {
                 // P4C/R4A/B3: the section's one action row, leading-aligned at the mark
                 // column. The stack's own spacing supplies part of R4A's 12pt gap, so the
                 // row adds the rest.
@@ -554,7 +555,7 @@ struct AccountSectionView: View {
             evaluateConnectedPayoff()
             SetupSessions.announceFailureIfNeeded(for: account)
         }
-        .onChange(of: SetupSessions.state(for: account)) {
+        .onChange(of: setupState) {
             SetupSessions.announceFailureIfNeeded(for: account)
         }
     }
@@ -581,7 +582,7 @@ struct AccountSectionView: View {
         return IdentityRowMetrics.identityToMetersGap
     }
 
-    @ViewBuilder private var stateContent: some View {
+    @ViewBuilder private func stateContent(setupState: SetupSessionState) -> some View {
         Group {
             switch snapshot.freshness {
             case .pending:
@@ -590,7 +591,7 @@ struct AccountSectionView: View {
                 bars(dimmed: false)
             case .stale(let reason):
                 if reason.isPermanent {
-                    signInContent(reason)
+                    signInContent(reason, setupState: setupState)
                 } else {
                     bars(dimmed: true)
                 }
@@ -619,12 +620,15 @@ struct AccountSectionView: View {
     /// dominates its healthy siblings and no control hides at the end of a sentence. While
     /// the handoff Terminal is open it becomes a quiet waiting row with a real-progress
     /// spinner (bound to the retry cycle, not decorative).
-    @ViewBuilder private func signInContent(_ reason: FailureReason) -> some View {
+    @ViewBuilder private func signInContent(
+        _ reason: FailureReason,
+        setupState: SetupSessionState
+    ) -> some View {
         // PA12: the add-account preset borrows its provider's typed never-signed-in outcome,
         // so an untyped row stops being its own third dialect of "sign in".
         let outcome = presentedSetupOutcome(for: reason, providerID: account.providerID)
         let recoveryPresentation = outcome?.recoveryPresentation
-        let setupState = SetupSessions.state(for: account)
+        let failureMessage = SetupSessions.failureMessage(for: account)
         VStack(alignment: .leading, spacing: 6) {
             // R2M1: the four branches here are all session states, and swapping one for
             // another is a body change of exactly the kind `stateContent` already
@@ -664,8 +668,8 @@ struct AccountSectionView: View {
                         StatusSentence(
                             // R7: the row states the phase it is actually in — opening
                             // Terminal, waiting for the user, or confirming after it closed.
-                            text: SetupSessions.waitingPhase(for: account)?.copy.title
-                                ?? "Waiting for sign-in…",
+                            text: (SetupSessions.waitingPhase(for: account)
+                                ?? .waitingForUser(.signIn)).copy.title,
                             severity: .progress,
                             indented: false
                         )
@@ -675,10 +679,8 @@ struct AccountSectionView: View {
                         StatusSentence(
                             // PA12: the presented outcome's own message, so the borrowed
                             // recovery below is answering the sentence above it.
-                            text: SetupSessions.failureMessage(for: account)
-                                ?? outcome?.message
-                                ?? reason.message,
-                            severity: SetupSessions.failureMessage(for: account) != nil
+                            text: failureMessage ?? outcome?.message ?? reason.message,
+                            severity: failureMessage != nil
                                 ? .critical
                                 : .forSetupOutcome(outcome)
                         )
@@ -690,14 +692,14 @@ struct AccountSectionView: View {
                         // wrapped pair of chips sits inside the meters' left/right bounds.
                         // CMM4: 8, not R4A's 12 — the buttons are the sentence's own action
                         // and sat further from it than the sentence sat from its title.
-                        // KTD12: the chips come from `setupRowChips`, so the timeout's Try
-                        // Again and the too-old-CLI's Check Now are the same decision the
+                        // KTD12/R6: the chips come from `setupRowChips`, so the Try Again the
+                        // timeout and the too-old CLI both get is the same decision the
                         // Settings row makes rather than a second copy of it here.
                         CardActionRow(topPadding: 8, trailingInset: IdentityRowMetrics.contentTrailingInset) {
                             ForEach(setupRowChips(
                                 state: setupState,
                                 presentation: recoveryPresentation,
-                                hasFailureMessage: SetupSessions.failureMessage(for: account) != nil
+                                hasFailureMessage: failureMessage != nil
                             )) { chip in
                                 Button(chip.label) { perform(chip) }
                                     .buttonStyle(SetupChipButtonStyle(size: .small))
@@ -717,15 +719,16 @@ struct AccountSectionView: View {
         SetupSessions.isWaiting(for: account)
     }
 
-    /// KTD12: `.checkNow` as a *recovery* action re-runs Claude's executable search before
-    /// it polls; the bare Check Now chip is the row's own forced poll. Keeping both routes
-    /// preserves the behaviour each slot had before the chips were unified.
+    /// KTD12: every Check Now takes the same route as the one the Settings row and the
+    /// recovery cards take — `performRecovery` re-runs Claude's executable search before it
+    /// polls, and the other providers take its no-op branch straight through to `onRetry`.
+    /// This chip used to call `onRetry` directly, which was the row alone skipping that search.
     private func perform(_ chip: SetupRowChip) {
         switch chip {
         case .tryAgain:
             SetupSessions.tryAgain(for: account, onRetry: onRetry)
         case .checkNow:
-            onRetry()
+            SetupSessions.performRecovery(.checkNow, for: account, onRetry: onRetry)
         case .recovery(let action, _):
             SetupSessions.performRecovery(action, for: account, onRetry: onRetry)
         case .signIn:

@@ -76,19 +76,20 @@ enum SetupRowRecovery: Equatable {
     /// R13: opening, waiting or confirming. The row's one control is Stop Waiting, which is
     /// rendered beside it; a Check Now here duplicated the checking Headroom already does.
     case sessionOnly
-    /// KTD12: the bounded wait expired with the window still open.
+    /// KTD12: the bounded wait expired with the window still open. R6: and the too-old CLI,
+    /// which re-stages rather than resuming — see `setupRowRecovery`.
     case tryAgain
-    /// R6: the installed CLI is too old. A fresh check is what tells Headroom an update
-    /// landed, so it is this state's one action.
-    case checkNow
     case outcomeRecovery
 }
 
 func setupRowRecovery(for state: SetupSessionState) -> SetupRowRecovery {
     switch state {
     case .preparing, .waiting, .verifying: .sessionOnly
-    case .failed(.waitingTimedOut): .tryAgain
-    case .failed(.updateRequired): .checkNow
+    // R6: the too-old CLI joins the timeout on Try Again. A Check Now here was a dead end —
+    // the account is signed out, so every refresh it forces reads "login required", which
+    // the coordinator ignores, and the CLI version is re-read only when a handoff is staged.
+    // Try Again with no open handoff is exactly that restaging, so an updated CLI is seen.
+    case .failed(.waitingTimedOut), .failed(.updateRequired): .tryAgain
     default: .outcomeRecovery
     }
 }
@@ -124,8 +125,6 @@ func setupRowChips(
         return []
     case .tryAgain:
         return [.tryAgain]
-    case .checkNow:
-        return [.checkNow]
     case .outcomeRecovery:
         guard let presentation else {
             return hasFailureMessage ? [.signIn, .checkNow] : [.signIn]
@@ -676,8 +675,6 @@ struct ProviderCardView: View {
             SetupSessions.showTerminal(for: account)
         case .tryAgain:
             SetupSessions.tryAgain(for: account, onRetry: onRetrySetup)
-        case .checkNow:
-            performRecovery(.checkNow, for: account, onRetry: onRetrySetup)
         }
     }
 

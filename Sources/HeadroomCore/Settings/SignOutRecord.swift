@@ -52,8 +52,7 @@ public struct SignOutRecord: @unchecked Sendable { // UserDefaults is thread-saf
     /// edge worth recording.
     public func noteSignedIn(_ key: AccountKey) {
         var stored = load()
-        guard !stored.signedIn.contains(key) else { return }
-        stored.signedIn.append(key)
+        guard stored.signedIn.insert(key).inserted else { return }
         save(stored)
     }
 
@@ -61,8 +60,7 @@ public struct SignOutRecord: @unchecked Sendable { // UserDefaults is thread-saf
     /// be signed in; repeated signed-out polls after that change nothing.
     public func noteSignedOut(_ key: AccountKey) {
         var stored = load()
-        guard let index = stored.signedIn.firstIndex(of: key) else { return }
-        stored.signedIn.remove(at: index)
+        guard stored.signedIn.remove(key) != nil else { return }
         stored.events.append(SignOutEvent(account: key, detectedAt: now()))
         if stored.events.count > Self.maxEvents {
             stored.events.removeFirst(stored.events.count - Self.maxEvents)
@@ -75,8 +73,7 @@ public struct SignOutRecord: @unchecked Sendable { // UserDefaults is thread-saf
     /// observed change. Only a later live reading arms the account again.
     public func clearLastKnownSignedIn(for key: AccountKey) {
         var stored = load()
-        guard let index = stored.signedIn.firstIndex(of: key) else { return }
-        stored.signedIn.remove(at: index)
+        guard stored.signedIn.remove(key) != nil else { return }
         save(stored)
     }
 
@@ -86,7 +83,7 @@ public struct SignOutRecord: @unchecked Sendable { // UserDefaults is thread-saf
         let remaining = stored.events.filter { $0.account != key }
         guard remaining.count != stored.events.count || stored.signedIn.contains(key) else { return }
         stored.events = remaining
-        stored.signedIn.removeAll { $0 == key }
+        stored.signedIn.remove(key)
         save(stored)
     }
 
@@ -95,8 +92,9 @@ public struct SignOutRecord: @unchecked Sendable { // UserDefaults is thread-saf
     private struct Stored: Codable {
         var events: [SignOutEvent] = []
         /// Accounts whose last reading was signed in — the per-account flag, stored as
-        /// the set of accounts it is true for.
-        var signedIn: [AccountKey] = []
+        /// the set of accounts it is true for. A `Set` rather than an array kept unique
+        /// by hand; `v1` has never shipped, so no stored payload needs migrating.
+        var signedIn: Set<AccountKey> = []
     }
 
     private func load() -> Stored {

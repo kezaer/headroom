@@ -106,14 +106,65 @@ struct SetupRowChipTests {
         ))
     }
 
-    /// R6: the too-old CLI keeps one action, and it is the check that tells Headroom the
-    /// update landed.
-    @MainActor @Test func theUpdateRequiredStateOffersCheckNowAlone() {
-        #expect(setupRowChips(
+    /// R6: the too-old CLI keeps one action, and it is Try Again — the only control that
+    /// re-reads the installed version, which is what tells Headroom the update landed.
+    @MainActor @Test func theUpdateRequiredStateOffersTryAgainAlone() {
+        let chips = setupRowChips(
             state: .failed(.updateRequired),
             presentation: ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation,
             hasFailureMessage: true
-        ) == [.checkNow])
+        )
+        #expect(chips == [.tryAgain])
+        #expect(!chips.map(\.label).contains("Check Now"))
+    }
+
+    /// R6: the regression this replaced. A bare Check Now was the update-required state's
+    /// one action on every surface, and nothing a check returns can clear the failure —
+    /// the account is signed out, so every refresh reads "login required", which the
+    /// coordinator ignores, and the CLI version is only re-read when a handoff is staged.
+    /// No surface may hand this state a lone Check Now again.
+    @MainActor @Test func noSurfaceOffersABareCheckNowForUpdateRequired() {
+        let state = SetupSessionState.failed(.updateRequired)
+        #expect(setupRowRecovery(for: state) != .outcomeRecovery)
+
+        for presentation in [ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation,
+                             ProviderSetupOutcome.claudeTrustRequired.recoveryPresentation] {
+            for hasFailureMessage in [true, false] {
+                let chips = setupRowChips(
+                    state: state,
+                    presentation: presentation,
+                    hasFailureMessage: hasFailureMessage
+                )
+                #expect(chips == [.tryAgain])
+                #expect(chips.map(\.label) != ["Check Now"])
+            }
+        }
+
+        for hasActiveHandoff in [true, false] {
+            let actions = claudeWaitingCardActions(state: state, hasActiveHandoff: hasActiveHandoff)
+            #expect(actions == [.tryAgain])
+            #expect(actions.map(\.label) != ["Check Now"])
+        }
+    }
+
+    /// R6: with no handoff left open — which is where a refused staging leaves the account —
+    /// Try Again starts a fresh one, and staging is what re-reads the CLI version.
+    @MainActor @Test func updateRequiredTryAgainStartsAFreshHandoff() {
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: nil)
+            == .startNewHandoff(.setup))
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: .setup)
+            == .startNewHandoff(.setup))
+    }
+
+    /// R6/KTD12: neither session-owned failure offers Stop Waiting once its window is gone,
+    /// and only the timeout prints a second line about a window that is still open.
+    @MainActor @Test func updateRequiredHasNoSessionToStopAndNoSecondLine() {
+        #expect(!setupSessionOffersStopWaiting(
+            state: .failed(.updateRequired),
+            hasActiveHandoff: false
+        ))
+        #expect(SetupSessions.failureDetail(for: .updateRequired) == nil)
+        #expect(SetupSessions.failureDetail(for: .waitingTimedOut) != nil)
     }
 
     /// The providers that still reach the 55-second ladder keep the pair their sentence
@@ -190,7 +241,7 @@ struct ClaudeWaitingCardContentTests {
         #expect(claudeWaitingCardActions(
             state: .failed(.updateRequired),
             hasActiveHandoff: false
-        ) == [.checkNow])
+        ) == [.tryAgain])
     }
 
     /// The compact shell takes its title and body from the Core phase table while waiting,

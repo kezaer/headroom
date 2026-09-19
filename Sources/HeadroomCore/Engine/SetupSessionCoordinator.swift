@@ -709,23 +709,23 @@ public final class SetupSessionCoordinator {
                     releaseLoginSlot: true
                 )
             }
+            rearmPolledChecks(for: providerID)
         case .inconclusive:
             for key in keys where self.state(for: key) == .verifying {
                 verificationCapabilityFailures[key] = state
             }
+            rearmPolledChecks(for: providerID)
         case .unknown, .discovering, .available:
             break
         }
-        switch state {
-        case .confirmedAbsent, .inconclusive:
-            // KTD6: a capability failure short-circuits `receive`, so without this the
-            // polled chain would stop on one inconclusive locator result and the session
-            // would sit unchecked until its timeout.
-            for key in waitingPolicies.keys where key.providerID == providerID {
-                rearmPolledCheckIfWaiting(key)
-            }
-        case .unknown, .discovering, .available:
-            break
+    }
+
+    /// KTD6: a capability failure short-circuits `receive`, so without this the polled chain
+    /// would stop on one inconclusive locator result and the session would sit unchecked
+    /// until its timeout.
+    private func rearmPolledChecks(for providerID: ProviderID) {
+        for key in waitingPolicies.keys where key.providerID == providerID {
+            rearmPolledCheckIfWaiting(key)
         }
     }
 
