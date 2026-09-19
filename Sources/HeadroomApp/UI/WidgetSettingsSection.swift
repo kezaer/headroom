@@ -1,4 +1,5 @@
 import SwiftUI
+import HeadroomCore
 
 /// Widgets tile content: master enables as switch rows, the dependent Spark-counter
 /// option as a checkbox, and help text on the shared 11pt style (this section
@@ -7,12 +8,7 @@ struct WidgetSettingsSection: View {
     @Binding var widgetsEnabled: Bool
     @Binding var showCodexSparkCountersInWidgets: Bool
     @Binding var syncToIPhoneEnabled: Bool
-    let onShowMenuBarPane: () -> Void
-
-    /// PB8: an in-app destination, not a web address — `openURL` is intercepted below and
-    /// never reaches the system. Kept private to this file so nothing else can navigate by
-    /// forging a URL.
-    private static let menuBarPaneURL = URL(string: "headroom-settings://pane/menu-bar")!
+    let store: UsageStore
 
     var body: some View {
         // PB4: two groups, not three peers. The Spark-counter checkbox is a sub-option of
@@ -22,9 +18,43 @@ struct WidgetSettingsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
                     SettingsSwitchRow(title: "Share data with widgets", isOn: $widgetsEnabled)
-                    helpText
+                    SettingsHelpText(text: "Controls whether Headroom supplies usage data to macOS widgets.")
                 }
 
+                ResponsiveControlRow(label: "Widget providers") {
+                    Menu {
+                        Button { store.setWidgetPrioritySource(.auto) } label: {
+                            if store.widgetPrioritySource == .auto {
+                                Label("Automatic (first two enabled)", systemImage: "checkmark")
+                            } else {
+                                Text("Automatic (first two enabled)")
+                            }
+                        }
+                        Divider()
+                        ForEach(store.registeredProviderOrder, id: \.self) { id in
+                            Button {
+                                var selected = store.widgetPrioritySource.providerIDs ?? []
+                                if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+                                store.setWidgetPrioritySource(selected.isEmpty ? .auto : .providers(selected))
+                            } label: {
+                                if store.widgetPrioritySource.providerIDs?.contains(id) == true {
+                                    Label(store.displayNames[id] ?? id.raw, systemImage: "checkmark")
+                                } else {
+                                    Text(store.displayNames[id] ?? id.raw)
+                                }
+                            }
+                            .disabled(!store.providerOrder.contains(id))
+                        }
+                    } label: {
+                        Text(MenuBarPrioritySelection.label(
+                            source: store.widgetPrioritySource,
+                            fetchedOrder: store.providerOrder,
+                            displayName: { store.displayNames[$0] ?? $0.raw }
+                        ))
+                    }
+                    .fixedSize()
+                }
+                SettingsHelpText(text: "Widgets show up to two selected providers in app order. Menu bar pills are configured separately.")
                 Toggle("Show Codex Spark counters in widgets", isOn: $showCodexSparkCountersInWidgets)
             }
 
@@ -37,34 +67,4 @@ struct WidgetSettingsSection: View {
         }
     }
 
-    /// R2B2: one help block under the switch, not two. Two `SettingsHelpText` views 4pt
-    /// apart with 2pt of internal leading rendered as two paragraphs of one thought at
-    /// almost the same gap as the lines inside them; as one string the sentences wrap into
-    /// a single block on the shared measure.
-    ///
-    /// PB8: the widget-provider rule is stated once, in the Menu Bar pane that owns it; the
-    /// second sentence points there instead of paraphrasing it into a second,
-    /// differently-worded rule.
-    private var helpText: some View {
-        SettingsHelpText(attributed: helpString)
-            .environment(\.openURL, OpenURLAction { url in
-                guard url == Self.menuBarPaneURL else { return .systemAction }
-                onShowMenuBarPane()
-                return .handled
-            })
-    }
-
-    private var helpString: AttributedString {
-        // Leads with what the switch does; the old copy opened with an instruction ("Add or
-        // remove widgets from macOS") this window can't perform.
-        var sentence = AttributedString(
-            "Controls whether Headroom supplies usage data to macOS widgets. "
-                + "Widgets follow the priority providers you choose in "
-        )
-        var link = AttributedString("Menu Bar")
-        link.link = Self.menuBarPaneURL
-        sentence.append(link)
-        sentence.append(AttributedString("."))
-        return sentence
-    }
 }
