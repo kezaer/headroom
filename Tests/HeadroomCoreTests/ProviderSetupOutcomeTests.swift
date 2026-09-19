@@ -61,6 +61,8 @@ import Testing
             (.grokTransientCapture, .checkNow, nil, .none),
             (.cursorCLIMissing, .installCursorAgent, nil, .none),
             (.cursorAuthAbsent, .connectCursor, .checkNow, .boundedChecksAfterHandoff),
+            (.cursorTrustRequired, .openCursorWorkspace, .checkNow, .boundedChecksAfterHandoff),
+            (.cursorMCPApprovalRequired, .reviewCursorTools, .checkNow, .boundedChecksAfterHandoff),
             (.cursorUnknownUI, .checkNow, .connectCursor, .none),
             (.cursorTransientCapture, .checkNow, .connectCursor, .none),
         ]
@@ -91,6 +93,7 @@ import Testing
         #expect(FailureReason.providerSetup(.grokPermissionDenied).isPermanent)
         #expect(!FailureReason.providerSetup(.cursorTransientCapture).isPermanent)
         #expect(FailureReason.providerSetup(.cursorAuthAbsent).isPermanent)
+        #expect(FailureReason.providerSetup(.cursorTrustRequired).isPermanent)
     }
 
     /// PA11: one label per action. `.checkNow` used to read "Check Again" in a primary slot
@@ -270,5 +273,6 @@ private let allSetupOutcomes: [ProviderSetupOutcome] = [
     .codexCallbackIncomplete,
     .grokCLIMissing, .grokAuthAbsent, .grokPermissionDenied, .grokUnsafePermissions,
     .grokMalformedAuth, .grokCredentialIO, .grokRejectedAuth, .grokTransientCapture,
-    .cursorCLIMissing, .cursorAuthAbsent, .cursorUnknownUI, .cursorTransientCapture,
+    .cursorCLIMissing, .cursorAuthAbsent, .cursorTrustRequired, .cursorMCPApprovalRequired,
+    .cursorUnknownUI, .cursorTransientCapture,
 ]

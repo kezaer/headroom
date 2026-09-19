@@ -4,6 +4,89 @@ import Testing
 
 @MainActor
 @Suite struct SetupSessionCoordinatorTests {
+    @Test func grokLoginRefreshesIntoLiveUsage() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .grok)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        #expect(harness.refreshCalls == [account.key])
+        coordinator.receive(.live(.grok, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .connected)
+        #expect(harness.prepareCalls == [.init(key: account.key, mode: .standard)])
+    }
+
+    @Test func cursorLoginThenWorkspaceTrustRefreshesIntoLiveUsage() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .cursor)
+
+        coordinator.begin(for: account)
+        await settleTasks()
+        coordinator.handoffDidEnd(account.key, completion: .succeeded)
+        coordinator.receive(
+            .stale(for: .cursor, reason: .providerSetup(.cursorTrustRequired)),
+            for: account.key
+        )
+        #expect(coordinator.state(for: account.key) == .failed(.provider(.cursorTrustRequired)))
+
+        coordinator.beginWorkspaceTrust(for: account)
+        await settleTasks()
+        // Quitting Cursor Agent after approval can return a nonzero shell status. A
+        // fresh live usage result, not that exit code, settles the handoff.
+        coordinator.handoffDidEnd(account.key, completion: .failed, purpose: .trust)
+        coordinator.receive(.live(.cursor, windows: []), for: account.key)
+
+        #expect(coordinator.state(for: account.key) == .connected)
+        #expect(harness.prepareCalls == [
+            .init(key: account.key, mode: .standard),
+            .init(key: account.key, mode: .standard, purpose: .trust),
+        ])
+        #expect(harness.refreshCalls == [account.key, account.key])
+    }
+    @Test func cursorMCPApprovalHandoffRequiresUserDecisionThenRetries() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .cursor)
+
+        coordinator.beginCursorMCPApproval(for: account)
+        await settleTasks()
+        #expect(harness.prepareCalls == [.init(key: account.key, mode: .standard, purpose: .approval)])
+        #expect(harness.openedHandoffs == [
+            .init(accountKey: account.key, mode: .standard, purpose: .approval),
+        ])
+
+        coordinator.handoffDidEnd(account.key, completion: .failed, purpose: .approval)
+        coordinator.receive(.live(.cursor, windows: []), for: account.key)
+        #expect(coordinator.state(for: account.key) == .connected)
+    }
+
+    @Test func cursorWorkspaceTrustHandoffKeepsItsPurposeAndRetriesSafely() async {
+        let harness = SetupCoordinatorHarness()
+        let coordinator = harness.makeCoordinator()
+        let account = ProviderAccount.builtIn(for: .cursor)
+
+        coordinator.beginWorkspaceTrust(for: account)
+        await settleTasks()
+
+        #expect(harness.prepareCalls == [.init(key: account.key, mode: .standard, purpose: .trust)])
+        #expect(harness.openedHandoffs == [
+            .init(accountKey: account.key, mode: .standard, purpose: .trust),
+        ])
+        #expect(harness.resetBoundaryCalls.isEmpty)
+
+        coordinator.handoffDidEnd(account.key, completion: .failed, purpose: .trust)
+        #expect(coordinator.state(for: account.key) == .verifying)
+        coordinator.receive(
+            .stale(for: .cursor, reason: .providerSetup(.cursorTrustRequired)),
+            for: account.key
+        )
+        #expect(coordinator.state(for: account.key) == .failed(.provider(.cursorTrustRequired)))
+    }
+
     @Test func duplicateClicksPrepareAndOpenExactlyOnce() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()

@@ -247,7 +247,10 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   autocomplete row. The selection gate matches `/→\s+\/usage(?:\s|$)/`: the live TUI pads
   the arrow with a *variable* number of spaces (`→  /usage`), so match whitespace-count-
   tolerantly but keep `/usage` a whole token — never relax it to bare substring presence,
-  which would let a stray Enter submit a model prompt. Cursor is single-account (no
+  which would let a stray Enter submit a model prompt. The probe passes `--trust` for
+  its own empty `CursorProbe` workspace only; a trust or MCP screen that still appears
+  (older CLIs, or a gate painted after the ready frame) is classified and handed to the
+  user in Terminal, never typed into. Cursor is single-account (no
   config-home isolation equivalent to `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`GROK_HOME` was
   found). Re-diagnose the panel with `--probe-cursor`; see
   `docs/solutions/cursor-agent-usage-feasibility.md`.
