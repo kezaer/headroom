@@ -235,9 +235,12 @@ import Testing
         try expectParsesUnderZsh(script)
     }
 
-    // AE6: the copied manual command runs both `auth status` and `auth login` against
-    // the account's Headroom-owned config folder, never the default login.
-    @Test func signInManualCommandRunsBothCommandsInTheExportedSubshell() throws {
+    // AE6: the copied manual command runs against the account's Headroom-owned config
+    // folder, never the default login. KTD2/Review (2026-09-19 sign-in review): it runs
+    // the same `loggedIn` guard the script runs, so `auth login` follows only an account
+    // that is signed out and none of the status output — which names the signed-in email
+    // and organization — reaches the user's own terminal.
+    @Test func signInManualCommandGuardsOnTheLoggedInFieldInsideTheExportedSubshell() throws {
         let extra = try #require(ClaudeSetupCommand.manualCommand(for: ClaudeSetupDescriptor(
             accountKey: account,
             executablePath: "/Users/Test User/.npm-global/o'brien/bin/claude",
@@ -255,9 +258,20 @@ import Testing
             scriptKind: .signIn
         )))
 
-        #expect(extra == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && (export CLAUDE_CONFIG_DIR='/tmp/config space' && '/Users/Test User/.npm-global/o'\\''brien/bin/claude' auth status; '/Users/Test User/.npm-global/o'\\''brien/bin/claude' auth login)")
-        #expect(builtIn == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && (unset CLAUDE_CONFIG_DIR && '/opt/homebrew/bin/claude' auth status; '/opt/homebrew/bin/claude' auth login)")
+        #expect(extra == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && (export CLAUDE_CONFIG_DIR='/tmp/config space' && '/Users/Test User/.npm-global/o'\\''brien/bin/claude' auth status --json 2>/dev/null | grep -qE '\"loggedIn\"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}]|$)' || '/Users/Test User/.npm-global/o'\\''brien/bin/claude' auth login)")
+        #expect(builtIn == "umask 077 && mkdir -p '/tmp/work space' && cd '/tmp/work space' && (unset CLAUDE_CONFIG_DIR && '/opt/homebrew/bin/claude' auth status --json 2>/dev/null | grep -qE '\"loggedIn\"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}]|$)' || '/opt/homebrew/bin/claude' auth login)")
         #expect(!extra.contains(account.accountID.raw))
+        // The counterpart of `signInScriptSendsTheStatusGuardOutputToTheNullDevice`: the
+        // one `auth status` in the copied line is the guard, and its output is piped into
+        // `grep -q` with stderr discarded, so the terminal shows none of it.
+        for command in [extra, builtIn] {
+            let statusRuns = command.ranges(of: "auth status")
+            #expect(statusRuns.count == 1)
+            for run in statusRuns {
+                #expect(command[run.upperBound...].hasPrefix(" --json 2>/dev/null | grep -q"))
+            }
+            try expectParsesUnderZsh(command)
+        }
     }
 
     // KTD1: `interactive` stays today's bare launch byte-for-byte, so the render

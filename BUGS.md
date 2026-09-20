@@ -158,6 +158,36 @@ Deferred from `docs/plans/2026-09-19-1236-fix-claude-sign-in-handoff-plan.md`.
 - **`CLIExecutableLocatorTests.staleGenerationCompletionJoinsReplacementWithoutStartingThirdSearch`
   failed once** in a full `swift test` run on 2026-09-19, then passed in isolation and in every
   later full run. Timing-sensitive; not touched by the sign-in work.
+- **Code review residuals (ce-code-review run `20260919-164120-47f26bfe`, deferred, none blocking):**
+  - `ProviderCardView.swift` is ~1,250 lines and carries pure, non-View routing types
+    (`SetupRowRecovery`, `SetupRowChip`, `setupRowChips`, `setupSessionOwnsSurface`,
+    `claudeSingleAccountShell`). They belong in Core beside `SetupWaitingPhase`.
+  - The sign-in script's `auth status --json` guard has no bound. A hang leaves Terminal blank
+    until Headroom's 5-minute timeout; the probe bounds the identical call at 5 seconds.
+    macOS has no `timeout(1)`, so this needs a background-and-kill construct that never caps
+    `auth login`.
+  - `ClaudeUsageCLIProbe.versionOutput` returns stdout without checking the child's
+    termination status, so a failed `--version` that still prints a version string is
+    classified as supported or too old rather than unreadable.
+  - `openPreparedHandoff` writes the per-handoff record through `try?`. A failed write is
+    silent, and an `interactive` `.setup` handoff then restores as exit-signalled and is never
+    polled after a relaunch.
+  - The polled chain re-arms only from a `.stale` result or a `.confirmedAbsent` /
+    `.inconclusive` capability failure. A result that stays `.pending`, one rejected by
+    `acceptsResult`, or a `.discovering` / `.unknown` capability leaves no check armed until
+    the timeout.
+  - A never-onboarded config whose `auth status` already reports signed in (login done,
+    first-run theme screen not) can read as login-required on the PTY path. The sign-in script
+    would say "already signed in" and exit. Staging only downgrades to `interactive` for extra
+    accounts below the print-mode floor. Unverified: whether print mode skips that screen.
+  - Try Again for a Cursor `.approval` handoff routes to `openSetup`, a login handoff, rather
+    than the MCP approval it came from. Pre-existing, same class as the reset-purpose bug fixed
+    here.
+  - The test host composes a no-op widget exporter, so no app test exercises the signed app's
+    app-group entitlement, container lookup, write, or widget read. That path needs a separate
+    signed-app smoke.
+  - A `.pending` account row that now prints a sentence keeps the 4pt meters gap; CMM4 gives a
+    sentence 6pt.
 - **Live QA still owed for the sign-in plan:** the fixed-port concurrency check (two Claude
   sign-ins at once; if the second cannot bind its callback, add `.claude` to
   `requiresExclusiveLoginSlot`), what `auth login` exits with when the browser tab is abandoned,

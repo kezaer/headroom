@@ -53,10 +53,12 @@ public enum ClaudeSetupCommand {
         case (.reset, _):
             commands = "\(executable) auth logout && \(executable) auth login"
         case (_, .signIn):
-            // AE6: both commands run against this account's config home. The status
-            // read is separated by `;` because its exit code was verified on one CLI
-            // version only and must never gate the sign-in.
-            commands = "\(executable) auth status; \(executable) auth login"
+            // AE6: every command runs against this account's config home. Review
+            // (2026-09-19 sign-in review): the copied line runs the script's own
+            // `loggedIn` guard rather than a bare `auth status`, which would print the
+            // signed-in email and organization into the user's terminal and then run
+            // `auth login` regardless. `grep` decides, never the status exit code.
+            commands = "\(signedInGuard(executable: executable)) || \(executable) auth login"
         case (_, .interactive):
             commands = executable
         }
@@ -153,7 +155,7 @@ public enum ClaudeSetupCommand {
         """
         typeset headroom_signin_status=0
         typeset headroom_already_signed_in=0
-        if \(executable) auth status --json 2>/dev/null | grep -qE '"loggedIn"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}]|$)'; then
+        if \(signedInGuard(executable: executable)); then
           headroom_already_signed_in=1
         else
           \(executable) auth login
@@ -169,6 +171,17 @@ public enum ClaudeSetupCommand {
         \(statusReturn)
         """
     }
+
+    /// KTD2/Review (2026-09-19 sign-in review): the one signed-in guard. The script
+    /// branches on it and the copied manual command short-circuits on it, so neither
+    /// surface can drift back into showing `auth status`'s output — it names the
+    /// signed-in email and organization. Only a literal `true` counts as signed in;
+    /// anything else, including a missing `grep`, continues to `auth login`.
+    private static func signedInGuard(executable: String) -> String {
+        "\(executable) auth status --json 2>/dev/null | grep -qE '\(loggedInPattern)'"
+    }
+
+    private static let loggedInPattern = #""loggedIn"[[:space:]]*:[[:space:]]*true([[:space:]]*[,}]|$)"#
 
     private static func resetInvocation(executable: String) -> String {
         """

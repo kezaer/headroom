@@ -273,6 +273,77 @@ struct ClaudeWaitingCardContentTests {
         #expect(timedOut.actions == [.tryAgain])
     }
 
+    /// Review #4/#6 (2026-09-19 sign-in review): the shell and the row's recovery are one
+    /// partition of the session states, derived rather than hand-written twice. Two copies
+    /// drifted once already; a state added to one must never miss the other.
+    @MainActor @Test func theShellAndTheRowRecoveryAgreeForEverySessionState() {
+        for state in everySetupSessionState {
+            let expected: ClaudeSingleAccountShell = setupRowRecovery(for: state) == .outcomeRecovery
+                ? .firstRunWalkthrough
+                : .compactWaiting
+            #expect(claudeSingleAccountShell(for: state) == expected,
+                    "\(state) disagrees with its row recovery")
+            #expect(setupSessionOwnsSurface(for: state) == (expected == .compactWaiting))
+        }
+    }
+
+    /// Review #4/#6: the states a blanked (`.pending`) row is in for the whole of a
+    /// "Sign Out & Set Up Again" — the wait itself, and a staging refused before it. Both
+    /// are the session's to render; neither may fall back to the fetching skeleton.
+    @MainActor @Test func aResetsWaitingAndRefusedStatesAreOwnedByTheSession() {
+        for state in [SetupSessionState.preparing, .waiting(attempt: 0), .verifying,
+                      .failed(.waitingTimedOut), .failed(.updateRequired)] {
+            #expect(setupSessionOwnsSurface(for: state))
+        }
+        for state in [SetupSessionState.idle, .connected, .cancelled,
+                      .failed(.closedBeforeSignIn), .blockedByOpenHandoff] {
+            #expect(!setupSessionOwnsSurface(for: state))
+        }
+
+        // The card's content comes from the session, not from a stale snapshot's outcome.
+        let waiting = claudeWaitingCardContent(
+            state: .waiting(attempt: 0),
+            phase: .waitingForUser(.signIn),
+            hasActiveHandoff: true,
+            failureMessage: nil,
+            failureDetail: nil
+        )
+        #expect(waiting.title == "Waiting for sign-in…")
+        let refused = claudeWaitingCardContent(
+            state: .failed(.updateRequired),
+            phase: nil,
+            hasActiveHandoff: false,
+            failureMessage: "Update Claude Code, then try again.",
+            failureDetail: nil
+        )
+        #expect(refused.title == "Update Claude Code, then try again.")
+        #expect(refused.actions == [.tryAgain])
+    }
+
+    /// Review #2 (2026-09-19 sign-in review): the version gate refused this CLI, so the
+    /// card must not also offer a copyable command that launches it. Every other shell
+    /// state keeps the disclosure.
+    @MainActor @Test func theUpdateRequiredShellOffersNoManualCommand() {
+        #expect(!claudeWaitingCardContent(
+            state: .failed(.updateRequired),
+            phase: nil,
+            hasActiveHandoff: false,
+            failureMessage: "Update Claude Code, then try again.",
+            failureDetail: nil
+        ).showsManualCommand)
+
+        for state in [SetupSessionState.preparing, .waiting(attempt: 0), .verifying,
+                      .failed(.waitingTimedOut)] {
+            #expect(claudeWaitingCardContent(
+                state: state,
+                phase: .waitingForUser(.signIn),
+                hasActiveHandoff: true,
+                failureMessage: nil,
+                failureDetail: nil
+            ).showsManualCommand, "\(state) should still offer the manual command")
+        }
+    }
+
     /// The `/login` hint reaches the card as the same quiet bordered token the approval
     /// variant uses, so the literal is set apart from the prose rather than bolded in it.
     @MainActor @Test func theLoginHintReachesTheCardAsAToken() {
@@ -333,3 +404,37 @@ struct IdentityRowMetricsTests {
                                              renderedWidth: short + 4) == true)
     }
 }
+
+/// `SetupSessionState` carries associated values, so it cannot be `CaseIterable`. This is
+/// the hand-kept enumeration the partition tests sweep — every case, and every typed
+/// failure, with one representative payload each.
+private let everySetupSessionState: [SetupSessionState] = [
+    .idle,
+    .preparing,
+    .waiting(attempt: 0),
+    .waiting(attempt: 3),
+    .verifying,
+    .blockedByOpenHandoff,
+    .blockedByProviderLogin(
+        providerID: .codex,
+        active: AccountKey(providerID: .codex, accountID: .primary)
+    ),
+    .connected,
+    .cancelled,
+    .removing,
+    .removalFailed,
+    .removed,
+] + [
+    SetupSessionFailure.executableMissing,
+    .updateRequired,
+    .stagingFailed,
+    .terminalRejected,
+    .pasteboardFailed,
+    .retryExhausted,
+    .waitingTimedOut,
+    .closedBeforeSignIn,
+    .provider(.claudeLoginRequired),
+    .provider(.claudeTrustRequired),
+    .providerCapability(.confirmedAbsent),
+    .providerCapability(.inconclusive(.shellTimeout)),
+].map(SetupSessionState.failed)

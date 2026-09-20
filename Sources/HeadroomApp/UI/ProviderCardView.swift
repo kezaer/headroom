@@ -159,14 +159,19 @@ func setupFailureDetail(for state: SetupSessionState) -> String? {
     return SetupSessions.failureDetail(for: failure)
 }
 
+/// Review #4/#6 (2026-09-19 sign-in review): whether the coordinator's session — not the
+/// snapshot's freshness — owns what this account's surfaces render. A reset blanks the row
+/// to `.pending` (`UsageStore.invalidateUsageForAccountReset`) and its exit-signalled wait
+/// schedules no check, so surfaces gated on a *stale* snapshot showed the fetching skeleton
+/// for the whole browser login, and for a staging refused after it.
+func setupSessionOwnsSurface(for state: SetupSessionState) -> Bool {
+    setupRowRecovery(for: state) != .outcomeRecovery
+}
+
 func claudeSingleAccountShell(for state: SetupSessionState) -> ClaudeSingleAccountShell {
-    switch state {
-    case .preparing, .waiting, .verifying,
-         .failed(.waitingTimedOut), .failed(.updateRequired):
-        .compactWaiting
-    default:
-        .firstRunWalkthrough
-    }
+    // Derived rather than partitioned a second time: the two switches held the same five
+    // states, so a state added to one could silently miss the other.
+    setupSessionOwnsSurface(for: state) ? .compactWaiting : .firstRunWalkthrough
 }
 
 /// R2M1: every animation scope in a provider card keyed on `snapshot.freshness`, so pressing
@@ -394,7 +399,9 @@ struct ProviderCardView: View {
     /// B3X: mirrors the branch order of `singleAccountContent` exactly — change one and the
     /// other has to move with it, or the Stop Waiting chip drifts off the card's own axis.
     private var singleAccountLabelInset: CGFloat {
-        if claudeGuidedSetupOutcome != nil || snapshot.codexConnectionAction != nil {
+        if claudeSessionOwnedState != nil
+            || claudeGuidedSetupOutcome != nil
+            || snapshot.codexConnectionAction != nil {
             0
         } else if providerSetupOutcome != nil {
             ProviderSetupRecoveryCard.contentInset
@@ -413,35 +420,32 @@ struct ProviderCardView: View {
     }
 
     @ViewBuilder private var singleAccountContent: some View {
-        if let outcome = claudeGuidedSetupOutcome {
-            let setupState = SetupSessions.state(for: primaryAccount)
-            if claudeSingleAccountShell(for: setupState) == .compactWaiting {
-                ClaudeWaitingCard(
-                    content: claudeWaitingCardContent(
-                        state: setupState,
-                        phase: SetupSessions.waitingPhase(for: primaryAccount),
-                        hasActiveHandoff: SetupSessions.hasActiveHandoff(for: primaryAccount),
-                        failureMessage: SetupSessions.failureMessage(for: primaryAccount),
-                        failureDetail: setupFailureDetail(for: setupState)
-                    ),
-                    perform: { action in
-                        performWaitingCardAction(action, for: primaryAccount)
+        if let setupState = claudeSessionOwnedState {
+            ClaudeWaitingCard(
+                content: claudeWaitingCardContent(
+                    state: setupState,
+                    phase: SetupSessions.waitingPhase(for: primaryAccount),
+                    hasActiveHandoff: SetupSessions.hasActiveHandoff(for: primaryAccount),
+                    failureMessage: SetupSessions.failureMessage(for: primaryAccount),
+                    failureDetail: setupFailureDetail(for: setupState)
+                ),
+                perform: { action in
+                    performWaitingCardAction(action, for: primaryAccount)
+                }
+            )
+        } else if let outcome = claudeGuidedSetupOutcome {
+            VStack(alignment: .leading, spacing: 10) {
+                setupFailureNotice(for: primaryAccount, onCheckNow: onRetrySetup)
+                ClaudeConnectCard(
+                    outcome: outcome,
+                    onOpenSetup: {
+                        performRecovery(
+                            outcome.recoveryPresentation.primaryAction,
+                            for: primaryAccount,
+                            onRetry: onRetrySetup
+                        )
                     }
                 )
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    setupFailureNotice(for: primaryAccount, onCheckNow: onRetrySetup)
-                    ClaudeConnectCard(
-                        outcome: outcome,
-                        onOpenSetup: {
-                            performRecovery(
-                                outcome.recoveryPresentation.primaryAction,
-                                for: primaryAccount,
-                                onRetry: onRetrySetup
-                            )
-                        }
-                    )
-                }
             }
         } else if let action = snapshot.codexConnectionAction {
             let presentation = providerSetupOutcome?.recoveryPresentation
@@ -640,6 +644,16 @@ struct ProviderCardView: View {
             }
             SetupSessions.settle(for: primaryAccount)
         }
+    }
+
+    /// Review #4/#6: the session state while it owns the card, ahead of any outcome read off
+    /// the snapshot. A reset blanks the snapshot to `.pending` before staging runs, so the
+    /// compact shell was unreachable for the whole of "Sign Out & Set Up Again" — and for the
+    /// update-required refusal that can follow it, which left the card actionless.
+    private var claudeSessionOwnedState: SetupSessionState? {
+        guard providerID == .claude else { return nil }
+        let state = SetupSessions.state(for: primaryAccount)
+        return setupSessionOwnsSurface(for: state) ? state : nil
     }
 
     /// Only typed Claude login/trust outcomes enter the guided Terminal handoff.

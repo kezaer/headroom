@@ -586,7 +586,11 @@ struct AccountSectionView: View {
         Group {
             switch snapshot.freshness {
             case .pending:
-                accountSkeleton
+                // Review #6 (2026-09-19 sign-in review): a reset blanks this row to
+                // `.pending` and then waits on the Terminal exit, scheduling no check — so
+                // a skeleton here is the whole browser login with nothing said, and a
+                // staging refused after it is an actionless one too.
+                sessionOwnedRow(setupState: setupState)
             case .live:
                 bars(dimmed: false)
             case .stale(let reason):
@@ -654,63 +658,103 @@ struct AccountSectionView: View {
                         }
                     }
                 } else if isWaitingForSetup {
-                    // S2B: the spinner is the one thing besides a brand mark allowed in
-                    // the mark column — it reports progress, not severity — and taking
-                    // the 15pt slot still lands the sentence on the 34pt content axis.
-                    //
-                    // R13/KTD12 (2026-09-19 sign-in plan): the row's Check Now is gone on
-                    // every provider. Its one control is the Stop Waiting chip the section
-                    // renders below, which R13 keeps reachable through the confirming phase.
-                    HStack(alignment: .top, spacing: IdentityRowMetrics.spacing) {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .frame(width: IdentityRowMetrics.markSlotWidth, height: 15)
-                        StatusSentence(
-                            // R7: the row states the phase it is actually in — opening
-                            // Terminal, waiting for the user, or confirming after it closed.
-                            text: (SetupSessions.waitingPhase(for: account)
-                                ?? .waitingForUser(.signIn)).copy.title,
-                            severity: .progress,
-                            indented: false
-                        )
-                    }
+                    waitingPhaseRow
                 } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        StatusSentence(
-                            // PA12: the presented outcome's own message, so the borrowed
-                            // recovery below is answering the sentence above it.
-                            text: failureMessage ?? outcome?.message ?? reason.message,
-                            severity: failureMessage != nil
-                                ? .critical
-                                : .forSetupOutcome(outcome)
-                        )
-                        // P4C/B3: both actions share one row, and a leading row reads in
-                        // reading order — the primary first, its alternative after it.
-                        // R2C11 (Kyle): leading-aligned on the account title's text axis
-                        // — which `CardActionRow`'s default `labelInset` already is — and
-                        // bounded on the right by the usage rows' own trailing edge, so a
-                        // wrapped pair of chips sits inside the meters' left/right bounds.
-                        // CMM4: 8, not R4A's 12 — the buttons are the sentence's own action
-                        // and sat further from it than the sentence sat from its title.
-                        // KTD12/R6: the chips come from `setupRowChips`, so the Try Again the
-                        // timeout and the too-old CLI both get is the same decision the
-                        // Settings row makes rather than a second copy of it here.
-                        CardActionRow(topPadding: 8, trailingInset: IdentityRowMetrics.contentTrailingInset) {
-                            ForEach(setupRowChips(
-                                state: setupState,
-                                presentation: recoveryPresentation,
-                                hasFailureMessage: failureMessage != nil
-                            )) { chip in
-                                Button(chip.label) { perform(chip) }
-                                    .buttonStyle(SetupChipButtonStyle(size: .small))
-                                    .accessibilityLabel("\(chip.label) for \(account.label)")
-                            }
-                        }
-                    }
+                    failureRow(
+                        setupState: setupState,
+                        // PA12: the presented outcome's own message, so the borrowed
+                        // recovery below is answering the sentence above it.
+                        message: failureMessage ?? outcome?.message ?? reason.message,
+                        severity: failureMessage != nil
+                            ? .critical
+                            : .forSetupOutcome(outcome),
+                        presentation: recoveryPresentation,
+                        hasFailureMessage: failureMessage != nil
+                    )
                 }
             }
             if !snapshot.windows.isEmpty {
                 bars(dimmed: true)
+            }
+        }
+    }
+
+    /// Review #6: the row a session owns while its snapshot carries nothing to read it off.
+    /// `signInContent` composes the same two pieces once the row has its stale login outcome
+    /// back, so the blanked row and the signed-out row cannot describe one state two ways.
+    @ViewBuilder private func sessionOwnedRow(setupState: SetupSessionState) -> some View {
+        switch setupRowRecovery(for: setupState) {
+        case .sessionOnly:
+            waitingPhaseRow
+        case .tryAgain:
+            if let message = SetupSessions.failureMessage(for: account) {
+                failureRow(
+                    setupState: setupState,
+                    message: message,
+                    severity: .critical,
+                    presentation: nil,
+                    hasFailureMessage: true
+                )
+            } else {
+                accountSkeleton
+            }
+        case .outcomeRecovery:
+            accountSkeleton
+        }
+    }
+
+    /// R7: the row states the phase it is actually in — opening Terminal, waiting for the
+    /// user, or confirming after the window closed.
+    ///
+    /// S2B: the spinner is the one thing besides a brand mark allowed in the mark column —
+    /// it reports progress, not severity — and taking the 15pt slot still lands the sentence
+    /// on the 34pt content axis.
+    ///
+    /// R13/KTD12 (2026-09-19 sign-in plan): the row's Check Now is gone on every provider.
+    /// Its one control is the Stop Waiting chip the section renders below, which R13 keeps
+    /// reachable through the confirming phase.
+    private var waitingPhaseRow: some View {
+        HStack(alignment: .top, spacing: IdentityRowMetrics.spacing) {
+            ProgressView()
+                .controlSize(.mini)
+                .frame(width: IdentityRowMetrics.markSlotWidth, height: 15)
+            StatusSentence(
+                text: (SetupSessions.waitingPhase(for: account)
+                    ?? .waitingForUser(.signIn)).copy.title,
+                severity: .progress,
+                indented: false
+            )
+        }
+    }
+
+    /// P4C/B3: both actions share one row, and a leading row reads in reading order — the
+    /// primary first, its alternative after it. R2C11 (Kyle): leading-aligned on the account
+    /// title's text axis — which `CardActionRow`'s default `labelInset` already is — and
+    /// bounded on the right by the usage rows' own trailing edge, so a wrapped pair of chips
+    /// sits inside the meters' left/right bounds. CMM4: 8, not R4A's 12 — the buttons are the
+    /// sentence's own action and sat further from it than the sentence sat from its title.
+    /// KTD12/R6: the chips come from `setupRowChips`, so the Try Again the timeout and the
+    /// too-old CLI both get is the same decision the Settings row makes rather than a second
+    /// copy of it here.
+    private func failureRow(
+        setupState: SetupSessionState,
+        message: String,
+        severity: StatusSentenceSeverity,
+        presentation: ProviderRecoveryPresentation?,
+        hasFailureMessage: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            StatusSentence(text: message, severity: severity)
+            CardActionRow(topPadding: 8, trailingInset: IdentityRowMetrics.contentTrailingInset) {
+                ForEach(setupRowChips(
+                    state: setupState,
+                    presentation: presentation,
+                    hasFailureMessage: hasFailureMessage
+                )) { chip in
+                    Button(chip.label) { perform(chip) }
+                        .buttonStyle(SetupChipButtonStyle(size: .small))
+                        .accessibilityLabel("\(chip.label) for \(account.label)")
+                }
             }
         }
     }

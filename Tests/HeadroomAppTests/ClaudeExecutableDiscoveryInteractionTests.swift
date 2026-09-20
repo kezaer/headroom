@@ -216,6 +216,10 @@ import HeadroomCore
             )
 
             #expect(staging.handoff?.claudeScriptKind == expected)
+            // KTD11: the reason travels with the kind — it is what the waiting copy turns
+            // on, and only the interactive launch has one.
+            #expect(staging.staged?.claudeInteractiveReason
+                == (expected == .interactive ? .neverOnboardedExtraAccount : nil))
             let script = try #require(staging.script)
             #expect(script.contains("auth login") == (expected == .signIn))
             #expect(await versions.environments == [["CLAUDE_CONFIG_DIR": configDirectory]])
@@ -261,6 +265,85 @@ import HeadroomCore
         }
     }
 
+    /// Review #1 (2026-09-19 sign-in review): a reset refused for a too-old CLI never opened
+    /// a handoff, so the coordinator clears the session purpose — deliberately, so a settled
+    /// failure cannot suppress ordinary polling. Try Again then read back `.setup` and
+    /// started a plain sign-in against an account the reset never signed out, which the
+    /// script's own guard reports as already signed in: Headroom called the old login
+    /// connected and the user believed the reset had happened.
+    @MainActor @Test func aRefusedResetIsRememberedSoTryAgainResumesTheReset() async {
+        let account = refusalAccount()
+        defer { try? AccountStorage.removeDirectories(for: account) }
+        let workspace = temporaryWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let staging = await stageClaudeHandoff(
+            for: account,
+            purpose: .reset,
+            workspace: workspace,
+            versions: ClaudeVersionReaderSpy("2.1.40 (Claude Code)")
+        )
+
+        #expect(staging.result == .failure(.updateRequired))
+        #expect(SetupSessions.refusedHandoffPurpose(for: account) == .reset)
+
+        let purpose = SetupSessions.tryAgainPurpose(
+            sessionPurpose: nil,
+            refusedPurpose: SetupSessions.refusedHandoffPurpose(for: account)
+        )
+        #expect(purpose == .reset)
+        let route = SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: purpose)
+        #expect(route == .startNewHandoff(.reset))
+        #expect(SetupSessions.tryAgainAction(for: route) == .startReset)
+        // The coordinator's own purpose still wins, and an open handoff never consults the
+        // memo at all — it fronts the window that is already there.
+        #expect(SetupSessions.tryAgainPurpose(sessionPurpose: .trust, refusedPurpose: .reset) == .trust)
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: true, purpose: .reset)
+            == .showTerminalAndResume)
+
+        SetupSessions.forceCancel(for: account)
+    }
+
+    /// Review #1: the memo describes one refusal, so it must not outlive it — a later Try
+    /// Again on an ordinary sign-in must never be turned into a sign-out.
+    @MainActor @Test func aRememberedRefusalNeverOutlivesTheFailureItDescribes() async {
+        let account = refusalAccount()
+        defer { try? AccountStorage.removeDirectories(for: account) }
+
+        for end in ["begin", "forceCancel", "settle"] {
+            let workspace = temporaryWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let staging = await stageClaudeHandoff(
+                for: account,
+                purpose: .reset,
+                workspace: workspace,
+                versions: ClaudeVersionReaderSpy("2.1.40 (Claude Code)")
+            )
+            #expect(staging.result == .failure(.updateRequired))
+            #expect(SetupSessions.refusedHandoffPurpose(for: account) == .reset)
+
+            switch end {
+            case "begin": SetupSessions.noteHandoffBegan(for: account)
+            case "forceCancel": SetupSessions.forceCancel(for: account)
+            default: SetupSessions.settle(for: account)
+            }
+
+            #expect(SetupSessions.refusedHandoffPurpose(for: account) == nil,
+                    "\(end) left the refused purpose behind")
+            SetupSessions.forceCancel(for: account)
+        }
+    }
+
+    /// A key no other test touches: the memo is per account and process-wide.
+    private func refusalAccount() -> ProviderAccount {
+        ProviderAccount(
+            id: AccountID("refused-reset-\(UUID().uuidString)"),
+            providerID: .claude,
+            label: "Work",
+            isBuiltIn: false
+        )
+    }
+
     /// R6: an unreadable version keeps today's interactive launch, so a change to the CLI's
     /// version format cannot lock every user out of sign-in.
     @MainActor @Test func unreadableVersionKeepsTheInteractiveLaunch() async throws {
@@ -275,6 +358,9 @@ import HeadroomCore
             )
 
             #expect(staging.handoff?.claudeScriptKind == .interactive)
+            // KTD11: `/login` guidance follows this reason, so an unreadable version must
+            // not be staged as a never-onboarded extra account.
+            #expect(staging.staged?.claudeInteractiveReason == .versionUnreadable)
             #expect(try #require(staging.script).contains("auth login") == false)
             await staging.discard()
         }

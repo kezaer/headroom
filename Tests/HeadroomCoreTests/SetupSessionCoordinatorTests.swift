@@ -215,6 +215,34 @@ import Testing
         #expect(harness.scheduler.pendingCount == 0)
     }
 
+    /// KTD6/R13: Stop Waiting also has to reach a *Claude* wait, under both of the policies
+    /// KTD6 introduced — the exit-signalled sign-in, which arms only its timeout, and the
+    /// polled interactive launch, which arms a check beside it. Neither may leave a timer
+    /// behind. The test above pins the same guarantee for the ladder Codex still runs.
+    @Test func forceCancelDuringAClaudeWaitCancelsEveryTimerItsPolicyArmed() async {
+        for kind in [ClaudeSetupScriptKind.signIn, .interactive] {
+            let harness = SetupCoordinatorHarness()
+            harness.claudeScriptKind = kind
+            let coordinator = harness.makeCoordinator()
+            let account = ProviderAccount.builtIn(for: .claude)
+
+            coordinator.begin(for: account)
+            await settleTasks()
+            #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+            #expect(coordinator.waitingPolicy(for: account.key)
+                == (kind == .signIn ? .exitSignalled : .polled))
+            #expect(harness.scheduler.pendingCount == (kind == .signIn ? 1 : 2))
+
+            coordinator.forceCancel(account.key)
+            harness.scheduler.fireLastIncludingCancelled()
+
+            #expect(coordinator.state(for: account.key) == .cancelled)
+            #expect(!coordinator.hasActiveHandoff(for: account.key))
+            #expect(harness.refreshCalls.isEmpty)
+            #expect(harness.scheduler.pendingCount == 0)
+        }
+    }
+
     @Test func forceCancelAllowsImmediateBeginForSameAccount() async {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()

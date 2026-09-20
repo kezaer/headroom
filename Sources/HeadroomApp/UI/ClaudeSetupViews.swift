@@ -453,6 +453,16 @@ struct ClaudeWaitingCardContent: Equatable {
     /// False for the two failure states — a stalled wait is not progress.
     let showsProgress: Bool
     let actions: [ClaudeWaitingCardAction]
+    /// Review #2 (2026-09-19 sign-in review): false where the copyable command would launch
+    /// a CLI staging has already refused. See `claudeShellOffersManualCommand`.
+    let showsManualCommand: Bool
+}
+
+/// Review #2: the version gate refuses a CLI below 2.1.41 because its sign-in can never be
+/// confirmed — so the resulting card must not also hand the user a command that launches
+/// that same CLI. Every other shell state keeps the disclosure.
+func claudeShellOffersManualCommand(state: SetupSessionState) -> Bool {
+    state != .failed(.updateRequired)
 }
 
 func claudeWaitingCardContent(
@@ -463,6 +473,7 @@ func claudeWaitingCardContent(
     failureDetail: String?
 ) -> ClaudeWaitingCardContent {
     let actions = claudeWaitingCardActions(state: state, hasActiveHandoff: hasActiveHandoff)
+    let showsManualCommand = claudeShellOffersManualCommand(state: state)
     let copy = (phase ?? .waitingForUser(.signIn)).copy
     if case .failed = state {
         return ClaudeWaitingCardContent(
@@ -470,7 +481,8 @@ func claudeWaitingCardContent(
             detail: failureDetail,
             token: nil,
             showsProgress: false,
-            actions: actions
+            actions: actions,
+            showsManualCommand: showsManualCommand
         )
     }
     return ClaudeWaitingCardContent(
@@ -478,7 +490,8 @@ func claudeWaitingCardContent(
         detail: copy.body,
         token: copy.token,
         showsProgress: true,
-        actions: actions
+        actions: actions,
+        showsManualCommand: showsManualCommand
     )
 }
 
@@ -534,8 +547,10 @@ struct ClaudeWaitingCard: View {
                     }
                 }
             }
-            ClaudeManualCommandDisclosure()
-                .padding(.top, SetupCardMetrics.siblingGap)
+            if content.showsManualCommand {
+                ClaudeManualCommandDisclosure()
+                    .padding(.top, SetupCardMetrics.siblingGap)
+            }
         }
     }
 

@@ -116,6 +116,14 @@ enum SetupSessions {
     /// waiting surface can tell the `/login` case (R6) from a never-onboarded extra config
     /// (AE7) without re-reading the CLI version from a view.
     private static var handoffInteractiveReasons: [AccountKey: ClaudeInteractiveLaunchReason] = [:]
+    /// Review #1 (2026-09-19 sign-in review): the purpose of a staging that was *refused*
+    /// before any handoff opened. `SetupSessionCoordinator.invalidateWork` clears
+    /// `sessionPurposes` for a terminal failure with no open handoff — deliberately, so a
+    /// settled failure cannot suppress the ordinary polling that would recover the account —
+    /// which left a refused `.reset` reading back as `.setup`. Try Again then started a plain
+    /// sign-in against a login the reset never signed out, the script's own guard reported it
+    /// as already signed in, and Headroom called the old account connected.
+    private static var refusedHandoffPurposes: [AccountKey: SetupHandoffPurpose] = [:]
     private static var completionTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var checkNowTasks: [AccountKey: Task<Void, Never>] = [:]
     private static var failureAnnouncer = SetupFailureAnnouncer()
@@ -271,6 +279,9 @@ enum SetupSessions {
     /// restarting it — and so a restored start seeded by `restoreWaitingStart` survives the
     /// next call rather than being rewritten to now.
     static func noteHandoffBegan(for account: ProviderAccount, at date: Date = .now) {
+        // Review #1: a handoff that actually begins supersedes the refusal recorded before
+        // it, whether or not this call goes on to stamp the clock.
+        refusedHandoffPurposes.removeValue(forKey: account.key)
         guard !isWaiting(for: account) else { return }
         SetupSessionActivity.shared.beginWaiting(for: account.key, at: date)
     }
@@ -399,6 +410,12 @@ enum SetupSessions {
         coordinator?.sessionPurpose(for: account.key)
     }
 
+    /// Review #1: the purpose of this account's last refused staging, or nil once a handoff
+    /// has begun, the session has been force-cancelled, or it settled connected.
+    static func refusedHandoffPurpose(for account: ProviderAccount) -> SetupHandoffPurpose? {
+        refusedHandoffPurposes[account.key]
+    }
+
     static func finalVerificationCompletion(for account: ProviderAccount) -> SetupHandoffCompletion? {
         coordinator?.finalVerificationCompletion(for: account.key)
     }
@@ -432,10 +449,23 @@ enum SetupSessions {
             for: account,
             route: tryAgainRoute(
                 hasActiveHandoff: hasActiveHandoff(for: account),
-                purpose: purpose(for: account)
+                purpose: tryAgainPurpose(
+                    sessionPurpose: purpose(for: account),
+                    refusedPurpose: refusedHandoffPurposes[account.key]
+                )
             ),
             onRetry: onRetry
         )
+    }
+
+    /// Review #1: which purpose Try Again resumes. The coordinator's live session purpose
+    /// wins; the remembered refusal fills only the gap a cleared `sessionPurposes` leaves,
+    /// so a reset refused before any window opened resumes as a reset.
+    static func tryAgainPurpose(
+        sessionPurpose: SetupHandoffPurpose?,
+        refusedPurpose: SetupHandoffPurpose?
+    ) -> SetupHandoffPurpose? {
+        sessionPurpose ?? refusedPurpose
     }
 
     /// The route is a parameter here so a test can drive each branch without owning the
@@ -445,14 +475,37 @@ enum SetupSessions {
         route: TryAgainRoute,
         onRetry: @escaping () -> Void
     ) {
-        switch route {
+        switch tryAgainAction(for: route) {
         case .showTerminalAndResume:
             showTerminal(for: account)
             resumeWaiting(for: account)
-        case .startNewHandoff(.trust):
+        case .startWorkspaceTrust:
             performRecovery(.openClaudeWorkspace, for: account, onRetry: onRetry)
-        case .startNewHandoff:
+        case .startReset:
+            // Review #1: the sign-out is the point. Starting an ordinary sign-in here would
+            // meet an account that is still signed in, so the script's guard would exit
+            // reporting success and the old login would be shown as connected.
+            resetSetup(for: account)
+        case .startSetup:
             openSetup(for: account, onRetry: onRetry)
+        }
+    }
+
+    /// Review #1: what Try Again does with a route, pure — so the reset branch is provable
+    /// without a coordinator, a Terminal window, or a CLI.
+    enum TryAgainAction: Equatable {
+        case showTerminalAndResume
+        case startReset
+        case startWorkspaceTrust
+        case startSetup
+    }
+
+    static func tryAgainAction(for route: TryAgainRoute) -> TryAgainAction {
+        switch route {
+        case .showTerminalAndResume: .showTerminalAndResume
+        case .startNewHandoff(.reset): .startReset
+        case .startNewHandoff(.trust): .startWorkspaceTrust
+        case .startNewHandoff: .startSetup
         }
     }
 
@@ -600,6 +653,8 @@ enum SetupSessions {
     static func settle(for account: ProviderAccount) {
         SetupSessionActivity.shared.endWaiting(for: account.key)
         SetupSessionActivity.shared.releaseConnectedPayoff(for: account.key)
+        // Review #1: a connected account has nothing left to resume.
+        refusedHandoffPurposes.removeValue(forKey: account.key)
         if let coordinator {
             coordinator.settleConnected(account.key)
             return
@@ -625,6 +680,8 @@ enum SetupSessions {
         completionTasks.removeValue(forKey: account.key)?.cancel()
         handoffTerminalApps.removeValue(forKey: account.key)
         handoffInteractiveReasons.removeValue(forKey: account.key)
+        // Review #1: the user abandoned this attempt, so its refusal describes nothing.
+        refusedHandoffPurposes.removeValue(forKey: account.key)
         let prepared = preparedScripts.removeValue(forKey: account.key)
             ?? activeScripts.removeValue(forKey: account.key)
         let marker = prepared?.completionMarker ?? completionMarker(
@@ -833,6 +890,11 @@ enum SetupSessions {
                 claudeScriptKind: preparedScript.claudeScriptKind
             ))
         case .failure(let failure):
+            // Review #1: the refusal is the one place this purpose still exists — the
+            // coordinator drops it the moment the failure settles with no handoff open.
+            if failure == .updateRequired {
+                refusedHandoffPurposes[account.key] = purpose
+            }
             return .failure(failure)
         }
     }

@@ -1578,6 +1578,26 @@ private final class GrokDeviceCodeSetupHarness {
         #expect(!status.needsRecovery)
         #expect(setupHandoffRefusalMessage(for: .verifying) == nil)
     }
+
+    /// Review #6 (2026-09-19 sign-in plan): a reset blanks the row to `.pending`, and an
+    /// exit-signalled handoff runs no check until Terminal closes, so the row would read
+    /// "Fetching…" for the whole browser login.
+    @Test func blankedRowWithAnOpenSessionReadsWaitingNotFetching() {
+        func status(waiting: Bool) -> AccountsSettingsTile.AccountStatus {
+            AccountsSettingsTile.AccountStatus(
+                snapshot: .pending(for: .claude),
+                waiting: waiting,
+                blocked: false,
+                blockedByOpenHandoff: false,
+                setupFailed: false,
+                removalState: nil
+            )
+        }
+
+        #expect(status(waiting: true) == .waiting)
+        #expect(status(waiting: true).isSetupState)
+        #expect(status(waiting: false) == .fetching)
+    }
 }
 
 @Suite struct AccountsCapabilityPresentationTests {

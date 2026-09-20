@@ -938,7 +938,10 @@ struct AccountsSettingsTile: View {
             case .live:
                 self = .connected
             case .pending:
-                self = .fetching
+                // Review #6 (2026-09-19 sign-in plan): a reset blanks the row to `.pending`
+                // and an exit-signalled handoff runs no check until Terminal closes, so an
+                // open session has to outrank the blank reading here.
+                self = waiting ? .waiting : .fetching
             case .stale(let reason):
                 if reason.isPermanent {
                     self = waiting ? .waiting : .needsSignIn
