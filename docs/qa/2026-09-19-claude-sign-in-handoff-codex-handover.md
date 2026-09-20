@@ -26,7 +26,7 @@ These are decisions only Kyle can make. Do not start until each line is ticked o
 - [ ] You may answer the macOS prompt "Headroom would like to access data from other apps" with **Allow**. It appears after every rebuild because the rebuild re-signs the app.
 - [ ] You may sign the machine-wide default `claude` CLI login in to Kyle's **Personal** account (test 2 does this; it is what Kyle was trying to do when this work started).
 - [ ] You may add one throwaway extra Claude account in Headroom for tests 8 to 10, and remove it again at the end. Which login should it use? ____________________ (if blank, run tests 8 to 10 only as far as the browser consent page, do not authorize, and say so).
-- [ ] You may run "Sign Out & Set Up Again" on the built-in Personal account (test 11). This signs the default CLI login out and back in, machine-wide.
+- [ ] You may sign the default CLI login out of Personal and back in, machine-wide: with `/Users/kylezantos/.local/bin/claude auth logout` in a plain Terminal (needed before tests 4 to 8 now that Personal starts signed in, and again in test 14), and with "Sign Out & Set Up Again" (test 11).
 
 ## Hard rules
 
@@ -66,16 +66,17 @@ Read before deciding anything:
 
 ## State of the branch
 
-- Branch `claude/local-headroom-build-e1ae91`, HEAD `c764767e`, ten commits on top of `main` at `054bf04e`. Tree clean. Nothing pushed.
+- Branch `fix/claude-sign-in-handoff` (renamed from `claude/local-headroom-build-e1ae91`), code HEAD `c764767e` plus this document, on top of `main` at `054bf04e`. Pushed; draft PR https://github.com/kylezantos/headroom/pull/127. Your results file is the only change you make.
 - Verified by the previous agent: `swift build` clean; `swift test` 944 passing; the Xcode `HeadroomAppTests` suite 183 passing in about 18 seconds; a full multi-reviewer code review (run `20260919-164120-47f26bfe`) whose four actionable findings were fixed in `c764767e`.
-- Verified against Kyle's real CLI: the script's signed-in guard reads **Personal** (built-in, default `~/.claude`) as signed out and **Work** (extra account) as signed in.
-- **Not verified by anyone:** every row below. No browser sign-in has been run against this code, and nobody has looked at the new surfaces in the live popover.
+- Verified against Kyle's real CLI: the script's signed-in guard read **Personal** (built-in, default `~/.claude`) as signed out and **Work** (extra account) as signed in, before Kyle signed Personal in (next line).
+- Verified once by Kyle on 2026-09-20, with the build from this branch: clicking Sign In on the Personal card ran the browser login in Terminal with nothing typed, and the card reached usage. Afterwards `auth status --json` read `loggedIn: true` and `--probe-claude` parsed three windows. Nobody recorded the intermediate card phases, the Terminal result line, or timings, so test 2 still stands.
+- **Not verified by anyone:** every other row below. Nobody has looked at the new surfaces in the live popover.
 
 ## Machine facts (machine-local)
 
 - The real CLI is `/Users/kylezantos/.local/bin/claude`, version 2.1.278. Kyle's shell `claude` is a zsh function that calls a helper (`_claude_oauth`) which does not exist in non-interactive shells. **Always use the absolute path.**
-- A Headroom built from this worktree **before** this work may still be running (it was PID 64604, from `Headroom.app` in this worktree). `./Scripts/build-app.sh` replaces that bundle in place, so quit it from its own Quit button first.
-- A Terminal window from Kyle's original sign-in attempt may still be open, running a script under `~/Library/Application Support/Headroom/Setup/`. Note it in the results, then close that window by hand before test 2 so it cannot confuse the handoff state.
+- A Headroom built from this branch on 2026-09-19 at 23:31 is probably still running from `Headroom.app` in this worktree (it was PID 68753). `./Scripts/build-app.sh` replaces that bundle in place, so quit it from its own Quit button before rebuilding, or skip the rebuild if `git log -1 --format=%h -- Sources` still reads `c764767e`.
+- The Terminal window from Kyle's sign-in on 2026-09-20 may still be open, showing the script's result line. Note the line in the results if it is there, then close the window by hand before test 2 so it cannot confuse the handoff state.
 - `claude auth login` always opens the default browser. It has no flag to suppress that.
 - The permission prompt in the checklist blocks Headroom's main thread until answered. If the popover seems frozen right after launch, look for that dialog first.
 - Headroom's Accounts live under `~/Library/Application Support/Headroom/Accounts/claude/`. Only the Work folder should exist when you start. Do not run any `claude` command with `CLAUDE_CONFIG_DIR` pointed at an empty folder: the CLI writes a `.claude.json` stub into it.
@@ -95,13 +96,18 @@ Put screenshots in `docs/qa/2026-09-19-claude-sign-in-handoff-screenshots/`. Wri
 
 ### Suggested order
 
-Personal starts **signed out**, which tests 4, 5, 6, 7 and 8 need. Run those first, then test 2 (which signs Personal in), then 3, 9, 10, 12, 13, 15 as they become reachable, then 11 and 14 last because they sign Personal out and back in. Record the `sign-out-events=` count from the built binary's `--probe-claude` once before you begin, so test 14 can be judged as a change from that number.
+Personal now starts **signed in** (Kyle signed it in on 2026-09-20). Record the `sign-out-events=` count from the built binary's `--probe-claude` once before you begin; test 14 is judged as a change from that number.
+
+1. Test 3 first, while Personal is signed in.
+2. If Kyle ticked the sign-out box: in a plain Terminal run `/Users/kylezantos/.local/bin/claude auth logout`, wait for Headroom's next poll (or press Refresh in the popover), then run `--probe-claude` again. The `sign-out-events=` count should now be one higher than your starting number, for `claude/primary`. Record it; this is the external-logout half of test 14 done early. If the box is not ticked, tests 4 to 8, 11 and 14 are blocked; skip to step 4.
+3. Tests 4, 5, 6, 7 and 8 need Personal signed out, so run them now, then test 2 (which signs Personal in).
+4. Then 9, 10, 12, 13, 15 as they become reachable, and 11 last. After 11, run `--probe-claude` once more for the reset half of test 14: the count must be unchanged from step 2's number.
 
 ### Test matrix
 
 | # | Test | What to do | Pass means |
 |---|---|---|---|
-| 1 | Build and launch | Setup steps above | App launches, vessel icon in the menu bar, Claude card shows "Sign in to Claude" for Personal and live usage for Work |
+| 1 | Build and launch | Setup steps above | App launches, vessel icon in the menu bar, Claude card shows live usage for both Personal and Work (Personal starts signed in; after step 2 of the suggested order it should read "Sign in to Claude" instead) |
 | 2 | Sign in with no typing (R1, R3, R7, AE1) | Click **Sign In** on Personal. Watch the card. In the browser, click Authorize if permitted | Terminal opens straight into the CLI's sign-in, never a `claude` prompt. Card goes "Opening Terminal…" → "Waiting for sign-in…" → "Confirming sign-in…" → usage, with no further click in Headroom. Terminal ends on the line "Sign-in finished. Headroom is checking your Claude account." and nothing clears it. Record the header clock text while waiting |
 | 3 | Already signed in (R2, AE2) | With Personal now signed in, trigger Sign In again if any surface still offers it; otherwise run the "Rather run it yourself?" command from a signed-out state later in test 10. If neither is reachable, mark blocked and say why | Terminal prints "This account is already signed in. Headroom is checking your Claude account.", exits, card connects |
 | 4 | Interrupted sign-in (R11, AE5) | From a signed-out state, click Sign In, then press Ctrl-C in Terminal. Repeat, this time closing the Terminal window instead. Repeat once more abandoning the browser tab and leaving Terminal alone for two minutes | First two: card reads "Terminal closed before sign-in finished." with **Sign In**. Third: **record** whether `auth login` exits by itself, with what status (the last line of the Terminal window, and the `complete:` marker if you can see it), or keeps waiting |
@@ -114,7 +120,7 @@ Personal starts **signed out**, which tests 4, 5, 6, 7 and 8 need. Run those fir
 | 11 | Reset shows the waiting card (review #6) | Settings → Accounts → Personal → **Sign Out & Set Up Again**, confirm. Look at the popover card and the Settings row during the browser login | Both show the waiting state ("Waiting for sign-in…"), never a loading skeleton or "Fetching…". After authorizing, the account connects |
 | 12 | Show Terminal (R14) | During any wait, click **Show Terminal**. Then look for the button during "Confirming…" | It fronts the terminal app with no macOS permission prompt, and it is absent once Terminal has closed |
 | 13 | Check Now is gone from waiting (R13) | Look at every waiting surface for Claude: popover card, account row (needs two Claude accounts visible), Settings row. If a Codex account can be put into a sign-in wait without harming Kyle's Codex login, look there too; otherwise mark that half blocked | No **Check Now** while waiting or confirming. A Codex row in a *failed* state still shows **Sign In** and **Check Now** |
-| 14 | Sign-out record (R16, R17) | After test 11's deliberate reset, run `Headroom.app/Contents/MacOS/Headroom --probe-claude` (the built binary; `swift run` reads a different settings file). Then, if Kyle permitted test 11, sign Personal out from a plain Terminal with `/Users/kylezantos/.local/bin/claude auth logout`, wait for Headroom's next poll or press Refresh, and run the probe again | After the reset alone: the `sign-out-events=` count is **unchanged** from your starting number (a deliberate reset is not recorded). After the external logout: the count is up by exactly one, for `claude/primary`, with a `sign-out-detected-at` timestamp, and no email, org or CLI output anywhere in the section. Then sign Personal back in via test 2's path |
+| 14 | Sign-out record (R16, R17) | Two halves, both with `Headroom.app/Contents/MacOS/Headroom --probe-claude` (the built binary; `swift run` reads a different settings file). External-logout half: step 2 of the suggested order (`auth logout` in a plain Terminal, wait for a poll, probe). Reset half: after test 11's deliberate reset, probe again | After the external logout: the `sign-out-events=` count is up by exactly one from your starting number, for `claude/primary`, with a `sign-out-detected-at` timestamp, and no email, org or CLI output anywhere in the section. After the reset: the count is **unchanged** from the external-logout number (a deliberate reset is not recorded) |
 | 15 | Visual acceptance | For each phase you reach (opening, waiting, confirming, timeout, closed-early, connected) screenshot the popover in **light and dark**. Toggle appearance in System Settings → Appearance and put it back afterwards | No clipped or overlapping text, chip rows wrap inside the card, the Stop Waiting chip sits on the card's left axis with the other chips, no pulsing or looping animation anywhere. `--render-popover` output does not count as evidence here; `AGENTS.md` explains why |
 
 ### Cannot be tested on this machine
