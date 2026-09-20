@@ -4,6 +4,16 @@ Non-blocking items. The earlier OAuth/Keychain-token approach and its U9 spike a
 Anthropic prohibits and blocks third-party subscription-OAuth use, so Claude now reads the
 official `claude` CLI's `/usage` panel instead.
 
+## Setup handoff launch still needs a bounded-stall design
+
+- **The explicit Terminal open is asynchronous and has no timeout.** `NSWorkspace.open` normally
+  returns promptly, and the handoff owns its script before suspending so **Stop Waiting** cleans
+  up safely. A genuinely wedged LaunchServices request could still leave the row in Preparing and
+  hold Codex's exclusive login slot. Do not add a naive timeout that reports failure while the
+  uncancelled AppKit request later opens Terminal; first establish a cancellable or late-result-
+  rejecting boundary, then cover it with a suspended-opener test. The dedicated QA host should
+  also confirm a real installed build opens Terminal and advances the completion marker.
+
 ## OpenAI API-spend request remains unverified against a real key
 
 - **Anthropic resolved 2026-08-10.** The real-key `HTTP 400` was caused by sending bare dates

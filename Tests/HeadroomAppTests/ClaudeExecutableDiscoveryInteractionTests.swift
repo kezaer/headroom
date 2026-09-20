@@ -7,6 +7,194 @@ import HeadroomCore
 /// capability recovery row offers for each discovery state, and which executable the
 /// staged handoff, clipboard fallback, and legacy script actually launch.
 @Suite struct ClaudeExecutableDiscoveryInteractionTests {
+    /// A `.command` handler can acknowledge LaunchServices without actually running the
+    /// script. Exercise the production orchestration seam so reverting `openPreparedHandoff`
+    /// to the default handler makes this test fail.
+    @MainActor @Test func preparedHandoffTargetsSystemTerminalAndPersistsItsHost() async throws {
+        let account = ProviderAccount(
+            id: AccountID("terminal-success-\(UUID().uuidString)"),
+            providerID: .claude,
+            label: "Terminal success",
+            isBuiltIn: false
+        )
+        let workspace = temporaryWorkspace()
+        let terminalURL = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+        defer {
+            SetupSessions.forceCancel(for: account)
+            try? AccountStorage.removeDirectories(for: account)
+            try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
+        }
+        let staging = await stageClaudeHandoff(
+            for: account,
+            workspace: workspace,
+            versions: ClaudeVersionReaderSpy("2.1.300 (Claude Code)")
+        )
+        let handoff = try #require(staging.handoff)
+        let prepared = try #require(staging.staged)
+        var resolvedBundleIdentifiers: [String] = []
+        var openCalls: [(script: URL, application: URL)] = []
+
+        let result = await SetupSessions.openPreparedHandoff(
+            handoff,
+            resolveTerminalApplication: { bundleIdentifier in
+                resolvedBundleIdentifiers.append(bundleIdentifier)
+                return terminalURL
+            },
+            openScript: { script, application in
+                openCalls.append((script, application))
+                return true
+            },
+            copy: { _ in
+                Issue.record("A successful Terminal handoff must not use the clipboard fallback")
+                return false
+            }
+        )
+
+        guard case .success = result else {
+            Issue.record("Expected the prepared handoff to open successfully")
+            return
+        }
+        #expect(resolvedBundleIdentifiers == ["com.apple.Terminal"])
+        #expect(openCalls.count == 1)
+        #expect(openCalls.first?.script == prepared.scriptURL)
+        #expect(openCalls.first?.application == terminalURL)
+        #expect(SetupSessions.handoffTerminalApp(for: account.key) == "com.apple.Terminal")
+        #expect(AccountStorage.setupHandoffRecord(marker: prepared.completionMarker)?
+            .terminalBundleIdentifier == "com.apple.Terminal")
+    }
+
+    @MainActor @Test func unavailableTerminalClearsStagingAndReportsPasteboardFailure() async throws {
+        let account = ProviderAccount(
+            id: AccountID("terminal-unavailable-\(UUID().uuidString)"),
+            providerID: .claude,
+            label: "Terminal unavailable",
+            isBuiltIn: false
+        )
+        let workspace = temporaryWorkspace()
+        defer {
+            try? AccountStorage.removeDirectories(for: account)
+            try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
+        }
+        let staging = await stageClaudeHandoff(
+            for: account,
+            workspace: workspace,
+            versions: ClaudeVersionReaderSpy("2.1.300 (Claude Code)")
+        )
+        let handoff = try #require(staging.handoff)
+        let prepared = try #require(staging.staged)
+
+        let result = await SetupSessions.openPreparedHandoff(
+            handoff,
+            resolveTerminalApplication: { _ in nil },
+            openScript: { _, _ in
+                Issue.record("Terminal open must not run when resolution fails")
+                return true
+            },
+            copy: { _ in false }
+        )
+
+        guard case .failure(.pasteboardFailed) = result else {
+            Issue.record("Expected pasteboardFailed when Terminal is unavailable and copy fails")
+            return
+        }
+        #expect(!FileManager.default.fileExists(atPath: prepared.scriptURL.path))
+        #expect(!AccountStorage.setupHandoffIsActive(marker: prepared.completionMarker))
+    }
+
+    @MainActor @Test func rejectedTerminalOpenClearsStagingAndCopiesManualCommand() async throws {
+        let account = ProviderAccount(
+            id: AccountID("terminal-rejected-\(UUID().uuidString)"),
+            providerID: .claude,
+            label: "Terminal rejected",
+            isBuiltIn: false
+        )
+        let workspace = temporaryWorkspace()
+        defer {
+            try? AccountStorage.removeDirectories(for: account)
+            try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
+        }
+        let staging = await stageClaudeHandoff(
+            for: account,
+            workspace: workspace,
+            versions: ClaudeVersionReaderSpy("2.1.300 (Claude Code)")
+        )
+        let handoff = try #require(staging.handoff)
+        let prepared = try #require(staging.staged)
+        var copiedCommands: [String] = []
+
+        let result = await SetupSessions.openPreparedHandoff(
+            handoff,
+            resolveTerminalApplication: { _ in
+                URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+            },
+            openScript: { script, _ in
+                #expect(script == prepared.scriptURL)
+                return false
+            },
+            copy: { command in
+                copiedCommands.append(command)
+                return true
+            }
+        )
+
+        guard case .failure(.terminalRejected) = result else {
+            Issue.record("Expected terminalRejected when Terminal refuses the staged script")
+            return
+        }
+        #expect(copiedCommands == [prepared.manualCommand])
+        #expect(!FileManager.default.fileExists(atPath: prepared.scriptURL.path))
+        #expect(!AccountStorage.setupHandoffIsActive(marker: prepared.completionMarker))
+    }
+
+    @MainActor @Test func forceCancelDuringTerminalLaunchDoesNotRestoreTheStaleHandoff() async throws {
+        let account = ProviderAccount(
+            id: AccountID("terminal-cancelled-\(UUID().uuidString)"),
+            providerID: .claude,
+            label: "Terminal cancelled",
+            isBuiltIn: false
+        )
+        let workspace = temporaryWorkspace()
+        let gate = HandoffOpenGate()
+        defer {
+            SetupSessions.forceCancel(for: account)
+            try? AccountStorage.removeDirectories(for: account)
+            try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
+        }
+        let staging = await stageClaudeHandoff(
+            for: account,
+            workspace: workspace,
+            versions: ClaudeVersionReaderSpy("2.1.300 (Claude Code)")
+        )
+        let handoff = try #require(staging.handoff)
+        let prepared = try #require(staging.staged)
+
+        let opening = Task { @MainActor in
+            await SetupSessions.openPreparedHandoff(
+                handoff,
+                resolveTerminalApplication: { _ in
+                    URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+                },
+                openScript: { _, _ in await gate.open() },
+                copy: { _ in
+                    Issue.record("Cancellation must own cleanup without a clipboard fallback")
+                    return true
+                }
+            )
+        }
+        await gate.waitUntilStarted()
+        SetupSessions.forceCancel(for: account)
+        await gate.release()
+        let result = await opening.value
+
+        guard case .failure(.terminalRejected) = result else {
+            Issue.record("Expected the stale launch result to be rejected after cancellation")
+            return
+        }
+        #expect(!FileManager.default.fileExists(atPath: prepared.scriptURL.path))
+        #expect(!AccountStorage.setupHandoffIsActive(marker: prepared.completionMarker))
+        #expect(SetupSessions.handoffTerminalApp(for: account.key) == nil)
+    }
+
     /// AE5: confirmed absence routes to installation guidance plus a forced discovery
     /// check, with an accessibility label for each offered action.
     @MainActor @Test func confirmedAbsenceOffersInstallAndCheckAgainWithLabelledActions() {
@@ -579,6 +767,34 @@ import HeadroomCore
             )
             #expect(command == nil)
         }
+    }
+}
+
+private actor HandoffOpenGate {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Bool, Never>] = []
+
+    func open() async -> Bool {
+        started = true
+        let waiters = startWaiters
+        startWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        if released { return true }
+        return await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: true) }
     }
 }
 

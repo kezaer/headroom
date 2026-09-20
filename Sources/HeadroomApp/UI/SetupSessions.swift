@@ -11,6 +11,11 @@ import HeadroomCore
 @MainActor
 @Observable
 final class SetupSessionActivity {
+    struct ConnectedPayoffClaim: Sendable, Equatable {
+        fileprivate let id: UUID
+        fileprivate let coordinatorToken: SetupConnectedPayoffToken?
+    }
+
     static let shared = SetupSessionActivity()
 
     private var openedAt: [AccountKey: Date] = [:]
@@ -36,16 +41,29 @@ final class SetupSessionActivity {
     /// `@State`, which the M5A meter-style crossfade resets when it rebuilds the card, so a
     /// style change inside the four-second window replayed the chip and queued a second
     /// settle (cross-model review finding, 2026-09-10). `settle(for:)` releases the claim.
-    private var connectedPayoffClaimed: Set<AccountKey> = []
+    private var connectedPayoffClaims: [AccountKey: ConnectedPayoffClaim] = [:]
 
-    /// True when this call took the claim; false when the payoff already ran for this
-    /// connection.
-    func claimConnectedPayoff(for key: AccountKey) -> Bool {
-        connectedPayoffClaimed.insert(key).inserted
+    /// QA1: returns the claim when this call took it; nil when the payoff already runs for this
+    /// connection. The coordinator token binds its delayed settle to the matching generation.
+    func claimConnectedPayoff(
+        for key: AccountKey,
+        coordinatorToken: SetupConnectedPayoffToken? = nil
+    ) -> ConnectedPayoffClaim? {
+        guard connectedPayoffClaims[key] == nil else { return nil }
+        let claim = ConnectedPayoffClaim(id: UUID(), coordinatorToken: coordinatorToken)
+        connectedPayoffClaims[key] = claim
+        return claim
     }
 
-    func releaseConnectedPayoff(for key: AccountKey) {
-        connectedPayoffClaimed.remove(key)
+    /// QA1: with a claim, release only that exact payoff. A delayed callback from an earlier
+    /// connection must not release the claim belonging to a later connection.
+    @discardableResult
+    func releaseConnectedPayoff(
+        _ claim: ConnectedPayoffClaim? = nil,
+        for key: AccountKey
+    ) -> Bool {
+        if let claim, connectedPayoffClaims[key] != claim { return false }
+        return connectedPayoffClaims.removeValue(forKey: key) != nil
     }
 }
 
@@ -108,9 +126,10 @@ enum SetupSessions {
     private static weak var store: UsageStore?
     private static var preparedScripts: [AccountKey: PreparedScript] = [:]
     private static var activeScripts: [AccountKey: PreparedScript] = [:]
-    /// KTD13 (2026-09-19 sign-in plan): the bundle identifier LaunchServices resolved for the
-    /// account's open handoff. Show Terminal fronts that app rather than the current default
-    /// `.command` handler, which the user can change while the handoff is still running.
+    /// KTD13 live-QA correction: the application that actually owns the account's open
+    /// handoff. New handoffs use the
+    /// system Terminal deterministically; restored handoffs keep the app recorded when they
+    /// opened so Show Terminal still fronts the right process.
     private static var handoffTerminalApps: [AccountKey: String] = [:]
     /// KTD11: why the account's open handoff was staged as the interactive launch, so the
     /// waiting surface can tell the `/login` case (R6) from a never-onboarded extra config
@@ -140,7 +159,7 @@ enum SetupSessions {
         preparedScripts[key]
     }
 
-    /// KTD13: the handler recorded when this account's handoff opened, or nil when none was
+    /// KTD13: the application recorded when this account's handoff opened, or nil when none was
     /// resolved — which is what Show Terminal treats as "nothing to front".
     static func handoffTerminalApp(for key: AccountKey) -> String? {
         handoffTerminalApps[key]
@@ -201,7 +220,7 @@ enum SetupSessions {
                     claudeExecutableLocator: claudeExecutableLocator
                 )
             },
-            open: { handoff in openPreparedHandoff(handoff) },
+            open: { handoff in await openPreparedHandoff(handoff) },
             discard: { handoff in await discardPreparedHandoff(handoff) },
             accountExists: { key in
                 store.accounts(for: key.providerID).contains(where: { $0.key == key })
@@ -271,6 +290,8 @@ enum SetupSessions {
 
     static func resetSetup(for account: ProviderAccount) {
         noteHandoffBegan(for: account)
+        // QA1: the Connected chip's delayed callback belongs to the session reset replaces.
+        SetupSessionActivity.shared.releaseConnectedPayoff(for: account.key)
         coordinator?.beginReset(for: account)
     }
 
@@ -647,6 +668,39 @@ enum SetupSessions {
         return SetupSessionActivity.shared.openedAt(for: account.key) != nil
     }
 
+    /// QA1: claim the current connection's payoff with the coordinator generation that
+    /// its delayed settle is allowed to end. Render harnesses have no coordinator token.
+    static func claimConnectedPayoff(
+        for account: ProviderAccount
+    ) -> SetupSessionActivity.ConnectedPayoffClaim? {
+        let coordinatorToken = coordinator?.connectedPayoffToken(for: account.key)
+        guard coordinator == nil || coordinatorToken != nil else { return nil }
+        guard isConnected(account) else { return nil }
+        return SetupSessionActivity.shared.claimConnectedPayoff(
+            for: account.key,
+            coordinatorToken: coordinatorToken
+        )
+    }
+
+    /// QA1: settle only the connection that created this delayed payoff. A reset advances the
+    /// coordinator generation and releases the old claim before its Terminal handoff starts.
+    static func settle(
+        for account: ProviderAccount,
+        connectedPayoffClaim claim: SetupSessionActivity.ConnectedPayoffClaim
+    ) {
+        guard SetupSessionActivity.shared.releaseConnectedPayoff(claim, for: account.key) else {
+            return
+        }
+        if let coordinator {
+            guard let token = claim.coordinatorToken,
+                  coordinator.settleConnected(account.key, token: token) else { return }
+            SetupSessionActivity.shared.endWaiting(for: account.key)
+            refusedHandoffPurposes.removeValue(forKey: account.key)
+            return
+        }
+        settle(for: account)
+    }
+
     /// End an account's handoff session: cancel pending retries and clear the waiting
     /// flag. Called when the account goes live — and when it's removed, so orphaned
     /// retry tasks can't keep spawning poll cycles for a deleted account.
@@ -656,7 +710,9 @@ enum SetupSessions {
         // Review #1: a connected account has nothing left to resume.
         refusedHandoffPurposes.removeValue(forKey: account.key)
         if let coordinator {
-            coordinator.settleConnected(account.key)
+            if let token = coordinator.connectedPayoffToken(for: account.key) {
+                coordinator.settleConnected(account.key, token: token)
+            }
             return
         }
         switch account.providerID {
@@ -953,7 +1009,67 @@ enum SetupSessions {
         return .stage(.signIn, nil)
     }
 
-    private static func openPreparedHandoff(_ handoff: PreparedSetupHandoff) -> SetupOpenResult {
+    static let handoffTerminalBundleIdentifier = "com.apple.Terminal"
+
+    /// KTD13 live-QA correction: `.command` handlers are not execution contracts. An editor
+    /// can claim the type, and
+    /// Ghostty can accept the LaunchServices request without starting the script. The marker
+    /// protocol requires a process to run, so setup uses the system Terminal explicitly.
+    static func openHandoffScript(
+        _ scriptURL: URL,
+        in applicationURL: URL,
+        open: (URL, URL) async -> Bool
+    ) async -> Bool {
+        await open(scriptURL, applicationURL)
+    }
+
+    static func handoffTerminalApplicationURL(
+        resolveApplication: (String) -> URL?
+    ) -> URL? {
+        resolveApplication(handoffTerminalBundleIdentifier)
+    }
+
+    private static func openHandoffScript(
+        _ scriptURL: URL,
+        in applicationURL: URL
+    ) async -> Bool {
+        await openHandoffScript(scriptURL, in: applicationURL) { scriptURL, applicationURL in
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            do {
+                _ = try await NSWorkspace.shared.open(
+                    [scriptURL],
+                    withApplicationAt: applicationURL,
+                    configuration: configuration
+                )
+                return true
+            } catch {
+                return false
+            }
+        }
+    }
+
+    private static func openPreparedHandoff(_ handoff: PreparedSetupHandoff) async -> SetupOpenResult {
+        await openPreparedHandoff(
+            handoff,
+            resolveTerminalApplication: {
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
+            },
+            openScript: { scriptURL, applicationURL in
+                await openHandoffScript(scriptURL, in: applicationURL)
+            },
+            copy: copyCommand
+        )
+    }
+
+    /// App-boundary seam for the two Terminal failure paths. Tests supply inert closures so
+    /// they can prove marker/script cleanup without opening an application or pasteboard.
+    static func openPreparedHandoff(
+        _ handoff: PreparedSetupHandoff,
+        resolveTerminalApplication: (String) -> URL?,
+        openScript: (URL, URL) async -> Bool,
+        copy: (String) -> Bool
+    ) async -> SetupOpenResult {
         guard let prepared = preparedScripts.removeValue(forKey: handoff.accountKey) else {
             return .failure(.stagingFailed)
         }
@@ -968,11 +1084,15 @@ enum SetupSessions {
             try? FileManager.default.removeItem(at: prepared.scriptURL)
             return .failure(.stagingFailed)
         }
-        // KTD13: resolve the handler while the script is still on disk — the open below hands
-        // the file to exactly this app, so it is the one Show Terminal must front later.
-        let handlerBundleIdentifier = NSWorkspace.shared
-            .urlForApplication(toOpen: prepared.scriptURL)
-            .flatMap { Bundle(url: $0)?.bundleIdentifier }
+        guard let terminalApplicationURL = handoffTerminalApplicationURL(
+            resolveApplication: resolveTerminalApplication
+        ) else {
+            AccountStorage.clearPreparedSetupCompletionMarker(prepared.completionMarker)
+            try? FileManager.default.removeItem(at: prepared.scriptURL)
+            return copy(prepared.manualCommand)
+                ? .failure(.terminalRejected)
+                : .failure(.pasteboardFailed)
+        }
         // KTD8: save the decisions a relaunch cannot re-derive, beside the generation and
         // outside the marker lines the wrapper pins. A record that cannot be written is
         // not worth refusing the handoff over — restore falls back by purpose.
@@ -983,21 +1103,31 @@ enum SetupSessions {
                     purpose: handoff.purpose,
                     claudeScriptKind: handoff.claudeScriptKind
                 ),
-                terminalBundleIdentifier: handlerBundleIdentifier,
+                terminalBundleIdentifier: handoffTerminalBundleIdentifier,
                 claudeInteractiveReason: prepared.claudeInteractiveReason
             ),
             marker: prepared.completionMarker,
             generation: generation
         )
-        guard NSWorkspace.shared.open(prepared.scriptURL) else {
+        // QA2: the opener suspends. Transfer ownership before crossing that boundary so Stop
+        // Waiting can always find and remove the script while Terminal is still launching.
+        activeScripts[handoff.accountKey] = prepared
+        let opened = await openScript(prepared.scriptURL, terminalApplicationURL)
+        guard activeScripts[handoff.accountKey]?.scriptURL == prepared.scriptURL else {
+            // QA2: cancellation (or a successor handoff) took ownership while the opener was
+            // suspended. Its marker state is authoritative; never register this stale launch.
+            try? FileManager.default.removeItem(at: prepared.scriptURL)
+            return .failure(.terminalRejected)
+        }
+        guard opened else {
+            activeScripts.removeValue(forKey: handoff.accountKey)
             AccountStorage.clearPreparedSetupCompletionMarker(prepared.completionMarker)
             try? FileManager.default.removeItem(at: prepared.scriptURL)
-            return copyCommand(prepared.manualCommand)
+            return copy(prepared.manualCommand)
                 ? .failure(.terminalRejected)
                 : .failure(.pasteboardFailed)
         }
-        activeScripts[handoff.accountKey] = prepared
-        noteHandoffTerminalApp(handlerBundleIdentifier, for: handoff.accountKey)
+        noteHandoffTerminalApp(handoffTerminalBundleIdentifier, for: handoff.accountKey)
         noteHandoffInteractiveReason(prepared.claudeInteractiveReason, for: handoff.accountKey)
         monitorCompletion(prepared.completionMarker, for: handoff.accountKey)
         return .success(())

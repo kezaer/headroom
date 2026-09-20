@@ -782,8 +782,9 @@ struct AccountSectionView: View {
 
     /// Account-scoped setup payoff: the chip belongs to the row whose login completed.
     private func evaluateConnectedPayoff() {
-        guard case .live = snapshot.freshness, SetupSessions.isConnected(account) else { return }
+        guard case .live = snapshot.freshness else { return }
         guard !showsConnectedChip else { return }
+        guard let payoffClaim = SetupSessions.claimConnectedPayoff(for: account) else { return }
         // M8A/S2A: as in `ProviderCardView` — the transition owns the scale, so this stays
         // a crossfade and the fade survives Reduce Motion.
         withAnimation(HeadroomMotion.resolved(HeadroomMotion.valueSpring, .crossfade, reduceMotion: reduceMotion)) {
@@ -794,7 +795,7 @@ struct AccountSectionView: View {
             withAnimation(HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion)) {
                 showsConnectedChip = false
             }
-            SetupSessions.settle(for: account)
+            SetupSessions.settle(for: account, connectedPayoffClaim: payoffClaim)
         }
     }
 

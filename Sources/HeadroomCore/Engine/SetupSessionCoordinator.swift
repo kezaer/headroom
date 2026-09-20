@@ -97,6 +97,14 @@ public enum SetupSessionState: Sendable, Equatable {
     case removed
 }
 
+/// QA1 (2026-09-20 sign-in QA): identifies one specific `.connected` payoff. Starting any
+/// later session advances the
+/// coordinator generation, so a delayed UI callback carrying an older token cannot settle it.
+public struct SetupConnectedPayoffToken: Sendable, Equatable {
+    fileprivate let accountKey: AccountKey
+    fileprivate let generation: Int
+}
+
 /// Opaque handoff prepared by the injected production boundary. The coordinator keeps
 /// only account identity and the user-selected mode; AppKit/script details stay outside
 /// HeadroomCore tests.
@@ -385,6 +393,8 @@ public final class SetupSessionCoordinator {
             return
         }
         switch state(for: key) {
+        case .connected where intent.purpose == .reset:
+            break
         case .preparing, .waiting, .verifying, .connected, .removing, .removed:
             return
         case .blockedByProviderLogin where !intent.allowsBlocked:
@@ -528,10 +538,28 @@ public final class SetupSessionCoordinator {
         invalidateWork(for: key, finalState: .cancelled, releaseLoginSlot: true)
     }
 
-    public func settleConnected(_ key: AccountKey) {
-        guard state(for: key) == .connected else { return }
+    public func connectedPayoffToken(for key: AccountKey) -> SetupConnectedPayoffToken? {
+        guard state(for: key) == .connected else { return nil }
+        return SetupConnectedPayoffToken(
+            accountKey: key,
+            generation: generations[key] ?? 0
+        )
+    }
+
+    /// QA1: the delayed Connected chip may finish after a reset has already started. Require the
+    /// generation captured when the chip appeared so that stale presentation work cannot
+    /// settle the newer session.
+    @discardableResult
+    public func settleConnected(
+        _ key: AccountKey,
+        token: SetupConnectedPayoffToken
+    ) -> Bool {
+        guard token.accountKey == key,
+              token.generation == generations[key] ?? 0,
+              state(for: key) == .connected else { return false }
         states[key] = .idle
         sessionModes.removeValue(forKey: key)
+        return true
     }
 
     /// Restore/settle the durable external-process marker independently of any view.
@@ -640,7 +668,8 @@ public final class SetupSessionCoordinator {
     public func receive(_ snapshot: UsageSnapshot, for key: AccountKey) {
         guard state(for: key) != .removed, state(for: key) != .cancelled else { return }
         if snapshot.freshness == .live {
-            if sessionPurposes[key] == .reset, handoffsAwaitingFinalRefresh[key] == nil {
+            if (sessionPurposes[key] == .reset || blockedSessionPurposes[key] == .reset),
+               handoffsAwaitingFinalRefresh[key] == nil {
                 return
             }
             // Live data is a setup payoff only when this account already has setup

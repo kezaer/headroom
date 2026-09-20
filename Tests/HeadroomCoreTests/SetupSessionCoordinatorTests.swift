@@ -449,7 +449,7 @@ import Testing
         #expect(coordinator.hasActiveHandoff(for: account.key))
     }
 
-    @Test func refusedResetDoesNotInvalidateUsageOrArmResetSettlement() async {
+    @Test func resetCanStartWhileConnectedPayoffIsStillVisible() async throws {
         let harness = SetupCoordinatorHarness()
         let coordinator = harness.makeCoordinator()
         let account = ProviderAccount.builtIn(for: .claude)
@@ -457,10 +457,27 @@ import Testing
         coordinator.begin(for: account)
         await settleTasks()
         coordinator.receive(.live(.claude, windows: []), for: account.key)
-        coordinator.beginReset(for: account)
+        let connectedPayoff = try #require(coordinator.connectedPayoffToken(for: account.key))
+
+        coordinator.begin(for: account)
+        await settleTasks()
 
         #expect(coordinator.state(for: account.key) == .connected)
-        #expect(harness.resetBoundaryCalls.isEmpty)
+        #expect(harness.prepareCalls == [.init(key: account.key, mode: .standard)])
+        #expect(harness.openCalls == [account.key])
+
+        coordinator.beginReset(for: account)
+        await settleTasks()
+
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(!coordinator.settleConnected(account.key, token: connectedPayoff))
+        #expect(coordinator.state(for: account.key) == .waiting(attempt: 0))
+        #expect(harness.resetBoundaryCalls == [account.key])
+        #expect(harness.prepareCalls == [
+            .init(key: account.key, mode: .standard),
+            .init(key: account.key, mode: .standard, purpose: .reset),
+        ])
+        #expect(harness.openCalls == [account.key, account.key])
     }
 
     @Test func providerBlockedResetKeepsItsResetIntentWhenContinued() async {
@@ -473,6 +490,12 @@ import Testing
         await settleTasks()
         coordinator.beginReset(for: second)
         #expect(harness.resetBoundaryCalls.isEmpty)
+
+        coordinator.receive(.live(.codex, windows: []), for: second.key)
+        #expect(coordinator.state(for: second.key) == .blockedByProviderLogin(
+            providerID: .codex,
+            active: first.key
+        ))
 
         coordinator.forceCancel(first.key)
         coordinator.continueSetup(for: second)
