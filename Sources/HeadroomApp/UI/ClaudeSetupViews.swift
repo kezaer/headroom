@@ -408,13 +408,100 @@ struct ClaudeConnectCard: View {
     }
 }
 
-/// State 2 — "Waiting for approval…": visible feedback for the auto-retry window. The
-/// literal trust-prompt option is a quiet bordered token (not bold prose) so it never
-/// competes with the bold title above it.
+/// KTD12/R14 (2026-09-19 sign-in plan): the chips the compact shell can offer. Try Again is
+/// a distinct action rather than a rename of Check Now — PA11 pins that label to the forced
+/// poll, and `checkNowCarriesOneLabelInEverySlot` enforces it.
+enum ClaudeWaitingCardAction: Equatable, Identifiable {
+    /// R14: only while a handoff is open. It fronts the app that opened it and changes no
+    /// session state.
+    case showTerminal
+    case tryAgain
+
+    var label: String {
+        switch self {
+        case .showTerminal: "Show Terminal"
+        case .tryAgain: "Try Again"
+        }
+    }
+
+    var id: String { label }
+}
+
+func claudeWaitingCardActions(
+    state: SetupSessionState,
+    hasActiveHandoff: Bool
+) -> [ClaudeWaitingCardAction] {
+    switch setupRowRecovery(for: state) {
+    case .tryAgain:
+        // KTD12: Try Again already fronts the window, so a Show Terminal beside it would be
+        // the same gesture twice. Stop Waiting is supplied by the card's own action row.
+        return [.tryAgain]
+    case .sessionOnly:
+        // R14: nothing to front once Terminal has closed, which is the confirming phase.
+        return hasActiveHandoff ? [.showTerminal] : []
+    case .outcomeRecovery:
+        return []
+    }
+}
+
+/// KTD11/KTD12: everything the compact shell renders, derived outside the view so both the
+/// branch and its copy are provable without a render.
+struct ClaudeWaitingCardContent: Equatable {
+    let title: String
+    let detail: String?
+    let token: SetupWaitingToken?
+    /// False for the two failure states — a stalled wait is not progress.
+    let showsProgress: Bool
+    let actions: [ClaudeWaitingCardAction]
+    /// Review #2 (2026-09-19 sign-in review): false where the copyable command would launch
+    /// a CLI staging has already refused. See `claudeShellOffersManualCommand`.
+    let showsManualCommand: Bool
+}
+
+/// Review #2: the version gate refuses a CLI below 2.1.41 because its sign-in can never be
+/// confirmed — so the resulting card must not also hand the user a command that launches
+/// that same CLI. Every other shell state keeps the disclosure.
+func claudeShellOffersManualCommand(state: SetupSessionState) -> Bool {
+    state != .failed(.updateRequired)
+}
+
+func claudeWaitingCardContent(
+    state: SetupSessionState,
+    phase: SetupWaitingPhase?,
+    hasActiveHandoff: Bool,
+    failureMessage: String?,
+    failureDetail: String?
+) -> ClaudeWaitingCardContent {
+    let actions = claudeWaitingCardActions(state: state, hasActiveHandoff: hasActiveHandoff)
+    let showsManualCommand = claudeShellOffersManualCommand(state: state)
+    let copy = (phase ?? .waitingForUser(.signIn)).copy
+    if case .failed = state {
+        return ClaudeWaitingCardContent(
+            title: failureMessage ?? copy.title,
+            detail: failureDetail,
+            token: nil,
+            showsProgress: false,
+            actions: actions,
+            showsManualCommand: showsManualCommand
+        )
+    }
+    return ClaudeWaitingCardContent(
+        title: copy.title,
+        detail: copy.body,
+        token: copy.token,
+        showsProgress: true,
+        actions: actions,
+        showsManualCommand: showsManualCommand
+    )
+}
+
+/// State 2 — the compact shell a returning user sees for every phase of an open handoff and
+/// for the two failures that leave one standing (KTD12). The literal the user has to pick or
+/// type is a quiet bordered token (not bold prose) so it never competes with the bold title
+/// above it.
 struct ClaudeWaitingCard: View {
-    var outcome: ProviderSetupOutcome = .claudeTrustRequired
-    let onCheckNow: () -> Void
-    let onReopen: () -> Void
+    let content: ClaudeWaitingCardContent
+    let perform: (ClaudeWaitingCardAction) -> Void
 
     @Environment(\.colorScheme) private var scheme
 
@@ -423,51 +510,69 @@ struct ClaudeWaitingCard: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
                 ProviderLogoView(providerID: .claude, size: 20)
-                ProgressView()
-                    .controlSize(.small)
-                Text(outcome == .claudeLoginRequired ? "Waiting for sign-in…" : "Waiting for approval…")
+                if content.showsProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text(content.title)
                     .font(.system(size: 15, weight: .semibold))
                     .kerning(SetupCardMetrics.titleKerning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            // W2A: the trust variant was three lines ending on the single word "approve."
-            Text(outcome == .claudeLoginRequired
-                 ? "Finish signing in in the Terminal that just opened. Headroom checks this account automatically."
-                 : "Choose the option below in Terminal. Headroom connects as soon as you approve.")
-                .font(.system(size: SetupCardMetrics.bodySize))
-                .foregroundStyle(.secondary)
-                // PB11: 2pt on every line of popover prose that is allowed to wrap.
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, SetupCardMetrics.leadGap)
-            if outcome == .claudeTrustRequired {
-                HStack(spacing: 7) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                    Text("“Yes, I trust this folder”")
-                        .font(.system(size: SetupCardMetrics.bodySize, weight: .semibold))
-                }
-                .padding(.vertical, 6)
-                .padding(.leading, 9).padding(.trailing, 11)
-                .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
-                .padding(.top, SetupCardMetrics.siblingGap)
+            if let detail = content.detail {
+                // W2A: the trust variant was three lines ending on the single word "approve."
+                Text(detail)
+                    .font(.system(size: SetupCardMetrics.bodySize))
+                    .foregroundStyle(.secondary)
+                    // PB11: 2pt on every line of popover prose that is allowed to wrap.
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, SetupCardMetrics.leadGap)
             }
-            // B3A/P4C/B3: "Reopen Terminal" was a bare accent label standing next to a filled
-            // chip. Both are thin chips now, leading-aligned at the card's foot with
-            // "Check Now" — the action the waiting state is really about — first, and no
-            // icon inside either one.
+            if let token = content.token {
+                tokenBox(token, dark: dark)
+                    .padding(.top, SetupCardMetrics.siblingGap)
+            }
+            // B3A/P4C/B3: thin chips, leading-aligned at the card's foot, no icon inside.
+            // KTD12 (2026-09-19 sign-in plan) reverses B3A's placement note — Check Now is
+            // not what a waiting state is about, because nothing the user could force is
+            // outstanding while the official CLI still owns the window.
             // B3X: a guided setup card lays its prose out at its own leading edge, so its
             // chip labels start there too.
-            CardActionRow(labelInset: 0) {
-                Button("Check Now", action: onCheckNow)
-                    .buttonStyle(SetupChipButtonStyle(size: .small))
-                Button("Reopen Terminal", action: onReopen)
-                    .buttonStyle(SetupChipButtonStyle(size: .small))
+            if !content.actions.isEmpty {
+                CardActionRow(labelInset: 0) {
+                    ForEach(content.actions) { action in
+                        Button(action.label) { perform(action) }
+                            .buttonStyle(SetupChipButtonStyle(size: .small))
+                    }
+                }
             }
-            ClaudeManualCommandDisclosure()
-                .padding(.top, SetupCardMetrics.siblingGap)
+            if content.showsManualCommand {
+                ClaudeManualCommandDisclosure()
+                    .padding(.top, SetupCardMetrics.siblingGap)
+            }
         }
+    }
+
+    private func tokenBox(_ token: SetupWaitingToken, dark: Bool) -> some View {
+        HStack(spacing: 7) {
+            // A command is typed, not picked, so it takes neither the checkmark nor the
+            // proportional face the approval option carries.
+            if !token.isCommand {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            Text(token.text)
+                .font(token.isCommand
+                      ? .system(size: SetupCardMetrics.bodySize, weight: .semibold, design: .monospaced)
+                      : .system(size: SetupCardMetrics.bodySize, weight: .semibold))
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 9).padding(.trailing, 11)
+        .background(ClaudeSetupStyle.stepBackground(dark: dark), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(ClaudeSetupStyle.stepBorder(dark: dark), lineWidth: 1))
     }
 }
 

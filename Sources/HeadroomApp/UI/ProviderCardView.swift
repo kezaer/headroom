@@ -21,27 +21,157 @@ struct ProviderAccountEntry: Identifiable {
     var id: AccountID { account.id }
 }
 
+/// R13/KTD12 (2026-09-19 sign-in plan): Stop Waiting follows the *session*, not the open
+/// handoff. `.verifying` has no handoff left — the window already closed — and the timeout
+/// state's window is still the user's to close, so both had a surface with nothing on it
+/// that worked. The handoff remains a fallback so nothing that relied on it regresses.
+func setupSessionOffersStopWaiting(
+    state: SetupSessionState,
+    hasActiveHandoff: Bool
+) -> Bool {
+    switch state {
+    case .preparing, .waiting, .verifying, .failed(.waitingTimedOut):
+        true
+    default:
+        hasActiveHandoff
+    }
+}
+
+@MainActor
+func setupSessionOffersStopWaiting(for account: ProviderAccount) -> Bool {
+    setupSessionOffersStopWaiting(
+        state: SetupSessions.state(for: account),
+        hasActiveHandoff: SetupSessions.hasActiveHandoff(for: account)
+    )
+}
+
 @MainActor
 func providerCardStopWaitingAccount(
     entries: [ProviderAccountEntry],
-    hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
+    offersStopWaiting: @MainActor (ProviderAccount) -> Bool = setupSessionOffersStopWaiting(for:)
 ) -> ProviderAccount? {
-    entries.map(\.account).first(where: hasActiveHandoff)
+    entries.map(\.account).first(where: offersStopWaiting)
 }
 
+/// Deliberately still keyed on the open handoff: this is what refuses capability recovery
+/// while a Terminal window owns the CLI, and verification after the window closes is not
+/// that. Stop Waiting's own resolver above is the wider one.
 @MainActor
 func providerCardHasActiveSetupSession(
     entries: [ProviderAccountEntry],
     hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
 ) -> Bool {
-    providerCardStopWaitingAccount(
-        entries: entries,
-        hasActiveHandoff: hasActiveHandoff
-    ) != nil
+    entries.map(\.account).contains(where: hasActiveHandoff)
 }
 
 func setupHandoffRefusalMessage(for state: SetupSessionState) -> String? {
     state == .blockedByOpenHandoff ? "Close setup, then retry" : nil
+}
+
+/// R13/KTD12: where a sign-in row's controls come from. Two failures own their action
+/// outright, the waiting phases own theirs by having none of their own, and everything else
+/// keeps today's typed recovery pair — which is why `.failed(.retryExhausted)` still hands
+/// Codex, Grok and Cursor their Sign In and Check Now.
+enum SetupRowRecovery: Equatable {
+    /// R13: opening, waiting or confirming. The row's one control is Stop Waiting, which is
+    /// rendered beside it; a Check Now here duplicated the checking Headroom already does.
+    case sessionOnly
+    /// KTD12: the bounded wait expired with the window still open. R6: and the too-old CLI,
+    /// which re-stages rather than resuming — see `setupRowRecovery`.
+    case tryAgain
+    case outcomeRecovery
+}
+
+func setupRowRecovery(for state: SetupSessionState) -> SetupRowRecovery {
+    switch state {
+    case .preparing, .waiting, .verifying: .sessionOnly
+    // R6: the too-old CLI joins the timeout on Try Again. A Check Now here was a dead end —
+    // the account is signed out, so every refresh it forces reads "login required", which
+    // the coordinator ignores, and the CLI version is re-read only when a handoff is staged.
+    // Try Again with no open handoff is exactly that restaging, so an updated CLI is seen.
+    case .failed(.waitingTimedOut), .failed(.updateRequired): .tryAgain
+    default: .outcomeRecovery
+    }
+}
+
+/// The chips a sign-in row renders, resolved outside the view so "no Check Now while
+/// waiting" is provable without rendering one — on every provider, since this row is shared.
+enum SetupRowChip: Equatable, Identifiable {
+    case tryAgain
+    case checkNow
+    case recovery(SetupRecoveryAction, label: String)
+    /// The untyped fallback for a row whose failure Core never typed.
+    case signIn
+
+    var label: String {
+        switch self {
+        case .tryAgain: "Try Again"
+        case .checkNow: "Check Now"
+        case .recovery(_, let label): label
+        case .signIn: ProviderSignInCopy.button
+        }
+    }
+
+    var id: String { label }
+}
+
+func setupRowChips(
+    state: SetupSessionState,
+    presentation: ProviderRecoveryPresentation?,
+    hasFailureMessage: Bool
+) -> [SetupRowChip] {
+    switch setupRowRecovery(for: state) {
+    case .sessionOnly:
+        return []
+    case .tryAgain:
+        return [.tryAgain]
+    case .outcomeRecovery:
+        guard let presentation else {
+            return hasFailureMessage ? [.signIn, .checkNow] : [.signIn]
+        }
+        var chips: [SetupRowChip] = [
+            .recovery(presentation.primaryAction, label: presentation.primaryLabel),
+        ]
+        if let secondaryAction = presentation.secondaryAction,
+           let secondaryLabel = presentation.secondaryLabel {
+            chips.append(.recovery(secondaryAction, label: secondaryLabel))
+        } else if hasFailureMessage {
+            chips.append(.checkNow)
+        }
+        return chips
+    }
+}
+
+/// KTD12: which shell the single-account Claude card renders. The timeout and the
+/// too-old-CLI states are returning users with an account they have already set up once, so
+/// they keep the compact waiting shell rather than falling through to the first-run
+/// walkthrough's "Takes about 20 seconds" and its three numbered steps.
+enum ClaudeSingleAccountShell: Equatable {
+    case compactWaiting
+    case firstRunWalkthrough
+}
+
+/// KTD12: the second line the compact shell prints under a failure sentence, or nil when
+/// the sentence stands on its own.
+@MainActor
+func setupFailureDetail(for state: SetupSessionState) -> String? {
+    guard case .failed(let failure) = state else { return nil }
+    return SetupSessions.failureDetail(for: failure)
+}
+
+/// Review #4/#6 (2026-09-19 sign-in review): whether the coordinator's session — not the
+/// snapshot's freshness — owns what this account's surfaces render. A reset blanks the row
+/// to `.pending` (`UsageStore.invalidateUsageForAccountReset`) and its exit-signalled wait
+/// schedules no check, so surfaces gated on a *stale* snapshot showed the fetching skeleton
+/// for the whole browser login, and for a staging refused after it.
+func setupSessionOwnsSurface(for state: SetupSessionState) -> Bool {
+    setupRowRecovery(for: state) != .outcomeRecovery
+}
+
+func claudeSingleAccountShell(for state: SetupSessionState) -> ClaudeSingleAccountShell {
+    // Derived rather than partitioned a second time: the two switches held the same five
+    // states, so a state added to one could silently miss the other.
+    setupSessionOwnsSurface(for: state) ? .compactWaiting : .firstRunWalkthrough
 }
 
 /// R2M1: every animation scope in a provider card keyed on `snapshot.freshness`, so pressing
@@ -269,7 +399,9 @@ struct ProviderCardView: View {
     /// B3X: mirrors the branch order of `singleAccountContent` exactly — change one and the
     /// other has to move with it, or the Stop Waiting chip drifts off the card's own axis.
     private var singleAccountLabelInset: CGFloat {
-        if claudeGuidedSetupOutcome != nil || snapshot.codexConnectionAction != nil {
+        if claudeSessionOwnedState != nil
+            || claudeGuidedSetupOutcome != nil
+            || snapshot.codexConnectionAction != nil {
             0
         } else if providerSetupOutcome != nil {
             ProviderSetupRecoveryCard.contentInset
@@ -288,12 +420,25 @@ struct ProviderCardView: View {
     }
 
     @ViewBuilder private var singleAccountContent: some View {
-        if let outcome = claudeGuidedSetupOutcome {
-            if SetupSessions.isWaiting(for: primaryAccount) {
-                ClaudeWaitingCard(
+        if let setupState = claudeSessionOwnedState {
+            ClaudeWaitingCard(
+                content: claudeWaitingCardContent(
+                    state: setupState,
+                    phase: SetupSessions.waitingPhase(for: primaryAccount),
+                    hasActiveHandoff: SetupSessions.hasActiveHandoff(for: primaryAccount),
+                    failureMessage: SetupSessions.failureMessage(for: primaryAccount),
+                    failureDetail: setupFailureDetail(for: setupState)
+                ),
+                perform: { action in
+                    performWaitingCardAction(action, for: primaryAccount)
+                }
+            )
+        } else if let outcome = claudeGuidedSetupOutcome {
+            VStack(alignment: .leading, spacing: 10) {
+                setupFailureNotice(for: primaryAccount, onCheckNow: onRetrySetup)
+                ClaudeConnectCard(
                     outcome: outcome,
-                    onCheckNow: onRetrySetup,
-                    onReopen: {
+                    onOpenSetup: {
                         performRecovery(
                             outcome.recoveryPresentation.primaryAction,
                             for: primaryAccount,
@@ -301,20 +446,6 @@ struct ProviderCardView: View {
                         )
                     }
                 )
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    setupFailureNotice(for: primaryAccount, onCheckNow: onRetrySetup)
-                    ClaudeConnectCard(
-                        outcome: outcome,
-                        onOpenSetup: {
-                            performRecovery(
-                                outcome.recoveryPresentation.primaryAction,
-                                for: primaryAccount,
-                                onRetry: onRetrySetup
-                            )
-                        }
-                    )
-                }
             }
         } else if let action = snapshot.codexConnectionAction {
             let presentation = providerSetupOutcome?.recoveryPresentation
@@ -322,7 +453,6 @@ struct ProviderCardView: View {
                 if SetupSessions.isWaiting(for: primaryAccount) {
                     CodexWaitingCard(
                         mode: SetupSessions.mode(for: primaryAccount),
-                        onCheckNow: onRetrySetup,
                         onReopen: { SetupSessions.continueSetup(for: primaryAccount) }
                     )
                 } else if action == .showPrivacyGuidance {
@@ -498,10 +628,9 @@ struct ProviderCardView: View {
     private func evaluateConnectedPayoff() {
         guard !isMultiAccount else { return }
         guard case .live = snapshot.freshness else { return }
-        guard SetupSessions.isConnected(primaryAccount) else { return }
         // Per-account, not per-view: a card rebuilt by the meter-style crossfade must not
         // replay a payoff that is already running for this connection.
-        guard SetupSessionActivity.shared.claimConnectedPayoff(for: primaryAccount.key) else { return }
+        guard let payoffClaim = SetupSessions.claimConnectedPayoff(for: primaryAccount) else { return }
         // M8A/S2A: the chip's own transition drops the scale under Reduce Motion, so the
         // driving animation stays a crossfade here — silencing it would take the fade too.
         withAnimation(HeadroomMotion.resolved(HeadroomMotion.valueSpring, .crossfade, reduceMotion: reduceMotion)) {
@@ -512,8 +641,18 @@ struct ProviderCardView: View {
             withAnimation(HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion)) {
                 showsConnectedChip = false
             }
-            SetupSessions.settle(for: primaryAccount)
+            SetupSessions.settle(for: primaryAccount, connectedPayoffClaim: payoffClaim)
         }
+    }
+
+    /// Review #4/#6: the session state while it owns the card, ahead of any outcome read off
+    /// the snapshot. A reset blanks the snapshot to `.pending` before staging runs, so the
+    /// compact shell was unreachable for the whole of "Sign Out & Set Up Again" — and for the
+    /// update-required refusal that can follow it, which left the card actionless.
+    private var claudeSessionOwnedState: SetupSessionState? {
+        guard providerID == .claude else { return nil }
+        let state = SetupSessions.state(for: primaryAccount)
+        return setupSessionOwnsSurface(for: state) ? state : nil
     }
 
     /// Only typed Claude login/trust outcomes enter the guided Terminal handoff.
@@ -538,6 +677,18 @@ struct ProviderCardView: View {
         onRetry: @escaping () -> Void
     ) {
         SetupSessions.performRecovery(action, for: account, onRetry: onRetry)
+    }
+
+    private func performWaitingCardAction(
+        _ action: ClaudeWaitingCardAction,
+        for account: ProviderAccount
+    ) {
+        switch action {
+        case .showTerminal:
+            SetupSessions.showTerminal(for: account)
+        case .tryAgain:
+            SetupSessions.tryAgain(for: account, onRetry: onRetrySetup)
+        }
     }
 
     private func accountIdentityRow(for entry: ProviderAccountEntry?) -> some View {

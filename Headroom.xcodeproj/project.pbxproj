@@ -20,6 +20,7 @@
 		07FEC9311797B972C4DBC492 /* GrokDTOs.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D2DD5C8BCCC8BADC9508D07 /* GrokDTOs.swift */; };
 		084D12BD03637F092BEC19F5 /* SoftwareUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D98CDEAF6EF0A499E6D0A8FA /* SoftwareUpdateController.swift */; };
 		08EA7A27827BF6A56A7DBA09 /* ProviderCardIdentityRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 489B0F5F146207BD5B62F041 /* ProviderCardIdentityRows.swift */; };
+		0932D0A2D16DFA3CF38F17D8 /* SignOutRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC66F004B2B0C3284D9FA6D /* SignOutRecord.swift */; };
 		0BC3C1ED6DB48000AD0A6982 /* ProviderCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E542DE434B4A2F1EA525110E /* ProviderCardView.swift */; };
 		0C2A5419E7361328ED5ED0EE /* HeadroomWidgetTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE87C414098703DDB95E3BC2 /* HeadroomWidgetTypography.swift */; };
 		0E87B3A709B4AB3E868183BE /* HeadroomWidgetTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE87C414098703DDB95E3BC2 /* HeadroomWidgetTypography.swift */; };
@@ -394,6 +395,7 @@
 		65084FF4FFAFB83B11B7601E /* DemoFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoFixture.swift; sourceTree = "<group>"; };
 		657FEAE9B8D5F5CBF51EBDC4 /* CLIExecutableLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIExecutableLocator.swift; sourceTree = "<group>"; };
 		6BECE3EB6F9311F47B82E8D1 /* HeadroomMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomMotion.swift; sourceTree = "<group>"; };
+		6CC66F004B2B0C3284D9FA6D /* SignOutRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignOutRecord.swift; sourceTree = "<group>"; };
 		6F2BA95A68FD38EC52A36418 /* HeadroomIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomIOSApp.swift; sourceTree = "<group>"; };
 		6F81B2B4E053B23EBFA0DBCD /* AccountRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountRegistry.swift; sourceTree = "<group>"; };
 		702E83E9BC8385F802D31257 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -563,6 +565,7 @@
 				42F9263C0DCBF001A272FE49 /* LaunchAtLogin.swift */,
 				D3E94962CE286BEB04CB86DC /* Preferences.swift */,
 				C025DD0467C17BEED8A13DCE /* SettingsPane.swift */,
+				6CC66F004B2B0C3284D9FA6D /* SignOutRecord.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -1260,6 +1263,7 @@
 				E29E2B87772530D886E3F94F /* SettingsPane.swift in Sources */,
 				61AEE4C12CA5652095E6559A /* SetupCompletionCommand.swift in Sources */,
 				C86BB4BF2961A5AFC310AA84 /* SetupSessionCoordinator.swift in Sources */,
+				0932D0A2D16DFA3CF38F17D8 /* SignOutRecord.swift in Sources */,
 				7861BA599E5D955771C8BF5E /* SyncedWidgetSnapshotModels.swift in Sources */,
 				9FB9D89CA5CCEC804645882A /* UsageContinuityCache.swift in Sources */,
 				53F82A4681F8E2F99F11176B /* UsageDTOs.swift in Sources */,

@@ -64,6 +64,300 @@ struct PresentedSetupOutcomeTests {
     }
 }
 
+/// R13/KTD12 (2026-09-19 sign-in plan): the shared sign-in row's chips. The row is one view
+/// for Claude, Codex, Grok and Cursor, so a chip added for one provider appears on all four.
+@Suite
+struct SetupRowChipTests {
+    private let providers: [ProviderID] = [.claude, .codex, .grok, .cursor]
+
+    /// R13: the waiting surfaces lost Check Now on every provider. The row's one control is
+    /// the Stop Waiting chip the section renders beside it.
+    @MainActor @Test func noWaitingOrConfirmingRowOffersCheckNow() {
+        for providerID in providers {
+            guard let outcome = neverSignedInOutcome(for: providerID) else {
+                Issue.record("\(providerID) has no never-signed-in outcome")
+                continue
+            }
+            for state in [SetupSessionState.preparing, .waiting(attempt: 0),
+                          .waiting(attempt: 4), .verifying] {
+                let chips = setupRowChips(
+                    state: state,
+                    presentation: outcome.recoveryPresentation,
+                    hasFailureMessage: false
+                )
+                #expect(chips.isEmpty, "\(providerID) still renders \(chips.map(\.label)) while \(state)")
+            }
+        }
+    }
+
+    /// KTD12: the timeout is Try Again and Stop Waiting only — no Check Now, no Sign In.
+    @MainActor @Test func theTimeoutStateOffersTryAgainAlone() {
+        let chips = setupRowChips(
+            state: .failed(.waitingTimedOut),
+            presentation: ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation,
+            hasFailureMessage: true
+        )
+        #expect(chips == [.tryAgain])
+        #expect(!chips.map(\.label).contains("Check Now"))
+        #expect(!chips.map(\.label).contains(ProviderSignInCopy.button))
+        #expect(setupSessionOffersStopWaiting(
+            state: .failed(.waitingTimedOut),
+            hasActiveHandoff: true
+        ))
+    }
+
+    /// R6: the too-old CLI keeps one action, and it is Try Again — the only control that
+    /// re-reads the installed version, which is what tells Headroom the update landed.
+    @MainActor @Test func theUpdateRequiredStateOffersTryAgainAlone() {
+        let chips = setupRowChips(
+            state: .failed(.updateRequired),
+            presentation: ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation,
+            hasFailureMessage: true
+        )
+        #expect(chips == [.tryAgain])
+        #expect(!chips.map(\.label).contains("Check Now"))
+    }
+
+    /// R6: the regression this replaced. A bare Check Now was the update-required state's
+    /// one action on every surface, and nothing a check returns can clear the failure —
+    /// the account is signed out, so every refresh reads "login required", which the
+    /// coordinator ignores, and the CLI version is only re-read when a handoff is staged.
+    /// No surface may hand this state a lone Check Now again.
+    @MainActor @Test func noSurfaceOffersABareCheckNowForUpdateRequired() {
+        let state = SetupSessionState.failed(.updateRequired)
+        #expect(setupRowRecovery(for: state) != .outcomeRecovery)
+
+        for presentation in [ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation,
+                             ProviderSetupOutcome.claudeTrustRequired.recoveryPresentation] {
+            for hasFailureMessage in [true, false] {
+                let chips = setupRowChips(
+                    state: state,
+                    presentation: presentation,
+                    hasFailureMessage: hasFailureMessage
+                )
+                #expect(chips == [.tryAgain])
+                #expect(chips.map(\.label) != ["Check Now"])
+            }
+        }
+
+        for hasActiveHandoff in [true, false] {
+            let actions = claudeWaitingCardActions(state: state, hasActiveHandoff: hasActiveHandoff)
+            #expect(actions == [.tryAgain])
+            #expect(actions.map(\.label) != ["Check Now"])
+        }
+    }
+
+    /// R6: with no handoff left open — which is where a refused staging leaves the account —
+    /// Try Again starts a fresh one, and staging is what re-reads the CLI version.
+    @MainActor @Test func updateRequiredTryAgainStartsAFreshHandoff() {
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: nil)
+            == .startNewHandoff(.setup))
+        #expect(SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: .setup)
+            == .startNewHandoff(.setup))
+    }
+
+    /// R6/KTD12: neither session-owned failure offers Stop Waiting once its window is gone,
+    /// and only the timeout prints a second line about a window that is still open.
+    @MainActor @Test func updateRequiredHasNoSessionToStopAndNoSecondLine() {
+        #expect(!setupSessionOffersStopWaiting(
+            state: .failed(.updateRequired),
+            hasActiveHandoff: false
+        ))
+        #expect(SetupSessions.failureDetail(for: .updateRequired) == nil)
+        #expect(SetupSessions.failureDetail(for: .waitingTimedOut) != nil)
+    }
+
+    /// The providers that still reach the 55-second ladder keep the pair their sentence
+    /// names. Nothing in KTD12 touches `.retryExhausted`.
+    @MainActor @Test func retryExhaustedKeepsSignInAndCheckNowOnACodexRow() {
+        let chips = setupRowChips(
+            state: .failed(.retryExhausted),
+            presentation: ProviderSetupOutcome.codexAuthAbsent.recoveryPresentation,
+            hasFailureMessage: true
+        )
+        #expect(chips.map(\.label) == [ProviderSignInCopy.button, "Use Device Code"])
+
+        let rejected = setupRowChips(
+            state: .failed(.retryExhausted),
+            presentation: ProviderSetupOutcome.codexRejectedAuth.recoveryPresentation,
+            hasFailureMessage: true
+        )
+        #expect(rejected.map(\.label) == ["Sign In Again", "Check Now"])
+    }
+
+    /// An untyped failure keeps the fallback the row has always rendered.
+    @MainActor @Test func anUntypedRowKeepsItsSignInFallback() {
+        #expect(setupRowChips(state: .idle, presentation: nil, hasFailureMessage: false)
+            == [.signIn])
+        #expect(setupRowChips(state: .idle, presentation: nil, hasFailureMessage: true)
+            == [.signIn, .checkNow])
+    }
+
+    /// KTD12: Try Again is its own action. Borrowing `.checkNow` would have broken PA11's
+    /// one-label rule, which `checkNowCarriesOneLabelInEverySlot` enforces in Core.
+    @MainActor @Test func tryAgainIsNeverLabelledCheckNow() {
+        #expect(SetupRowChip.tryAgain.label == "Try Again")
+        #expect(ClaudeWaitingCardAction.tryAgain.label == "Try Again")
+        for chip in [SetupRowChip.tryAgain, .checkNow, .signIn] where chip != .checkNow {
+            #expect(chip.label != "Check Now")
+        }
+    }
+}
+
+/// KTD11/KTD12: the single-account Claude card's shell and the chips inside it.
+@Suite
+struct ClaudeWaitingCardContentTests {
+    /// KTD12: a returning user whose wait timed out must not be handed the first-run
+    /// walkthrough. The compact shell keeps the timeout sentence instead.
+    @MainActor @Test func theTimeoutStateKeepsTheCompactShellNotTheConnectCard() {
+        #expect(claudeSingleAccountShell(for: .failed(.waitingTimedOut)) == .compactWaiting)
+        #expect(claudeSingleAccountShell(for: .failed(.updateRequired)) == .compactWaiting)
+        for state in [SetupSessionState.preparing, .waiting(attempt: 0), .verifying] {
+            #expect(claudeSingleAccountShell(for: state) == .compactWaiting)
+        }
+        for state in [SetupSessionState.idle, .connected, .cancelled,
+                      .failed(.closedBeforeSignIn), .failed(.retryExhausted),
+                      .failed(.terminalRejected)] {
+            #expect(claudeSingleAccountShell(for: state) == .firstRunWalkthrough,
+                    "\(state) should still get the first-run walkthrough")
+        }
+    }
+
+    /// R14: Show Terminal is rendered only while a handoff is open, so the confirming phase
+    /// — whose window has already closed — never offers it.
+    @MainActor @Test func showTerminalAppearsOnlyWhileAHandoffIsOpen() {
+        #expect(claudeWaitingCardActions(
+            state: .waiting(attempt: 0),
+            hasActiveHandoff: true
+        ) == [.showTerminal])
+        #expect(claudeWaitingCardActions(
+            state: .verifying,
+            hasActiveHandoff: false
+        ).isEmpty)
+        #expect(claudeWaitingCardActions(
+            state: .failed(.waitingTimedOut),
+            hasActiveHandoff: true
+        ) == [.tryAgain])
+        #expect(claudeWaitingCardActions(
+            state: .failed(.updateRequired),
+            hasActiveHandoff: false
+        ) == [.tryAgain])
+    }
+
+    /// The compact shell takes its title and body from the Core phase table while waiting,
+    /// and from the typed failure once the wait has ended.
+    @MainActor @Test func theShellSwapsPhaseCopyForFailureCopy() {
+        let waiting = claudeWaitingCardContent(
+            state: .waiting(attempt: 0),
+            phase: .waitingForUser(.signIn),
+            hasActiveHandoff: true,
+            failureMessage: nil,
+            failureDetail: nil
+        )
+        #expect(waiting.title == "Waiting for sign-in…")
+        #expect(waiting.showsProgress)
+        #expect(waiting.actions == [.showTerminal])
+
+        let timedOut = claudeWaitingCardContent(
+            state: .failed(.waitingTimedOut),
+            phase: nil,
+            hasActiveHandoff: true,
+            failureMessage: "Sign-in wasn’t confirmed.",
+            failureDetail: "Terminal is still open. Finish there, or try again to keep waiting."
+        )
+        #expect(timedOut.title == "Sign-in wasn’t confirmed.")
+        #expect(timedOut.detail == "Terminal is still open. Finish there, or try again to keep waiting.")
+        // A stalled wait is not progress.
+        #expect(!timedOut.showsProgress)
+        #expect(timedOut.token == nil)
+        #expect(timedOut.actions == [.tryAgain])
+    }
+
+    /// Review #4/#6 (2026-09-19 sign-in review): the shell and the row's recovery are one
+    /// partition of the session states, derived rather than hand-written twice. Two copies
+    /// drifted once already; a state added to one must never miss the other.
+    @MainActor @Test func theShellAndTheRowRecoveryAgreeForEverySessionState() {
+        for state in everySetupSessionState {
+            let expected: ClaudeSingleAccountShell = setupRowRecovery(for: state) == .outcomeRecovery
+                ? .firstRunWalkthrough
+                : .compactWaiting
+            #expect(claudeSingleAccountShell(for: state) == expected,
+                    "\(state) disagrees with its row recovery")
+            #expect(setupSessionOwnsSurface(for: state) == (expected == .compactWaiting))
+        }
+    }
+
+    /// Review #4/#6: the states a blanked (`.pending`) row is in for the whole of a
+    /// "Sign Out & Set Up Again" — the wait itself, and a staging refused before it. Both
+    /// are the session's to render; neither may fall back to the fetching skeleton.
+    @MainActor @Test func aResetsWaitingAndRefusedStatesAreOwnedByTheSession() {
+        for state in [SetupSessionState.preparing, .waiting(attempt: 0), .verifying,
+                      .failed(.waitingTimedOut), .failed(.updateRequired)] {
+            #expect(setupSessionOwnsSurface(for: state))
+        }
+        for state in [SetupSessionState.idle, .connected, .cancelled,
+                      .failed(.closedBeforeSignIn), .blockedByOpenHandoff] {
+            #expect(!setupSessionOwnsSurface(for: state))
+        }
+
+        // The card's content comes from the session, not from a stale snapshot's outcome.
+        let waiting = claudeWaitingCardContent(
+            state: .waiting(attempt: 0),
+            phase: .waitingForUser(.signIn),
+            hasActiveHandoff: true,
+            failureMessage: nil,
+            failureDetail: nil
+        )
+        #expect(waiting.title == "Waiting for sign-in…")
+        let refused = claudeWaitingCardContent(
+            state: .failed(.updateRequired),
+            phase: nil,
+            hasActiveHandoff: false,
+            failureMessage: "Update Claude Code, then try again.",
+            failureDetail: nil
+        )
+        #expect(refused.title == "Update Claude Code, then try again.")
+        #expect(refused.actions == [.tryAgain])
+    }
+
+    /// Review #2 (2026-09-19 sign-in review): the version gate refused this CLI, so the
+    /// card must not also offer a copyable command that launches it. Every other shell
+    /// state keeps the disclosure.
+    @MainActor @Test func theUpdateRequiredShellOffersNoManualCommand() {
+        #expect(!claudeWaitingCardContent(
+            state: .failed(.updateRequired),
+            phase: nil,
+            hasActiveHandoff: false,
+            failureMessage: "Update Claude Code, then try again.",
+            failureDetail: nil
+        ).showsManualCommand)
+
+        for state in [SetupSessionState.preparing, .waiting(attempt: 0), .verifying,
+                      .failed(.waitingTimedOut)] {
+            #expect(claudeWaitingCardContent(
+                state: state,
+                phase: .waitingForUser(.signIn),
+                hasActiveHandoff: true,
+                failureMessage: nil,
+                failureDetail: nil
+            ).showsManualCommand, "\(state) should still offer the manual command")
+        }
+    }
+
+    /// The `/login` hint reaches the card as the same quiet bordered token the approval
+    /// variant uses, so the literal is set apart from the prose rather than bolded in it.
+    @MainActor @Test func theLoginHintReachesTheCardAsAToken() {
+        let content = claudeWaitingCardContent(
+            state: .waiting(attempt: 0),
+            phase: .waitingForUser(.signInNeedsLoginCommand),
+            hasActiveHandoff: true,
+            failureMessage: nil,
+            failureDetail: nil
+        )
+        #expect(content.token == SetupWaitingToken(text: "/login", isCommand: true))
+    }
+}
+
 /// PA7 + PB11 on the identity row itself.
 @Suite
 struct IdentityRowMetricsTests {
@@ -110,3 +404,37 @@ struct IdentityRowMetricsTests {
                                              renderedWidth: short + 4) == true)
     }
 }
+
+/// `SetupSessionState` carries associated values, so it cannot be `CaseIterable`. This is
+/// the hand-kept enumeration the partition tests sweep — every case, and every typed
+/// failure, with one representative payload each.
+private let everySetupSessionState: [SetupSessionState] = [
+    .idle,
+    .preparing,
+    .waiting(attempt: 0),
+    .waiting(attempt: 3),
+    .verifying,
+    .blockedByOpenHandoff,
+    .blockedByProviderLogin(
+        providerID: .codex,
+        active: AccountKey(providerID: .codex, accountID: .primary)
+    ),
+    .connected,
+    .cancelled,
+    .removing,
+    .removalFailed,
+    .removed,
+] + [
+    SetupSessionFailure.executableMissing,
+    .updateRequired,
+    .stagingFailed,
+    .terminalRejected,
+    .pasteboardFailed,
+    .retryExhausted,
+    .waitingTimedOut,
+    .closedBeforeSignIn,
+    .provider(.claudeLoginRequired),
+    .provider(.claudeTrustRequired),
+    .providerCapability(.confirmedAbsent),
+    .providerCapability(.inconclusive(.shellTimeout)),
+].map(SetupSessionState.failed)

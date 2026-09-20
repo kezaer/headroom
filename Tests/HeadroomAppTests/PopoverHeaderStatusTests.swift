@@ -224,4 +224,24 @@ struct ProviderCardSessionKeyTests {
                 != providerCardSessionKey(.failed(.retryExhausted))
         )
     }
+
+    /// KTD11 (2026-09-19 sign-in plan): the waiting phase is not carried inside
+    /// `.waiting(attempt:)` precisely because this key flattens it. Every phase the surfaces
+    /// distinguish therefore has to land on its own key, or a crossfade would be skipped.
+    @Test func everyWaitingPhaseLandsOnItsOwnSessionKey() {
+        let phaseStates: [SetupSessionState] = [
+            .preparing, .waiting(attempt: 0), .verifying, .failed(.waitingTimedOut),
+        ]
+        let keys = phaseStates.map { providerCardSessionKey($0) }
+        for (index, key) in keys.enumerated() {
+            for other in keys[(index + 1)...] {
+                #expect(key != other, "\(key) and \(other) share one animation key")
+            }
+        }
+        // And the retry counter inside one phase still changes nothing.
+        #expect(
+            providerCardSessionKey(.waiting(attempt: 0))
+                == providerCardSessionKey(.waiting(attempt: 9))
+        )
+    }
 }

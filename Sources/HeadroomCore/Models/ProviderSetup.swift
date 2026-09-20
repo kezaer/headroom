@@ -71,6 +71,189 @@ public enum ProviderSignInCopy {
     }
 }
 
+/// KTD1/R6 (2026-09-19 sign-in plan): why staging chose the interactive launch over the
+/// sign-in script. The two reasons need different waiting copy — an unreadable version
+/// leaves the user at the CLI's own screen with `/login` to type, while a never-onboarded
+/// extra config shows the CLI's login selector by itself (AE7) — and neither can be
+/// re-derived at render time, because the installed CLI can change while the original
+/// Terminal is still open.
+public enum ClaudeInteractiveLaunchReason: String, Sendable, Equatable, CaseIterable {
+    case versionUnreadable
+    case neverOnboardedExtraAccount
+}
+
+/// KTD11: what an open handoff is asking the user for. It is the one dimension the waiting
+/// and confirming copy both turn on, so a workspace approval never borrows a sign-in
+/// sentence and vice versa.
+public enum SetupWaitingPrompt: Sendable, Equatable, CaseIterable {
+    case signIn
+    /// R6: the interactive launch chosen because the CLI's version could not be read. The
+    /// CLI shows its own screen and the user has to type `/login` there.
+    case signInNeedsLoginCommand
+    case workspaceApproval
+    case deviceCode
+}
+
+/// KTD11: the literal the user has to pick or type, set apart from the prose in the card's
+/// quiet bordered box rather than bolded inside a sentence.
+public struct SetupWaitingToken: Sendable, Equatable {
+    public let text: String
+    /// True when the token is something the user types, so a card sets it in the same
+    /// monospaced face the manual-command disclosure uses and drops the "choose this"
+    /// checkmark that belongs to an option.
+    public let isCommand: Bool
+
+    public init(text: String, isCommand: Bool) {
+        self.text = text
+        self.isCommand = isCommand
+    }
+}
+
+public struct SetupWaitingCopy: Sendable, Equatable {
+    public let title: String
+    public let body: String
+    public let token: SetupWaitingToken?
+
+    public init(title: String, body: String, token: SetupWaitingToken? = nil) {
+        self.title = title
+        self.body = body
+        self.token = token
+    }
+}
+
+/// R7/KTD11 (2026-09-19 sign-in plan): which of the three waiting phases a session is in.
+/// It is a pure value over the typed session state rather than a field inside
+/// `.waiting(attempt:)`, which `providerCardSessionKey` deliberately flattens — and every
+/// phase change here coincides with a change to the coordinator's observed `states`
+/// dictionary, which is what repaints the surfaces.
+///
+/// The old waiting body claimed "Headroom checks this account automatically", which stopped
+/// being true for an exit-signalled handoff (KTD6): nothing is checked until the CLI process
+/// exits.
+public enum SetupWaitingPhase: Sendable, Equatable {
+    /// Headroom is staging the script and handing it to Terminal.
+    case openingTerminal
+    /// The window is open and the next move is the user's.
+    case waitingForUser(SetupWaitingPrompt)
+    /// Terminal has closed and Headroom is reading the account. `reportedFinished` is the
+    /// wrapper's own `.succeeded`, which distinguishes "sign-in said it finished" from a
+    /// window that closed with no verdict.
+    case confirming(SetupWaitingPrompt, reportedFinished: Bool)
+
+    /// KTD11: the whole derivation, so a surface never assembles the phase itself.
+    /// Returns nil when the session is not in a waiting phase at all — including the
+    /// timeout, which is a typed failure with its own copy and its own actions (KTD12).
+    public static func resolve(
+        state: SetupSessionState,
+        hasActiveHandoff: Bool,
+        purpose: SetupHandoffPurpose?,
+        mode: SetupHandoffMode = .standard,
+        interactiveReason: ClaudeInteractiveLaunchReason? = nil,
+        reportedCompletion: SetupHandoffCompletion? = nil
+    ) -> SetupWaitingPhase? {
+        let prompt = prompt(
+            purpose: purpose,
+            mode: mode,
+            interactiveReason: interactiveReason
+        )
+        switch state {
+        case .preparing:
+            return .openingTerminal
+        case .waiting, .verifying:
+            return hasActiveHandoff
+                ? .waitingForUser(prompt)
+                : .confirming(prompt, reportedFinished: reportedCompletion == .succeeded)
+        default:
+            return nil
+        }
+    }
+
+    /// R6/AE3: approval is always the interactive launch, so the `/login` hint has to be
+    /// gated on the *reason* rather than on the launch shape — otherwise every approval
+    /// handoff would tell the user to sign in again.
+    private static func prompt(
+        purpose: SetupHandoffPurpose?,
+        mode: SetupHandoffMode,
+        interactiveReason: ClaudeInteractiveLaunchReason?
+    ) -> SetupWaitingPrompt {
+        if purpose == .trust { return .workspaceApproval }
+        if mode == .deviceCode { return .deviceCode }
+        guard purpose == .setup, interactiveReason == .versionUnreadable else { return .signIn }
+        return .signInNeedsLoginCommand
+    }
+
+    public var copy: SetupWaitingCopy {
+        switch self {
+        case .openingTerminal:
+            // Purpose-neutral on purpose: nothing has been asked of the user yet, and a
+            // sign-in sentence here would be wrong for an approval handoff.
+            return .init(
+                title: "Opening Terminal…",
+                body: "Headroom is handing this account to the official CLI."
+            )
+        case .waitingForUser(let prompt):
+            return Self.waitingCopy(for: prompt)
+        case .confirming(let prompt, let reportedFinished):
+            return Self.confirmingCopy(for: prompt, reportedFinished: reportedFinished)
+        }
+    }
+
+    private static func waitingCopy(for prompt: SetupWaitingPrompt) -> SetupWaitingCopy {
+        switch prompt {
+        case .signIn:
+            .init(
+                title: "Waiting for sign-in…",
+                body: "Finish signing in in your browser. Headroom continues as soon as sign-in ends."
+            )
+        case .signInNeedsLoginCommand:
+            .init(
+                title: "Waiting for sign-in…",
+                body: "In Terminal, type the command below and press Return, then finish in your browser.",
+                token: .init(text: "/login", isCommand: true)
+            )
+        case .workspaceApproval:
+            // R2C6: the sentence used to end "Headroom connects as soon as you approve" —
+            // the one verb the sign-in vocabulary retired. The guidance is unchanged.
+            .init(
+                title: "Waiting for approval…",
+                body: "Choose the option below in Terminal. Headroom continues as soon as you approve.",
+                token: .init(text: "“Yes, I trust this folder”", isCommand: false)
+            )
+        case .deviceCode:
+            .init(
+                title: "Waiting for device code…",
+                body: "Follow the device-code instructions in Terminal. Headroom continues as soon as the code is accepted."
+            )
+        }
+    }
+
+    private static func confirmingCopy(
+        for prompt: SetupWaitingPrompt,
+        reportedFinished: Bool
+    ) -> SetupWaitingCopy {
+        if prompt == .workspaceApproval {
+            return reportedFinished
+                ? .init(
+                    title: "Confirming approval…",
+                    body: "Terminal closed. Headroom is reading your usage."
+                )
+                : .init(
+                    title: "Checking approval…",
+                    body: "Terminal closed. Headroom is checking whether the approval finished."
+                )
+        }
+        return reportedFinished
+            ? .init(
+                title: "Confirming sign-in…",
+                body: "Terminal closed. Headroom is reading your usage."
+            )
+            : .init(
+                title: "Checking sign-in…",
+                body: "Terminal closed. Headroom is checking whether sign-in finished."
+            )
+    }
+}
+
 /// A provider/setup condition that changes which recovery action Headroom may offer.
 /// These values deliberately carry no provider output, paths, account identity, or
 /// caught errors. Presentation copy is derived separately so behavior never depends
@@ -198,7 +381,10 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
                   secondaryLabel: "Check Now", secondaryAction: .checkNow,
                   automaticPolicy: .boundedChecksAfterHandoff)
         case .claudeTrustRequired:
-            .init(status: message, primaryLabel: "Open Claude Workspace", primaryAction: .openClaudeSetup,
+            // KTD5 (2026-09-19 sign-in plan): approval is its own handoff purpose. Sharing
+            // Sign In's action staged the sign-in script, which exits on an already
+            // signed-in account before the approval prompt can appear (AE3).
+            .init(status: message, primaryLabel: "Open Claude Workspace", primaryAction: .openClaudeWorkspace,
                   secondaryLabel: "Check Now", secondaryAction: .checkNow,
                   automaticPolicy: .boundedChecksAfterHandoff)
         case .claudeUnknownUI, .claudeTransientCapture:
@@ -274,6 +460,7 @@ public enum SetupRecoveryAction: Sendable, Equatable, Hashable {
     case reconnectGrok
     case installCursorAgent
     case connectCursor
+    case openClaudeWorkspace
     case openCursorWorkspace
     case reviewCursorTools
     case showPrivacyGuidance
