@@ -62,6 +62,10 @@ final class AccountProbeScheduler {
     private var lanes: [ProviderPollingLane: LaneState] = [:]
     /// Accounts a user action marked due and that have not merged yet (KTD2).
     private var userPending: Set<AccountKey> = []
+    /// A user action may perform provider-wide setup before queueing its account probe.
+    /// Preserve that task-local discovery generation across the scheduler's own task hop so
+    /// the probe can reuse the setup result instead of starting a second CLI search.
+    private var priorityLocatorGeneration: [AccountKey: UUID] = [:]
     private var userWaiters: [CheckedContinuation<Void, Never>] = []
     private var completionWaiters: [AccountKey: [CheckedContinuation<Void, Never>]] = [:]
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
@@ -83,6 +87,7 @@ final class AccountProbeScheduler {
         if let lane = laneOf.removeValue(forKey: key) {
             lanes[lane]?.priority.removeAll { $0 == key }
         }
+        priorityLocatorGeneration.removeValue(forKey: key)
         finish(key)
     }
 
@@ -123,10 +128,12 @@ final class AccountProbeScheduler {
         if isInFlight(key) {
             // The running probe answers the request; one that predates a reset or handoff
             // boundary cannot (its result will be rejected), so a follow-up is queued.
-            if !inFlightAnswers(key) { enqueuePriority(key) }
+            if !inFlightAnswers(key) {
+                enqueuePriority(key, locatorGeneration: CLIExecutableRefreshContext.generation)
+            }
             return
         }
-        enqueuePriority(key)
+        enqueuePriority(key, locatorGeneration: CLIExecutableRefreshContext.generation)
         if let lane = laneOf[key] { dispatchUserWork(in: lane) }
     }
 
@@ -136,6 +143,7 @@ final class AccountProbeScheduler {
     func withdraw(_ keys: [AccountKey]) {
         for key in keys {
             if let lane = laneOf[key] { lanes[lane]?.priority.removeAll { $0 == key } }
+            priorityLocatorGeneration.removeValue(forKey: key)
             if !isInFlight(key) { finish(key) }
         }
     }
@@ -269,11 +277,12 @@ final class AccountProbeScheduler {
         while let key = nextSerialKey(in: lane) {
             let isPriority = lanes[lane]?.priority.contains(key) == true
             lanes[lane]?.priority.removeAll { $0 == key }
+            let requestedLocatorGeneration = priorityLocatorGeneration.removeValue(forKey: key)
             await probe(
                 key,
                 lane: lane,
                 // KTD8: a user action's epoch advance must still force a fresh search.
-                locatorGeneration: isPriority ? UUID() : passGeneration,
+                locatorGeneration: isPriority ? (requestedLocatorGeneration ?? UUID()) : passGeneration,
                 capabilityGeneration: lanes[lane]?.passCapability[key.providerID],
                 appliesCapabilityImmediately: isPriority
             )
@@ -310,19 +319,22 @@ final class AccountProbeScheduler {
         let cycle = host.schedulerBeginCapabilityRefresh(for: due.compactMap { host.schedulerProvider(for: $0) })
         for key in due {
             lanes[lane]?.priority.removeAll { $0 == key }
+            let requestedLocatorGeneration = priorityLocatorGeneration.removeValue(forKey: key)
             // A record without a provider would stay due forever; drop it rather than wake
             // every second for it.
             guard host.schedulerProvider(for: key) != nil else { unregister(key); continue }
+            let attachment = host.schedulerAttachmentGeneration(for: key)
             lanes[lane]?.inFlight.insert(key)
+            inFlightAttachment[key] = attachment
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.probe(
                     key,
                     lane: lane,
-                    locatorGeneration: UUID(),
+                    locatorGeneration: requestedLocatorGeneration ?? UUID(),
                     capabilityGeneration: cycle[key.providerID],
                     appliesCapabilityImmediately: true,
-                    alreadyInFlight: true
+                    preReservedAttachmentGeneration: attachment
                 )
                 if self.lanes[lane]?.inFlight.isEmpty == true {
                     self.host?.schedulerLaneDidGoIdle(lane)
@@ -338,10 +350,13 @@ final class AccountProbeScheduler {
         locatorGeneration: UUID,
         capabilityGeneration: UInt64?,
         appliesCapabilityImmediately: Bool,
-        alreadyInFlight: Bool = false
+        preReservedAttachmentGeneration: UInt64? = nil
     ) async {
         guard let host, let provider = host.schedulerProvider(for: key), host.schedulerIsEligible(key) else {
-            if alreadyInFlight { lanes[lane]?.inFlight.remove(key) }
+            if preReservedAttachmentGeneration != nil {
+                lanes[lane]?.inFlight.remove(key)
+                inFlightAttachment.removeValue(forKey: key)
+            }
             // A record without a provider would be selected again at once (serial lane) or
             // keep the wake at one second (concurrent lane).
             if host?.schedulerProvider(for: key) == nil { unregister(key) } else { finish(key) }
@@ -357,8 +372,8 @@ final class AccountProbeScheduler {
             record.forcedDue = false
             records[key] = record
         }
-        if !alreadyInFlight { lanes[lane]?.inFlight.insert(key) }
-        let attachment = host.schedulerAttachmentGeneration(for: key)
+        if preReservedAttachmentGeneration == nil { lanes[lane]?.inFlight.insert(key) }
+        let attachment = preReservedAttachmentGeneration ?? host.schedulerAttachmentGeneration(for: key)
         inFlightAttachment[key] = attachment
 
         let result = await CLIExecutableRefreshContext.$generation.withValue(locatorGeneration) {
@@ -423,8 +438,12 @@ final class AccountProbeScheduler {
         return started == host.schedulerAttachmentGeneration(for: key)
     }
 
-    private func enqueuePriority(_ key: AccountKey) {
-        guard let lane = laneOf[key], lanes[lane]?.priority.contains(key) == false else { return }
+    private func enqueuePriority(_ key: AccountKey, locatorGeneration: UUID? = nil) {
+        guard let lane = laneOf[key] else { return }
+        if let locatorGeneration {
+            priorityLocatorGeneration[key] = locatorGeneration
+        }
+        guard lanes[lane]?.priority.contains(key) == false else { return }
         lanes[lane]?.priority.append(key)
     }
 

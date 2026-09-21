@@ -341,7 +341,7 @@ final class FetchGate: @unchecked Sendable {
     private var suspendNext = false
     private var didStart = false
     private var started: CheckedContinuation<Void, Never>?
-    private var release: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
     private var shouldRelease = false
 
     func suspendNextFetch() {
@@ -360,8 +360,8 @@ final class FetchGate: @unchecked Sendable {
     func release() {
         let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
             shouldRelease = true
-            let pending = release
-            release = nil
+            let pending = releaseContinuation
+            releaseContinuation = nil
             return pending
         }
         pending?.resume()
@@ -380,7 +380,7 @@ final class FetchGate: @unchecked Sendable {
         guard suspend, !lock.withLock({ shouldRelease }) else { return }
         await withCheckedContinuation { continuation in
             var resumeNow = false
-            lock.withLock { if shouldRelease { resumeNow = true } else { release = continuation } }
+            lock.withLock { if shouldRelease { resumeNow = true } else { releaseContinuation = continuation } }
             if resumeNow { continuation.resume() }
         }
     }

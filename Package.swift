@@ -5,7 +5,7 @@ import PackageDescription
 //
 // Structured as a Swift package so the testable core (`HeadroomCore`) builds and
 // verifies via `swift build` / `swift test` in CI and headless environments. The
-// package opens directly in Xcode 26 and `xcodebuild -scheme Headroom` builds it.
+// package opens directly in Xcode 27 and `xcodebuild -scheme Headroom` builds it.
 // Finalizing the distributable menu bar app (LSUIElement Info.plist, launch-at-login
 // bundle, and the stable Apple Development signing identity in KTD8) is done in Xcode
 // on the user's machine — see docs/plans and README.

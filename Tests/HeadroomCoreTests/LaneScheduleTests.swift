@@ -168,7 +168,7 @@ struct LaneScheduleTests {
         #expect(!backingOff.isOnCadence)
         #expect(!exempt.isOnCadence)
         #expect(healthy.isOnCadence)
-        #expect(healthy.attemptGap == 5 * 60)
+        #expect(abs((healthy.attemptGap ?? 0) - chosen) < 0.001)
         #expect(!recovered.isOnCadence)
         #expect(recovered.scheduledOnCadence)
     }
