@@ -664,6 +664,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum AppComposition {
     private struct SubscriptionProviderRegistration {
         let id: ProviderID
+        /// KTD10 (2026-09-19 polling plan): the registry is read before any provider instance
+        /// exists, so the capacity that truncates it lives here and must match the provider's.
+        let accountCapacity: Int
         let factory: @MainActor (ProviderAccount, CredentialStore, URL) -> any UsageProvider
     }
 
@@ -717,10 +720,11 @@ enum AppComposition {
     @MainActor
     private static var subscriptionProviderRegistry: [SubscriptionProviderRegistration] {
         [
-            SubscriptionProviderRegistration(id: .claude, factory: makeClaudeProvider),
-            SubscriptionProviderRegistration(id: .codex, factory: makeCodexProvider),
-            SubscriptionProviderRegistration(id: .grok, factory: makeGrokProvider),
-            SubscriptionProviderRegistration(id: .cursor, factory: makeCursorProvider),
+            SubscriptionProviderRegistration(id: .claude, accountCapacity: AccountRegistry.testedEnvelope, factory: makeClaudeProvider),
+            SubscriptionProviderRegistration(id: .codex, accountCapacity: AccountRegistry.testedEnvelope, factory: makeCodexProvider),
+            SubscriptionProviderRegistration(id: .grok, accountCapacity: AccountRegistry.testedEnvelope, factory: makeGrokProvider),
+            // Cursor has no config-home isolation, so it stays single-account (matches `CursorProvider.accountCapacity`).
+            SubscriptionProviderRegistration(id: .cursor, accountCapacity: 1, factory: makeCursorProvider),
         ]
     }
 
@@ -918,7 +922,8 @@ enum AppComposition {
     @MainActor
     private static func providers(credentials: CredentialStore, registry: AccountRegistry) -> [any UsageProvider] {
         subscriptionProviderRegistry.flatMap { registration in
-            registry.accounts(for: registration.id).map { provider(for: $0, credentials: credentials) }
+            registry.accounts(for: registration.id, capacity: registration.accountCapacity)
+                .map { provider(for: $0, credentials: credentials) }
         }
     }
 

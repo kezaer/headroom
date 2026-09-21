@@ -47,7 +47,7 @@ extension UsageStore {
         guard let accountRegistry, providerFactory != nil,
               accounts(for: providerID).count < accountCapacity(for: providerID)
         else { return false }
-        return accountRegistry.canAddAccount(for: providerID)
+        return accountRegistry.canAddAccount(for: providerID, capacity: accountCapacity(for: providerID))
     }
 
     public func accountCapacity(for providerID: ProviderID) -> Int {
@@ -58,14 +58,18 @@ extension UsageStore {
     public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
         guard canAddAccount(for: providerID),
               let accountRegistry, let providerFactory,
-              let account = accountRegistry.addAccount(for: providerID, label: label)
+              let account = accountRegistry.addAccount(
+                  for: providerID, capacity: accountCapacity(for: providerID), label: label
+              )
         else { return nil }
         guard case .success = accountStorage.ensureDirectories(for: account) else {
             accountRegistry.removeAccount(account.key)
             return nil
         }
-        providers.append(providerFactory(account))
-        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        let provider = providerFactory(account)
+        providers.append(provider)
+        scheduler.register(provider)
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID, capacity: accountCapacity(for: providerID))
         snapshots[account.key] = .stale(
             for: providerID,
             reason: .notLoggedIn(Self.finishSignInMessage)
@@ -76,7 +80,9 @@ extension UsageStore {
     public func renameAccount(_ key: AccountKey, to label: String) {
         guard let accountRegistry else { return }
         accountRegistry.renameAccount(key, to: label)
-        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+        accountsByProvider[key.providerID] = accountRegistry.accounts(
+            for: key.providerID, capacity: accountCapacity(for: key.providerID)
+        )
     }
 
     public func canPromoteAccount(_ key: AccountKey) -> Bool {
@@ -96,7 +102,9 @@ extension UsageStore {
               let accountRegistry,
               accountRegistry.promote(key)
         else { return false }
-        accountsByProvider[key.providerID] = accountRegistry.accounts(for: key.providerID)
+        accountsByProvider[key.providerID] = accountRegistry.accounts(
+            for: key.providerID, capacity: accountCapacity(for: key.providerID)
+        )
         refreshAccountNow(key)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
@@ -111,7 +119,6 @@ extension UsageStore {
         else { return .notAllowed }
         if let blocked = await setupHandoffBlock(for: account) { return blocked }
         removingAccounts.insert(key)
-        pendingAccountRefreshes.remove(key)
         accountRemovalStates[key] = .removing
         setupCoordinator?.markRemoving(key)
         let removal = await accountStorage.removeDirectories(for: account)
@@ -155,7 +162,6 @@ extension UsageStore {
         else { return .notAllowed }
         if let blocked = await setupHandoffBlock(for: account) { return blocked }
         guard accountRegistry.stopTrackingBuiltIn(for: providerID) else { return .notAllowed }
-        pendingAccountRefreshes.remove(key)
         detachAccount(key)
         return .removed
     }
@@ -167,7 +173,7 @@ extension UsageStore {
               let account = accountRegistry.accounts(for: providerID).first(where: { $0.isBuiltIn })
         else { return nil }
         attachBuiltInProvider(account)
-        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID)
+        accountsByProvider[providerID] = accountRegistry.accounts(for: providerID, capacity: accountCapacity(for: providerID))
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
         return account
@@ -186,9 +192,12 @@ extension UsageStore {
         // reading look like a sign-out Headroom observed.
         signOutRecord?.clearLastKnownSignedIn(for: key)
         providers.removeAll { $0.accountKey == key }
+        scheduler.unregister(key)
         snapshots.removeValue(forKey: key)
         continuityCache?.remove(for: key)
-        accountsByProvider[key.providerID] = accountRegistry?.accounts(for: key.providerID) ?? []
+        accountsByProvider[key.providerID] = accountRegistry?.accounts(
+            for: key.providerID, capacity: accountCapacity(for: key.providerID)
+        ) ?? []
         reinstateBuiltInIfResurfaced(for: key.providerID)
         removingAccounts.remove(key)
         accountRemovalStates.removeValue(forKey: key)
@@ -199,7 +208,9 @@ extension UsageStore {
 
     private func attachBuiltInProvider(_ account: ProviderAccount) {
         guard let providerFactory else { return }
-        providers.append(providerFactory(account))
+        let provider = providerFactory(account)
+        providers.append(provider)
+        scheduler.register(provider)
         snapshots[account.key] = .pending(for: account.providerID)
         setupCoordinator?.markReinstated(account.key)
     }

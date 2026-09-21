@@ -78,10 +78,12 @@ official `claude` CLI's `/usage` panel instead.
   easy to spot. Add a version check / update the fixture if the panel changes.
 - **Each poll spawns a full `claude` process (print path ~3–5s; PTY fallback ~20–30s).**
   Claude accounts still run in one serial lane and the interval has an enforced 2-minute
-  floor. **Partially discharged 2026-08-08:** all accounts in one timer refresh generation
-  now share a negative executable-discovery verdict, so a missing CLI triggers at most one
-  full path search per cycle. Successful `/usage` probes still run once per configured
-  account; result caching or adaptive cadence could reduce that remaining cost.
+  floor. **Partially discharged 2026-08-08:** all accounts in one Claude lane pass share a
+  negative executable-discovery verdict, so a missing CLI triggers at most one full path
+  search per pass. **2026-09-21:** the adaptive part shipped as the measured duty-cycle gate
+  (`LaneSchedule`), which bounds a CLI lane to half of its trailing window. Successful
+  `/usage` probes still run once per configured account; result caching could reduce that
+  remaining cost.
 - **No live integration test for the PTY probe.** Provider tests use a fixture panel +
   mock source (fast, deterministic). The real `ClaudeUsageCLIProbe` is verified manually
   via `--probe-claude`; a machine-dependent integration test would need the CLI logged in.
@@ -138,7 +140,10 @@ Deferred from `docs/plans/2026-09-19-1236-fix-claude-sign-in-handoff-plan.md`.
   `Data(contentsOf:)` on the main actor. When macOS shows "Headroom would like to access data
   from other apps", `open()` blocks until the user answers, and the popover and menu bar freeze
   with it. Observed 2026-09-19 with `sample`: a debug test host sat in `open()` at 0% CPU for 14
-  minutes. Move the container I/O off the main actor.
+  minutes. Move the container I/O off the main actor. Since the per-account scheduler
+  (2026-09-21) the export runs after every primary account's merge — up to one per provider
+  per interval plus one per user refresh — rather than once per sweep, so the multiplier on
+  this block went up, not down.
 - **Local builds re-prompt for the app-group container on every rebuild.** The Mac app is not
   sandboxed and uses the iOS-style group `group.com.kylezantos.headroom`, which macOS 15+ only
   treats as the app's own when an embedded provisioning profile lists it. `Scripts/build-app.sh`
@@ -216,9 +221,13 @@ Deferred from `docs/plans/2026-09-19-1236-fix-claude-sign-in-handoff-plan.md`.
   to the registry. If a sweep is added, only remove homes that are unregistered **and** have no
   active setup marker.
 
-- **No backoff on repeated failures.** Both providers retry every cycle at the fixed
-  interval. Exponential backoff on consecutive transient failures would be gentler on a
-  down endpoint. Design choice — deferred.
+- **Backoff on repeated failures — shipped 2026-09-21** with the per-account scheduler
+  (`LaneSchedule`): consecutive transient failures double the account's spacing from the
+  chosen interval, capped at the larger of 30 minutes and the lane's effective interval; a
+  permanent setup state stays on cadence. Remaining probe-cost follow-ups from that plan:
+  skip the PTY fallback after a print-mode timeout on a print-capable CLI (bounds one bad
+  probe to about 25 seconds instead of 80); cache the `--version` band per executable per
+  lane pass; and version-gate the per-poll `claude auth status` call.
 
 - **Menu bar stays silent when a CLI is dead.** Provider capability failures are transient
   reasons, so `MenuBarLabel.needsAttention` does not light up for a missing or undiscoverable

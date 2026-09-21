@@ -84,7 +84,7 @@ public enum AccountRemovalResult: Sendable, Equatable {
 /// failure updates only its own snapshot (KTD7).
 ///
 /// Multi-account (Jul 2026): snapshots are keyed by `AccountKey` — one provider can
-/// carry up to `AccountRegistry.maxPerProvider` signed-in accounts. The menu bar and
+/// carry up to `AccountRegistry.testedEnvelope` signed-in accounts. The menu bar and
 /// widgets follow each provider's selected primary account so those compact surfaces
 /// keep meaning one thing; the popover shows every account.
 @MainActor
@@ -111,11 +111,24 @@ public final class UsageStore {
     public let displayNames: [ProviderID: String]
     public let apiSpendDisplayNames: [ProviderID: String]
 
-    /// True while a fetch cycle is in flight. Doubles as the popover's "Refreshing…"
-    /// signal (UI-02): a manual refresh spawns a 20–30s Claude CLI session, so the UI
-    /// must show progress or the button reads as broken. Also the reentrancy guard that
-    /// coalesces overlapping triggers into one cycle.
+    /// The popover's "Refreshing…" signal (UI-02). KTD2 (2026-09-19 polling plan): true
+    /// only while a user-initiated request — Refresh, Check Now, a setup check — still has
+    /// unmerged work. Timer-driven lane passes never set it, so the Refresh button does not
+    /// disappear for half of every interval at the account envelope.
     public private(set) var isRefreshing = false
+    @ObservationIgnored private var userWorkPending = false
+    @ObservationIgnored private var apiSpendUserRefreshDepth = 0
+    @ObservationIgnored private var apiSpendInFlight = false
+    /// KTD12: per-provider chosen vs effective interval for Settings, refreshed whenever a
+    /// lane goes idle so the General pane observes it like any other store value.
+    public private(set) var pollCadences: [ProviderID: PollCadence] = [:]
+    /// Depth of user-initiated full refreshes in flight. While one runs, primary merges
+    /// skip their own export because the refresh exports once at its end (KTD9), which
+    /// keeps launch to a single widget write.
+    @ObservationIgnored private var fullRefreshDepth = 0
+    /// KTD1: per-lane due-queue engine. Owns the attempt clock, probe log, and priority
+    /// requests; everything that touches snapshots comes back through the host protocol.
+    let scheduler = AccountProbeScheduler()
 
     var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
@@ -128,8 +141,6 @@ public final class UsageStore {
     /// care compose without it.
     let signOutRecord: SignOutRecord?
     private let now: @Sendable () -> Date
-    /// Counts timer-driven cycles for the not-signed-in poll backoff.
-    private var timerCycleCount = 0
     /// Builds the concrete provider for a newly added account. Lives in the composition
     /// root (R13) and is injected so the store never names concrete provider types.
     let providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)?
@@ -137,7 +148,6 @@ public final class UsageStore {
     let phoneSyncExporter: (any WidgetSnapshotExporting)?
     private(set) var engine: PollingEngine?
     private var isStarting = false
-    @ObservationIgnored var pendingAccountRefreshes: Set<AccountKey> = []
     @ObservationIgnored var removingAccounts: Set<AccountKey> = []
     @ObservationIgnored private var capabilityGenerations: [ProviderID: UInt64] = [:]
     /// Per-key attach/detach epoch. A fetch result is only merged when the attachment
@@ -226,6 +236,8 @@ public final class UsageStore {
         self.showCodexSparkCountersInApp = preferences.showCodexSparkCountersInApp
         self.showCodexSparkCountersInWidgets = preferences.showCodexSparkCountersInWidgets
         self.enabledSurfaces = Set(UsageSurface.allCases.filter { preferences.isSurfaceEnabled($0) })
+        scheduler.host = self
+        for provider in providers { scheduler.register(provider) }
     }
 
     private static func restoredSnapshot(
@@ -317,15 +329,16 @@ public final class UsageStore {
         isStarting = true
         defer { isStarting = false }
         await refreshAll()
+        // KTD6: the loop sleeps until the earliest due account in an idle lane (each
+        // account phased toward its own reset, R2M3 carried per account) and a tick only
+        // dispatches; the lanes drain in their own tasks and re-arm the sleep at pass end.
         let engine = PollingEngine(
-            intervalMinutes: { [preferences] in preferences.pollIntervalMinutes },
-            // R2M3: phase the poll to the reset moment. When a tracked window's deadline
-            // falls inside this interval the same poll is moved to just after it, so the
-            // refill lands when capacity actually returns instead of at a random offset up
-            // to a full interval late.
-            nextResetDeadline: { [weak self] in self?.nextTrackedResetDeadline() },
+            nextWake: { [weak self] in
+                self?.scheduler.wakeDelay()
+                    ?? LaneSchedule.chosenInterval(minutes: Preferences.defaultIntervalMinutes)
+            },
             now: now,
-            tick: { [weak self] in await self?.refreshAll(source: .timer) }
+            tick: { [weak self] in self?.scheduler.dispatchDue() }
         )
         engine.start()
         self.engine = engine
@@ -339,26 +352,22 @@ public final class UsageStore {
     }
 
     /// R2M2: freshen on popover open, but only when the timer was about to fire anyway.
-    /// The popover is the app's highest-frequency moment and a Claude poll is a 20–30s CLI
-    /// session, so this refreshes only once the oldest live capture has already aged past a
-    /// full poll interval, then re-phases the cadence so the next tick is a full interval
-    /// after the fresh data. At most one extra poll per interval; the cadence itself is
-    /// never raised (AGENTS.md's cost warning).
+    /// The popover is the app's highest-frequency moment and a Claude poll is a full CLI
+    /// session, so this wakes the queue only once the oldest live capture has already aged
+    /// past a full poll interval; the lane's pass-end rephase then puts the next tick a full
+    /// interval after the fresh data. At most one extra poll per interval; the cadence
+    /// itself is never raised (AGENTS.md's cost warning).
     public func refreshOnPopoverOpen() {
-        // A cycle already in flight is freshening the data by itself, and re-phasing would
-        // cancel the loop task mid-tick.
+        // A user refresh already in flight is freshening the data by itself.
         guard !isRefreshing else { return }
         guard Self.shouldRefreshOnPopoverOpen(
             oldestLiveCapture: oldestLiveCapture,
             now: now(),
             intervalMinutes: preferences.pollIntervalMinutes
         ) else { return }
-        Task {
-            await refreshAll()
-            // Re-phase after the poll lands, so the next tick is a full interval from fresh
-            // data rather than from the moment the popover opened.
-            engine?.rephase()
-        }
+        // KTD6: wake the queue for whatever is due instead of forcing every account; the
+        // lane's pass-end rephase moves the next tick a full interval past the fresh data.
+        scheduler.dispatchDue()
     }
 
     /// Oldest capture time among snapshots that are actually live. Permanently stale rows
@@ -384,22 +393,6 @@ public final class UsageStore {
         return now.timeIntervalSince(oldestLiveCapture) >= interval
     }
 
-    /// R2M3: earliest reset deadline still ahead of us across every tracked window of an
-    /// enabled provider. `.unavailable` rows are excluded — their retained deadline is no
-    /// longer evidence of anything on screen.
-    func nextTrackedResetDeadline(now referenceDate: Date? = nil) -> Date? {
-        let reference = referenceDate ?? now()
-        let enabled = Set(providerOrder)
-        return snapshots
-            .filter { enabled.contains($0.key.providerID) }
-            .values
-            .flatMap(\.windows)
-            .filter { !$0.freshness.isUnavailable }
-            .compactMap(\.resetSchedule.deadline)
-            .filter { $0 > reference }
-            .min()
-    }
-
     /// Refresh only API spend providers. Settings uses this for spend-only controls so
     /// a checkbox click doesn't spawn the expensive Claude subscription CLI probe.
     public func refreshAPISpendNow() {
@@ -407,7 +400,10 @@ public final class UsageStore {
     }
 
     /// Restart the loop so a changed poll interval takes effect now (R14).
-    public func reschedulePolling() { engine?.reschedule() }
+    public func reschedulePolling() {
+        refreshPollCadences()
+        engine?.reschedule()
+    }
 
     public func setShowMenuBarPercentage(_ enabled: Bool) {
         preferences.showMenuBarPercentage = enabled
@@ -594,8 +590,15 @@ public final class UsageStore {
         preferences.setSurfaceEnabled(enabled, for: surface)
         if enabled {
             enabledSurfaces.insert(surface)
+            // KTD11: a re-enabled provider's accounts are due now once, with no attempt
+            // history, so the toggle can neither burst-stretch the lane nor read as overdue.
+            let keys = providers.map(\.accountKey).filter { UsageSurface.subscription(for: $0.providerID) == surface }
+            scheduler.markDueNow(keys)
         } else {
             enabledSurfaces.remove(surface)
+            // KTD11: queued user requests for these accounts can no longer be served.
+            let keys = providers.map(\.accountKey).filter { UsageSurface.subscription(for: $0.providerID) == surface }
+            scheduler.withdraw(keys)
         }
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
@@ -609,121 +612,89 @@ public final class UsageStore {
         preferences.apiSpendPeriod = period
     }
 
-    /// What triggered a refresh cycle. Timer ticks back off never-signed-in extra
-    /// accounts; user-initiated refreshes always probe everything.
-    private enum RefreshSource { case manual, timer }
-
-    /// Fetch every provider concurrently and merge results with continuity. Guarded
-    /// so overlapping triggers (a timer tick during a popover-open `refreshNow()`)
-    /// coalesce into one in-flight cycle instead of racing duplicate fetches.
+    /// KTD2: a user asked for everything. Every enabled account is due now, bypasses the
+    /// duty-cycle gate, and the call returns once the lanes it started have drained — the
+    /// contract the store tests and the launch refresh rely on.
     public func refreshAll() async {
-        await refreshAll(source: .manual)
-    }
-
-    private func refreshAll(source: RefreshSource) async {
-        if isRefreshing { return }
-        isRefreshing = true
-        if source == .timer { timerCycleCount += 1 }
-        await refreshSubscriptions(source: source, exportAfter: false)
+        fullRefreshDepth += 1
+        // Raised before the subscription work so the flag does not blink off between the
+        // last merge and the spend fetch.
+        apiSpendUserRefreshDepth += 1
+        recomputeRefreshing()
+        scheduler.markAllDue()
+        scheduler.dispatchDue()
+        await scheduler.waitUntilUserWorkDrains()
+        // Timer candidates a lane keeps serving after the user's work merged export on their
+        // own; the refresh's single export below still follows every lane going idle.
+        fullRefreshDepth -= 1
+        await scheduler.waitUntilLanesIdle()
         await refreshAPISpend(exportAfter: false)
+        apiSpendUserRefreshDepth -= 1
+        recomputeRefreshing()
+        refreshPollCadences()
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
-        await drainPendingAccountRefreshes()
-        isRefreshing = false
     }
 
-    /// Refresh a single account — the setup-session retry path, so watching one new
-    /// sign-in never fans out into a full fleet poll (each Claude account is a
-    /// 20–30s CLI session; code-review finding).
+    /// Refresh a single account — Check Now, Check Again, Try Again, Make Main, and the
+    /// setup coordinator's checks (R4, KTD7). A front-of-queue request, so watching one
+    /// sign-in never fans out into a full fleet poll.
     public func refreshAccountNow(_ key: AccountKey) {
-        Task { await refreshAccount(key) }
+        scheduler.requestPriority(key)
     }
 
     func refreshAccount(_ key: AccountKey) async {
-        if isRefreshing {
-            pendingAccountRefreshes.insert(key)
-            return
-        }
-        isRefreshing = true
-        await fetchAccountIfEligible(key)
-        await drainPendingAccountRefreshes()
-        isRefreshing = false
+        scheduler.requestPriority(key)
+        await scheduler.waitForCompletion(of: key)
     }
 
+    /// Timer tick, popover open, or a Settings surface change: probe whatever is due, one
+    /// per CLI lane, without marking anything due that is not (KTD6, KTD11).
+    public func dispatchDueNow() {
+        scheduler.dispatchDue()
+    }
+
+    public func dispatchDueNow(for providerID: ProviderID) {
+        scheduler.dispatchDue(for: providerID)
+    }
+
+    /// KTD12: what Settings shows for a provider — the chosen interval, the interval its
+    /// accounts actually experience, and how many accounts share the lane.
+    public func pollCadence(for providerID: ProviderID) -> PollCadence {
+        let chosen = schedulerChosenInterval
+        return PollCadence(
+            chosenInterval: chosen,
+            effectiveInterval: scheduler.effectiveInterval(forProvider: providerID, chosen: chosen),
+            accountCount: scheduler.accountCount(for: providerID)
+        )
+    }
+
+    /// KTD2: spend controls keep working while a CLI lane drains; only a spend fetch
+    /// already in flight coalesces the click.
     public func refreshAPISpendOnly() async {
-        if isRefreshing { return }
-        isRefreshing = true
-        defer { isRefreshing = false }
+        if apiSpendInFlight { return }
+        apiSpendInFlight = true
+        apiSpendUserRefreshDepth += 1
+        recomputeRefreshing()
+        defer {
+            apiSpendInFlight = false
+            apiSpendUserRefreshDepth -= 1
+            recomputeRefreshing()
+        }
         await refreshAPISpend()
     }
 
-    private func refreshSubscriptions(source: RefreshSource = .manual, exportAfter: Bool = true) async {
-        let candidates = providers.filter { provider in
-            guard let surface = UsageSurface.subscription(for: provider.id) else { return false }
-            return enabledSurfaces.contains(surface) && !shouldSkipOnTimer(provider: provider, source: source)
+    func refreshPollCadences() {
+        var next: [ProviderID: PollCadence] = [:]
+        for providerID in registeredProviderOrder {
+            next[providerID] = pollCadence(for: providerID)
         }
-        let capabilityCycle = beginCapabilityRefresh(for: candidates)
-        let fetchAttachments = Dictionary(
-            candidates.map { ($0.accountKey, attachmentGenerations[$0.accountKey] ?? 0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let executableRefreshGeneration = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: (AccountKey, UsageProviderFetchResult).self,
-            bufferingPolicy: .unbounded
-        )
-        var capabilityResults: [ProviderID: ProviderCapabilityState] = [:]
-        await withTaskGroup(of: Void.self) { group in
-            // Partition once from the immutable provider declaration. Each process-heavy
-            // CLI gets its own keyed serial lane, while network work and other CLI lanes
-            // remain concurrent with it.
-            var serialLanes: [String: [any UsageProvider]] = [:]
-            var concurrentProviders: [any UsageProvider] = []
-            for provider in candidates {
-                switch provider.pollingLane {
-                case .concurrent:
-                    concurrentProviders.append(provider)
-                case .serial(let laneID):
-                    serialLanes[laneID, default: []].append(provider)
-                }
-            }
-            for lane in serialLanes.values {
-                group.addTask {
-                    await CLIExecutableRefreshContext.$generation.withValue(executableRefreshGeneration) {
-                        for provider in lane {
-                            continuation.yield((provider.accountKey, await provider.fetchResult()))
-                        }
-                    }
-                }
-            }
-            for provider in concurrentProviders {
-                group.addTask {
-                    continuation.yield((provider.accountKey, await provider.fetchResult()))
-                }
-            }
-            var iterator = stream.makeAsyncIterator()
-            for _ in candidates {
-                guard let (key, result) = await iterator.next() else { break }
-                let notifiesSetup = result.capability == nil || result.capability == .available
-                if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup,
-                               attachmentGeneration: fetchAttachments[key]),
-                   let capability = result.capability {
-                    // Serial CLI lanes are ordered observations. Keep the newest
-                    // provider-wide result so a recovered later account can clear an
-                    // earlier path miss from the same refresh cycle.
-                    capabilityResults[key.providerID] = capability
-                }
-            }
-            await group.waitForAll()
-        }
-        continuation.finish()
-        for (providerID, capability) in capabilityResults {
-            applyCapability(capability, for: providerID, generation: capabilityCycle[providerID])
-        }
-        if exportAfter {
-            exportWidgetSnapshot()
-            exportPhoneSyncSnapshot()
-        }
+        if pollCadences != next { pollCadences = next }
+    }
+
+    private func recomputeRefreshing() {
+        let next = userWorkPending || apiSpendUserRefreshDepth > 0
+        if isRefreshing != next { isRefreshing = next }
     }
 
     private func refreshAPISpend(exportAfter: Bool = true) async {
@@ -743,74 +714,6 @@ public final class UsageStore {
         if exportAfter {
             exportWidgetSnapshot()
             exportPhoneSyncSnapshot()
-        }
-    }
-
-    /// Timer backoff for never-signed-in non-primary accounts: each one costs a full
-    /// 20–30s Claude CLI session per probe, so an abandoned Add Account must not burn
-    /// a session every cycle forever. Probed every 4th timer cycle; manual refreshes
-    /// and the per-account retry path always probe. Whichever row the user selected
-    /// as primary is exempt so its compact surfaces recover promptly.
-    private func shouldSkipOnTimer(provider: any UsageProvider, source: RefreshSource) -> Bool {
-        guard source == .timer else { return false }
-        return Self.shouldBackOffNeverSignedInAccount(
-            provider.accountKey,
-            primary: primaryAccount(for: provider.id)?.key,
-            timerCycle: timerCycleCount,
-            freshness: snapshots[provider.accountKey]?.freshness
-        )
-    }
-
-    static func shouldBackOffNeverSignedInAccount(
-        _ key: AccountKey,
-        primary: AccountKey?,
-        timerCycle: Int,
-        freshness: Freshness?
-    ) -> Bool {
-        guard key != primary,
-              case .stale(let reason) = freshness,
-              isNeverSignedIn(reason)
-        else { return false }
-        return timerCycle % 4 != 0
-    }
-
-    private static func isNeverSignedIn(_ reason: FailureReason) -> Bool {
-        if case .notLoggedIn = reason { return true }
-        guard case .providerSetup(let outcome) = reason else { return false }
-        return outcome.isNeverSignedIn
-    }
-
-    private func fetchAccountIfEligible(_ key: AccountKey) async {
-        guard let provider = providers.first(where: { $0.accountKey == key }),
-              accounts(for: key.providerID).contains(where: { $0.key == key }),
-              !removingAccounts.contains(key),
-              let surface = UsageSurface.subscription(for: key.providerID),
-              enabledSurfaces.contains(surface)
-        else { return }
-        let capabilityCycle = beginCapabilityRefresh(for: [provider])
-        let fetchAttachment = attachmentGenerations[key] ?? 0
-        let executableRefreshGeneration = CLIExecutableRefreshContext.generation ?? UUID()
-        let result = await CLIExecutableRefreshContext.$generation.withValue(executableRefreshGeneration) {
-            await provider.fetchResult()
-        }
-        let notifiesSetup = result.capability == nil || result.capability == .available
-        if mergeResult(key: key, result: result, notifiesSetup: notifiesSetup,
-                       attachmentGeneration: fetchAttachment),
-           let capability = result.capability {
-            applyCapability(capability, for: key.providerID, generation: capabilityCycle[key.providerID])
-        }
-        exportWidgetSnapshot()
-        exportPhoneSyncSnapshot()
-    }
-
-    private func drainPendingAccountRefreshes() async {
-        while !pendingAccountRefreshes.isEmpty {
-            let keys = pendingAccountRefreshes.sorted {
-                if $0.providerID.raw == $1.providerID.raw { return $0.accountID.raw < $1.accountID.raw }
-                return $0.providerID.raw < $1.providerID.raw
-            }
-            pendingAccountRefreshes.removeAll()
-            for key in keys { await fetchAccountIfEligible(key) }
         }
     }
 
@@ -1133,5 +1036,84 @@ private extension Array where Element: Hashable {
     func uniqued() -> [Element] {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
+    }
+}
+
+// MARK: - Scheduler host (KTD1)
+
+extension UsageStore: AccountProbeSchedulerHost {
+    var schedulerNow: Date { now() }
+
+    var schedulerChosenInterval: TimeInterval {
+        LaneSchedule.chosenInterval(minutes: preferences.pollIntervalMinutes)
+    }
+
+    func schedulerProvider(for key: AccountKey) -> (any UsageProvider)? {
+        providers.first(where: { $0.accountKey == key })
+    }
+
+    func schedulerIsEligible(_ key: AccountKey) -> Bool {
+        guard accounts(for: key.providerID).contains(where: { $0.key == key }),
+              !removingAccounts.contains(key),
+              let surface = UsageSurface.subscription(for: key.providerID)
+        else { return false }
+        return enabledSurfaces.contains(surface)
+    }
+
+    func schedulerIsPrimary(_ key: AccountKey) -> Bool {
+        primaryAccount(for: key.providerID)?.key == key
+    }
+
+    func schedulerFreshness(for key: AccountKey) -> Freshness? {
+        snapshots[key]?.freshness
+    }
+
+    /// R2M3 per account: the earliest live reset deadline on this account's own windows
+    /// later than `reference` (its last attempt). `.unavailable` rows are excluded — their
+    /// retained deadline is no longer evidence of anything on screen.
+    func schedulerResetDeadline(for key: AccountKey, after reference: Date) -> Date? {
+        snapshots[key]?.windows
+            .filter { !$0.freshness.isUnavailable }
+            .compactMap(\.resetSchedule.deadline)
+            .filter { $0 > reference }
+            .min()
+    }
+
+    func schedulerAttachmentGeneration(for key: AccountKey) -> UInt64 {
+        attachmentGenerations[key] ?? 0
+    }
+
+    func schedulerBeginCapabilityRefresh(for providers: [any UsageProvider]) -> [ProviderID: UInt64] {
+        beginCapabilityRefresh(for: providers)
+    }
+
+    func schedulerApplyCapability(_ state: ProviderCapabilityState, for providerID: ProviderID, generation: UInt64?) {
+        applyCapability(state, for: providerID, generation: generation)
+    }
+
+    func schedulerMerge(key: AccountKey, result: UsageProviderFetchResult, attachmentGeneration: UInt64) -> Bool {
+        let notifiesSetup = result.capability == nil || result.capability == .available
+        let accepted = mergeResult(
+            key: key, result: result, notifiesSetup: notifiesSetup, attachmentGeneration: attachmentGeneration
+        )
+        // KTD9 / R19: compact surfaces mirror the primary, so its merge exports at once
+        // instead of waiting for every extra in the lane. A full refresh exports once at
+        // its end instead.
+        if accepted, fullRefreshDepth == 0, primaryKey(for: key.providerID) == key {
+            exportWidgetSnapshot()
+            exportPhoneSyncSnapshot()
+        }
+        return accepted
+    }
+
+    func schedulerLaneDidGoIdle(_ lane: ProviderPollingLane) {
+        refreshPollCadences()
+        // KTD6: the next sleep is computed from the pass's new due times.
+        engine?.rephase()
+    }
+
+    func schedulerUserWorkDidChange(hasPending: Bool) {
+        userWorkPending = hasPending
+        recomputeRefreshing()
     }
 }

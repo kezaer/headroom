@@ -71,7 +71,8 @@ struct AccountsSettingsTile: View {
     /// re-reads every account's `.claude.json`.
     let duplicateLoginLabels: [AccountKey: String]
     /// R9: the provider group headers own the subscription switches, so the tile needs the
-    /// root's surface binding (set + animate + `refreshNow()`) rather than a local toggle.
+    /// root's surface binding (set + animate + provider-scoped due dispatch, KTD11) rather
+    /// than a local toggle.
     let surfaceBinding: (UsageSurface) -> Binding<Bool>
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -229,7 +230,7 @@ struct AccountsSettingsTile: View {
                     // while Add Account is disabled.
                     let usedSlots = accounts.count
                         + (store.isBuiltInTrackingStopped(for: providerID) ? 1 : 0)
-                    Text("\(usedSlots) of \(capacity)")
+                    Text(AccountsSettingsInteractions.accountCounterText(usedSlots: usedSlots, capacity: capacity))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

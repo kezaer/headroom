@@ -331,3 +331,57 @@ extension UsageSnapshot {
         UsageSnapshot(providerID: id, windows: windows, planLabel: plan, capturedAt: at, freshness: .live)
     }
 }
+
+/// One-shot suspend gate for provider doubles: `suspendNextFetch()` holds the next fetch
+/// open until `release()`, and `waitUntilStarted()` lets a test observe that fetch begin.
+/// Providers call `enter()` at the top of each fetch. One waiter at a time: a second
+/// concurrent `waitUntilStarted()` would replace the first.
+final class FetchGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var suspendNext = false
+    private var didStart = false
+    private var started: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+    private var shouldRelease = false
+
+    func suspendNextFetch() {
+        lock.withLock { suspendNext = true; shouldRelease = false; didStart = false }
+    }
+
+    func waitUntilStarted() async {
+        if lock.withLock({ didStart }) { return }
+        await withCheckedContinuation { continuation in
+            var resumeNow = false
+            lock.withLock { if didStart { resumeNow = true } else { started = continuation } }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            shouldRelease = true
+            let pending = release
+            release = nil
+            return pending
+        }
+        pending?.resume()
+    }
+
+    func enter() async {
+        let (suspend, started) = lock.withLock { () -> (Bool, CheckedContinuation<Void, Never>?) in
+            didStart = true
+            let pending = self.started
+            self.started = nil
+            let suspend = suspendNext
+            suspendNext = false
+            return (suspend, pending)
+        }
+        started?.resume()
+        guard suspend, !lock.withLock({ shouldRelease }) else { return }
+        await withCheckedContinuation { continuation in
+            var resumeNow = false
+            lock.withLock { if shouldRelease { resumeNow = true } else { release = continuation } }
+            if resumeNow { continuation.resume() }
+        }
+    }
+}

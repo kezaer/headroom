@@ -17,7 +17,7 @@ private struct AccountStubProvider: UsageProvider {
         accountID: AccountID,
         displayName: String,
         snapshot: UsageSnapshot,
-        accountCapacity: Int = AccountRegistry.maxPerProvider,
+        accountCapacity: Int = AccountRegistry.testedEnvelope,
         reportsProviderCapability: Bool = false,
         capability: ProviderCapabilityState = .available
     ) {
@@ -236,14 +236,15 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         #expect(registry.accounts(for: .claude).map(\.label) == ["Main", "Account 2", "Account 3"])
     }
 
-    @Test func capsAtFivePerProviderIndependently() {
+    @Test func capsAtTheProviderCapacityIndependently() {
+        // KTD10: the registry enforces whatever capacity the provider passes.
         let registry = AccountRegistry(defaults: freshDefaults())
-        for _ in 0..<4 { #expect(registry.addAccount(for: .claude) != nil) }
-        #expect(!registry.canAddAccount(for: .claude))
-        #expect(registry.addAccount(for: .claude) == nil)
+        for _ in 0..<4 { #expect(registry.addAccount(for: .claude, capacity: 5) != nil) }
+        #expect(!registry.canAddAccount(for: .claude, capacity: 5))
+        #expect(registry.addAccount(for: .claude, capacity: 5) == nil)
         // The Codex cap is its own budget.
-        #expect(registry.canAddAccount(for: .codex))
-        #expect(registry.addAccount(for: .codex) != nil)
+        #expect(registry.canAddAccount(for: .codex, capacity: 5))
+        #expect(registry.addAccount(for: .codex, capacity: 5) != nil)
     }
 
     @Test func renamePersistsAndTrims() {
@@ -359,13 +360,13 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
 
     @Test func hiddenBuiltInStillCountsTowardCap() {
         let registry = AccountRegistry(defaults: freshDefaults())
-        for _ in 0..<4 { #expect(registry.addAccount(for: .claude) != nil) }
+        for _ in 0..<4 { #expect(registry.addAccount(for: .claude, capacity: 5) != nil) }
         #expect(registry.stopTrackingBuiltIn(for: .claude))
         // The hidden built-in keeps its slot so resuming can never overflow the cap.
-        #expect(!registry.canAddAccount(for: .claude))
-        #expect(registry.addAccount(for: .claude) == nil)
+        #expect(!registry.canAddAccount(for: .claude, capacity: 5))
+        #expect(registry.addAccount(for: .claude, capacity: 5) == nil)
         #expect(registry.resumeTrackingBuiltIn(for: .claude))
-        #expect(registry.accounts(for: .claude).count == 5)
+        #expect(registry.accounts(for: .claude, capacity: 5).count == 5)
     }
 
     @Test func tombstoneIsPerProvider() {
@@ -415,11 +416,11 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
     @Test func primaryPointerDoesNotChangeCapacityAndCannotPromoteUnknownAccount() throws {
         let registry = AccountRegistry(defaults: freshDefaults())
         var last: ProviderAccount?
-        for _ in 0..<4 { last = registry.addAccount(for: .claude) }
+        for _ in 0..<4 { last = registry.addAccount(for: .claude, capacity: 5) }
         let promoted = try #require(last)
 
         #expect(registry.promote(promoted.key))
-        #expect(!registry.canAddAccount(for: .claude))
+        #expect(!registry.canAddAccount(for: .claude, capacity: 5))
         #expect(!registry.promote(AccountKey(providerID: .claude, accountID: AccountID("missing"))))
     }
 
@@ -732,23 +733,22 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         for _ in 0..<5 { await Task.yield() }
     }
 
-    @Test func timerBackoffFollowsPrimaryPositionInsteadOfBuiltInIdentity() {
-        let neverSignedIn = Freshness.stale(.notLoggedIn("sign in"))
-        let builtIn = AccountKey(providerID: .claude, accountID: .primary)
-        let promoted = AccountKey(providerID: .claude, accountID: AccountID("work"))
-
-        #expect(!UsageStore.shouldBackOffNeverSignedInAccount(
-            promoted,
-            primary: promoted,
-            timerCycle: 1,
-            freshness: neverSignedIn
-        ))
-        #expect(UsageStore.shouldBackOffNeverSignedInAccount(
-            builtIn,
-            primary: promoted,
-            timerCycle: 1,
-            freshness: neverSignedIn
-        ))
+    @Test func neverSignedInExemptionFollowsPrimaryPositionInsteadOfBuiltInIdentity() {
+        // KTD5 (2026-09-19 polling plan): the four-interval wait keys off whichever row is
+        // the selected primary, not the built-in identity, so a promoted extra stays on
+        // cadence while the demoted built-in waits.
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let chosen: TimeInterval = 5 * 60
+        let builtIn = LaneSchedule.AccountRecord(
+            key: AccountKey(providerID: .claude, accountID: .primary),
+            isPrimary: false, lastAttempt: now, isNeverSignedIn: true, forcedDue: false
+        )
+        let promoted = LaneSchedule.AccountRecord(
+            key: AccountKey(providerID: .claude, accountID: AccountID("work")),
+            isPrimary: true, lastAttempt: now, isNeverSignedIn: true, forcedDue: false
+        )
+        #expect(LaneSchedule.nextDue(for: promoted, chosen: chosen, effective: chosen) == now.addingTimeInterval(chosen))
+        #expect(LaneSchedule.nextDue(for: builtIn, chosen: chosen, effective: chosen) == now.addingTimeInterval(4 * chosen))
     }
 
     @Test func anyAccountNeedingReauthFlagsMenuBarAttention() async {
@@ -1622,8 +1622,9 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         primary.releaseFetches()
         await fleet.value
 
-        // One fleet fetch plus one deduplicated queued setup check.
-        #expect(extra.fetchCount == 2)
+        // KTD7: the coalesced priority request is served first and consumes the fleet's due
+        // mark, so one fetch answers the fleet and both setup checks.
+        #expect(extra.fetchCount == 1)
     }
 
     @Test func removingAccountDuringFleetRefreshDoesNotStrandCapabilityDiscovery() async {

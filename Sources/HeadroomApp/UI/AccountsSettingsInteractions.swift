@@ -226,7 +226,10 @@ enum AccountsSettingsInteractions {
         isSurfaceEnabled: Bool
     ) -> AddAccountActionState {
         guard hasFreeAccountSlot else {
-            return .disabled(help: "Up to \(capacity) accounts per provider")
+            // A single-account provider (Cursor) is a design bound, not a tested envelope.
+            return .disabled(help: capacity <= 1
+                ? "\(providerDisplayName) supports one account"
+                : "Tested up to \(capacity) accounts per provider")
         }
         guard isSurfaceEnabled else {
             // PB9: no full stop — the other two tooltips in this very function have none, and
@@ -234,6 +237,13 @@ enum AccountsSettingsInteractions {
             return .disabled(help: "Turn \(providerDisplayName) on to add an account")
         }
         return .enabled(help: "Sign in another account via the official CLI")
+    }
+
+    /// R15 (2026-09-19 polling plan): the header counter reads as a tested envelope, not a
+    /// product limit, once a provider reaches it.
+    nonisolated static func accountCounterText(usedSlots: Int, capacity: Int) -> String {
+        if capacity <= 1 { return "Single account" }
+        return usedSlots >= capacity ? "Tested up to \(capacity)" : "\(usedSlots) of \(capacity)"
     }
 
     /// R12: leaving Accounts (pane switch or window close) must not silently discard a
