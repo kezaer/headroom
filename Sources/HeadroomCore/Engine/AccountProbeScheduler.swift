@@ -168,8 +168,14 @@ final class AccountProbeScheduler {
     // MARK: Cadence readouts (KTD4, KTD12)
 
     func effectiveInterval(for lane: ProviderPollingLane, chosen: TimeInterval) -> TimeInterval {
+        effectiveInterval(in: lane, records: liveRecords(in: lane), chosen: chosen)
+    }
+
+    private func effectiveInterval(
+        in lane: ProviderPollingLane, records: [LaneSchedule.AccountRecord], chosen: TimeInterval
+    ) -> TimeInterval {
         guard case .serial = lane else { return chosen }
-        let gaps = liveRecords(in: lane).filter(\.isOnCadence).compactMap(\.attemptGap)
+        let gaps = records.filter(\.isOnCadence).compactMap(\.attemptGap)
         return LaneSchedule.effectiveInterval(chosen: chosen, attemptGaps: gaps)
     }
 
@@ -191,8 +197,9 @@ final class AccountProbeScheduler {
         let chosen = host.schedulerChosenInterval
         var candidates: [Date] = []
         for (lane, state) in lanes where !state.draining && state.inFlight.isEmpty {
-            let effective = effectiveInterval(for: lane, chosen: chosen)
-            let dueDates = liveRecords(in: lane).map { LaneSchedule.nextDue(for: $0, chosen: chosen, effective: effective) }
+            let records = liveRecords(in: lane)
+            let effective = effectiveInterval(in: lane, records: records, chosen: chosen)
+            let dueDates = records.map { LaneSchedule.nextDue(for: $0, chosen: chosen, effective: effective) }
             guard var earliest = dueDates.min() else { continue }
             if case .serial = lane,
                let reopens = LaneSchedule.budgetReopens(log: state.log, now: now, chosen: chosen) {
@@ -206,14 +213,7 @@ final class AccountProbeScheduler {
     // MARK: Lane passes
 
     private func startSerialPassIfNeeded(_ lane: ProviderPollingLane) {
-        guard let host, let state = lanes[lane], !state.draining else { return }
-        let now = host.schedulerNow
-        let chosen = host.schedulerChosenInterval
-        let effective = effectiveInterval(for: lane, chosen: chosen)
-        guard LaneSchedule.nextAccount(
-            records: gatedCandidates(in: lane, log: state.log, now: now, chosen: chosen),
-            priority: state.priority, now: now, chosen: chosen, effective: effective
-        ) != nil else { return }
+        guard let state = lanes[lane], !state.draining, nextSerialKey(in: lane) != nil else { return }
         lanes[lane]?.draining = true
         Task { @MainActor [weak self] in
             await self?.runSerialPass(lane)
@@ -229,17 +229,8 @@ final class AccountProbeScheduler {
         lanes[lane]?.passCapability = host.schedulerBeginCapabilityRefresh(for: providers)
         lanes[lane]?.newestCapability = [:]
 
-        while let host = self.host, let state = lanes[lane] {
-            let now = host.schedulerNow
-            let chosen = host.schedulerChosenInterval
-            let effective = effectiveInterval(for: lane, chosen: chosen)
-            // R8: timer work waits for the budget; user work never does, so a closed gate
-            // narrows the candidates to user requests instead of ending the pass.
-            guard let key = LaneSchedule.nextAccount(
-                records: gatedCandidates(in: lane, log: state.log, now: now, chosen: chosen),
-                priority: state.priority, now: now, chosen: chosen, effective: effective
-            ) else { break }
-            let isPriority = state.priority.contains(key)
+        while let key = nextSerialKey(in: lane) {
+            let isPriority = lanes[lane]?.priority.contains(key) == true
             lanes[lane]?.priority.removeAll { $0 == key }
             await probe(
                 key,
@@ -274,11 +265,14 @@ final class AccountProbeScheduler {
         if let providerID { records = records.filter { $0.key.providerID == providerID } }
         let due = LaneSchedule.dueAccounts(
             records: records, priority: state.priority, now: now, chosen: chosen, effective: chosen
-        )
-        for key in due where !state.inFlight.contains(key) {
+        ).filter { !state.inFlight.contains($0) }
+        guard !due.isEmpty else { return }
+        // One capability generation per batch, as the serial pass does: a per-account cycle
+        // would leave only the last-dispatched probe's verdict matching its generation.
+        let cycle = host.schedulerBeginCapabilityRefresh(for: due.compactMap { host.schedulerProvider(for: $0) })
+        for key in due {
             lanes[lane]?.priority.removeAll { $0 == key }
-            guard let provider = host.schedulerProvider(for: key) else { continue }
-            let cycle = host.schedulerBeginCapabilityRefresh(for: [provider])
+            guard host.schedulerProvider(for: key) != nil else { continue }
             lanes[lane]?.inFlight.insert(key)
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -364,15 +358,25 @@ final class AccountProbeScheduler {
         }
     }
 
-    private func gatedCandidates(
-        in lane: ProviderPollingLane,
-        log: [LaneSchedule.ProbeSpan],
-        now: Date,
-        chosen: TimeInterval
-    ) -> [LaneSchedule.AccountRecord] {
+    /// The account a serial lane probes next, or nil when nothing may start. One live read
+    /// of the lane feeds both the effective-interval readout and the gated candidates.
+    /// R8: timer work waits for the budget; user work never does, so a closed gate narrows
+    /// the candidates to user requests instead of ending the pass.
+    private func nextSerialKey(in lane: ProviderPollingLane) -> AccountKey? {
+        guard let host, let state = lanes[lane] else { return nil }
+        let now = host.schedulerNow
+        let chosen = host.schedulerChosenInterval
         let records = liveRecords(in: lane)
-        if LaneSchedule.mayStartTimerProbe(log: log, now: now, chosen: chosen) { return records }
-        return records.filter { userPending.contains($0.key) }
+        let candidates = LaneSchedule.mayStartTimerProbe(log: state.log, now: now, chosen: chosen)
+            ? records
+            : records.filter { userPending.contains($0.key) }
+        return LaneSchedule.nextAccount(
+            records: candidates,
+            priority: state.priority,
+            now: now,
+            chosen: chosen,
+            effective: effectiveInterval(in: lane, records: records, chosen: chosen)
+        )
     }
 
     private func notifyIdleWaitersIfNeeded() {

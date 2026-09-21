@@ -9,50 +9,6 @@ struct PollPhasingTests {
     private let now = Date(timeIntervalSince1970: 2_000_000_000)
     private let interval: TimeInterval = 5 * 60
 
-    @Test func noDeadlineSleepsAFullInterval() {
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: nil, now: now
-        ) == interval)
-    }
-
-    @Test func deadlineInsideTheIntervalMovesThePollToJustAfterIt() {
-        let deadline = now.addingTimeInterval(3 * 60)
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: deadline, now: now
-        ) == 3 * 60 + PollPhasing.postResetGrace)
-    }
-
-    @Test func deadlineOutsideTheIntervalLeavesTheFixedTickAlone() {
-        // Later than this interval: a subsequent cycle phases itself onto it.
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: now.addingTimeInterval(interval + 1), now: now
-        ) == interval)
-        // Already behind us: the poll we're waiting on answers it.
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: now.addingTimeInterval(-30), now: now
-        ) == interval)
-    }
-
-    @Test func aDeadlineNearTheEndOfTheIntervalIsStillWorthWaitingFor() {
-        // Overshooting the fixed tick by the grace period is the point: polling 15s *before*
-        // the reset would just re-read the pre-reset number.
-        let deadline = now.addingTimeInterval(interval - 15)
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: deadline, now: now
-        ) == interval - 15 + PollPhasing.postResetGrace)
-    }
-
-    @Test func anImminentDeadlineNeverPollsBelowTheEnforcedFloor() {
-        let floor = Double(Preferences.minimumIntervalMinutes) * 60
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: now.addingTimeInterval(10), now: now
-        ) == floor)
-        // And the interval itself still clamps to the floor when a preference undercuts it.
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 1, nextDeadline: nil, now: now
-        ) == floor)
-    }
-
     @Test func popoverOpenGateComparesTheOldestLiveCaptureToTheInterval() {
         // Nothing live: no capture to freshen, and probing on every open would burn a CLI
         // session per open.
@@ -127,7 +83,6 @@ struct PollPhasingStoreTests {
 
         await store.start()
 
-        #expect(store.nextTrackedResetDeadline() == deadline)
         #expect(store.engine?.secondsUntilNextPoll == 2 * 60 + 40 + PollPhasing.postResetGrace)
     }
 
@@ -158,13 +113,10 @@ struct PollPhasingStoreTests {
         )
         let store = UsageStore(providers: [provider], preferences: isolatedPreferences(), now: clock.now)
 
-        await store.refreshAll()
+        await store.start()
 
-        #expect(store.nextTrackedResetDeadline() == start.addingTimeInterval(4 * 3_600))
         // Four hours out is past this interval, so the fixed tick stands.
-        #expect(PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: 5, nextDeadline: store.nextTrackedResetDeadline(), now: start
-        ) == 5 * 60)
+        #expect(store.engine?.secondsUntilNextPoll == 5 * 60)
     }
 
     @Test func theEngineWakesForTheEarliestDueAccountInAnIdleLane() async {
@@ -265,55 +217,16 @@ private final class SuspendableClockedProvider: UsageProvider, @unchecked Sendab
     let displayName = "Claude"
     let pollingLane: ProviderPollingLane = .serial("claude-cli")
     private let clock: MutableDateSource
-    private let lock = NSLock()
-    private var suspendNext = false
-    private var didStart = false
-    private var started: CheckedContinuation<Void, Never>?
-    private var release: CheckedContinuation<Void, Never>?
-    private var shouldRelease = false
+    private let gate = FetchGate()
 
     init(clock: MutableDateSource) { self.clock = clock }
 
-    func suspendNextFetch() {
-        lock.withLock { suspendNext = true; shouldRelease = false; didStart = false }
-    }
-
-    func waitUntilStarted() async {
-        if lock.withLock({ didStart }) { return }
-        await withCheckedContinuation { continuation in
-            var resumeNow = false
-            lock.withLock { if didStart { resumeNow = true } else { started = continuation } }
-            if resumeNow { continuation.resume() }
-        }
-    }
-
-    func release() {
-        let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-            shouldRelease = true
-            let pending = release
-            release = nil
-            return pending
-        }
-        pending?.resume()
-    }
+    func suspendNextFetch() { gate.suspendNextFetch() }
+    func waitUntilStarted() async { await gate.waitUntilStarted() }
+    func release() { gate.release() }
 
     func fetchSnapshot() async -> UsageSnapshot {
-        let (suspend, started) = lock.withLock { () -> (Bool, CheckedContinuation<Void, Never>?) in
-            didStart = true
-            let pending = self.started
-            self.started = nil
-            let suspend = suspendNext
-            suspendNext = false
-            return (suspend, pending)
-        }
-        started?.resume()
-        if suspend, !lock.withLock({ shouldRelease }) {
-            await withCheckedContinuation { continuation in
-                var resumeNow = false
-                lock.withLock { if shouldRelease { resumeNow = true } else { release = continuation } }
-                if resumeNow { continuation.resume() }
-            }
-        }
+        await gate.enter()
         return UsageSnapshot(
             providerID: id,
             windows: [UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: clock.now().addingTimeInterval(3_600))],

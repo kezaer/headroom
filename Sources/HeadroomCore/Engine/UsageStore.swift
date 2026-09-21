@@ -394,22 +394,6 @@ public final class UsageStore {
         return now.timeIntervalSince(oldestLiveCapture) >= interval
     }
 
-    /// R2M3: earliest reset deadline still ahead of us across every tracked window of an
-    /// enabled provider. `.unavailable` rows are excluded — their retained deadline is no
-    /// longer evidence of anything on screen.
-    func nextTrackedResetDeadline(now referenceDate: Date? = nil) -> Date? {
-        let reference = referenceDate ?? now()
-        let enabled = Set(providerOrder)
-        return snapshots
-            .filter { enabled.contains($0.key.providerID) }
-            .values
-            .flatMap(\.windows)
-            .filter { !$0.freshness.isUnavailable }
-            .compactMap(\.resetSchedule.deadline)
-            .filter { $0 > reference }
-            .min()
-    }
-
     /// Refresh only API spend providers. Settings uses this for spend-only controls so
     /// a checkbox click doesn't spawn the expensive Claude subscription CLI probe.
     public func refreshAPISpendNow() {

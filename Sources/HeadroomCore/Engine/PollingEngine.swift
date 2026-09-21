@@ -1,32 +1,12 @@
 import Foundation
 
-/// R2M3: pure cadence arithmetic for the polling loop. Kept out of `PollingEngine` so the
-/// wake-time decision is testable without a clock.
+/// R2M3: the reset-phasing constant shared by `LaneSchedule.nextDue`, which now owns the
+/// per-account wake arithmetic.
 public enum PollPhasing {
     /// How long after a window's reset deadline the phased poll wakes. Enough slack for the
     /// provider's own bookkeeping to roll over before we ask, short enough that the user sees
     /// the refill rather than a wrong number.
     public static let postResetGrace: TimeInterval = 30
-
-    /// Seconds to sleep before the next poll. Normally one full interval; when a tracked
-    /// window's reset deadline lands *inside* that interval the same poll is moved to just
-    /// after the deadline. This never adds a poll and never raises the cadence beyond the
-    /// enforced interval floor (AGENTS.md's cost warning) — it only changes when the one
-    /// scheduled poll happens.
-    public static func secondsUntilNextPoll(
-        intervalMinutes: Int,
-        nextDeadline: Date?,
-        now: Date
-    ) -> TimeInterval {
-        let interval = Double(PollingEngine.clampedIntervalMinutes(intervalMinutes)) * 60
-        let floor = Double(Preferences.minimumIntervalMinutes) * 60
-        guard let nextDeadline else { return interval }
-        let untilDeadline = nextDeadline.timeIntervalSince(now)
-        // A deadline further out than this interval is answered by a later cycle's own
-        // phasing; one already behind us is answered by the poll we're waiting on.
-        guard untilDeadline > 0, untilDeadline <= interval else { return interval }
-        return max(floor, untilDeadline + postResetGrace)
-    }
 }
 
 /// Wake loop for the per-account scheduler (U6; KTD6 of the 2026-09-19 polling plan).

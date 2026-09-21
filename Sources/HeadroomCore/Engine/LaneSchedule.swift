@@ -2,8 +2,7 @@ import Foundation
 
 /// Pure scheduling decisions for per-account polling (2026-09-19 polling plan, KTD1).
 /// Every function takes an explicit `now` and the records it decides over, so the
-/// choices are unit-testable without a store, a clock, or a CLI — the same shape as
-/// `PollPhasing.secondsUntilNextPoll`.
+/// choices are unit-testable without a store, a clock, or a CLI.
 ///
 /// The scheduler owns its own attempt clock (KTD3): a failed probe deliberately keeps
 /// the prior `UsageSnapshot.capturedAt`, so capture time can never stand in for "when
@@ -91,7 +90,7 @@ public enum LaneSchedule {
     // MARK: Intervals
 
     public static func chosenInterval(minutes: Int) -> TimeInterval {
-        Double(max(Preferences.minimumIntervalMinutes, minutes)) * 60
+        Double(PollingEngine.clampedIntervalMinutes(minutes)) * 60
     }
 
     /// The smallest spacing two attempts of one account may ever have (R20).

@@ -328,13 +328,7 @@ struct SettingsView: View {
                     // accounts. A full `refreshNow()` here marked every other provider's
                     // accounts due too, which at the account envelope is the very sweep the
                     // per-account scheduler removes.
-                    if let providerID = store.registeredProviderOrder.first(where: {
-                        UsageSurface.subscription(for: $0) == surface
-                    }) {
-                        store.dispatchDueNow(for: providerID)
-                    } else {
-                        store.dispatchDueNow()
-                    }
+                    store.dispatchDueNow(for: surface.providerID)
                 } else {
                     store.refreshAPISpendNow()
                 }

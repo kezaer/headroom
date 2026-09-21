@@ -299,13 +299,9 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
     let reportsProviderCapability: Bool
     private let result: @Sendable () -> UsageProviderFetchResult
     private let order: ProbeOrder
+    private let gate = FetchGate()
     private let lock = NSLock()
     private var count = 0
-    private var suspendNext = false
-    private var started: CheckedContinuation<Void, Never>?
-    private var didStart = false
-    private var release: CheckedContinuation<Void, Never>?
-    private var shouldRelease = false
 
     init(
         id: ProviderID,
@@ -327,62 +323,16 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
     var fetchCount: Int { lock.withLock { count } }
 
     /// The next fetch blocks until `release()`.
-    func suspendNextFetch() {
-        lock.withLock {
-            suspendNext = true
-            shouldRelease = false
-            didStart = false
-        }
-    }
-
-    func waitUntilStarted() async {
-        let already = lock.withLock { didStart }
-        if already { return }
-        await withCheckedContinuation { continuation in
-            var resumeNow = false
-            lock.withLock {
-                if didStart { resumeNow = true } else { started = continuation }
-            }
-            if resumeNow { continuation.resume() }
-        }
-    }
-
-    func release() {
-        let continuation = lock.withLock {
-            shouldRelease = true
-            let pending = release
-            release = nil
-            return pending
-        }
-        continuation?.resume()
-    }
+    func suspendNextFetch() { gate.suspendNextFetch() }
+    func waitUntilStarted() async { await gate.waitUntilStarted() }
+    func release() { gate.release() }
 
     func fetchSnapshot() async -> UsageSnapshot { await fetchResult().snapshot }
 
     func fetchResult() async -> UsageProviderFetchResult {
-        let (suspend, started) = lock.withLock {
-            count += 1
-            didStart = true
-            let pending = self.started
-            self.started = nil
-            let suspend = suspendNext
-            suspendNext = false
-            return (suspend, pending)
-        }
+        lock.withLock { count += 1 }
         order.record(accountKey)
-        started?.resume()
-        if suspend {
-            let released = lock.withLock { shouldRelease }
-            if !released {
-                await withCheckedContinuation { continuation in
-                    var resumeNow = false
-                    lock.withLock {
-                        if shouldRelease { resumeNow = true } else { release = continuation }
-                    }
-                    if resumeNow { continuation.resume() }
-                }
-            }
-        }
+        await gate.enter()
         return result()
     }
 }
