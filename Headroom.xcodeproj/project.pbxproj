@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1711C6BE55754C6C8AF36E35 /* AccountProbeScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDBA66066AC0533BDE7A514F /* AccountProbeScheduler.swift */; };
 		003475AF90FE48BDC8A0142D /* HeadroomWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B44B488B5CC6B49C3A230DF0 /* HeadroomWidgetView.swift */; };
 		019741076E359239D592FBAA /* WidgetMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EC42D808487CA15143AB4C5 /* WidgetMetrics.swift */; };
 		01F5298BBF7958F27A848A8A /* Account.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E052D0EBE1013A87240C92E /* Account.swift */; };
@@ -58,6 +59,7 @@
 		3175D9971AAD03AE5A6592B6 /* WidgetMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EC42D808487CA15143AB4C5 /* WidgetMetrics.swift */; };
 		335F51D0ECC1A4D0C24EB985 /* UsageHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60C38BCE8D085D56EEC5C0A /* UsageHTTPClient.swift */; };
 		33D97E578C67DD091A65D977 /* HeadroomTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B6E320E9A4358094FFE458B /* HeadroomTheme.swift */; };
+		395A2972881DEA48917A43E5 /* LaneSchedule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C5C9BD300560DFCC096199F /* LaneSchedule.swift */; };
 		33F4E619E256E723243ED1B3 /* grok-dark.svg in Resources */ = {isa = PBXBuildFile; fileRef = CDC9199DC7DC96DF143A8480 /* grok-dark.svg */; };
 		351C19F8454F736D4E3EFE06 /* ProviderID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5E07A3442A2D67471E6CF8 /* ProviderID.swift */; };
 		36608F62A9E13ABAD0F755B8 /* HeadroomIOSWidgetEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9D8078325519503A5D0F657 /* HeadroomIOSWidgetEntry.swift */; };
@@ -321,6 +323,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0C5C9BD300560DFCC096199F /* LaneSchedule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaneSchedule.swift; sourceTree = "<group>"; };
 		011EA7A2C3C7BB00DFF35A3F /* ProviderTileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderTileView.swift; sourceTree = "<group>"; };
 		0627C951970F44087A8EE593 /* VesselMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VesselMark.swift; sourceTree = "<group>"; };
 		06F054A9662B9F4995B0CE81 /* SettingsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSidebar.swift; sourceTree = "<group>"; };
@@ -490,6 +493,7 @@
 		FA1963EC7952EDA22A6546BF /* WidgetSnapshotCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotCache.swift; sourceTree = "<group>"; };
 		FA51FBDBE0235A09EB8ED191 /* MeterStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeterStyle.swift; sourceTree = "<group>"; };
 		FA92E8BACE2BD0885BADAA2F /* RaisedTile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RaisedTile.swift; sourceTree = "<group>"; };
+		FDBA66066AC0533BDE7A514F /* AccountProbeScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountProbeScheduler.swift; sourceTree = "<group>"; };
 		FBD1B51EA4877966201E1485 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		FE86E3CAB67CDE46DF18E438 /* VesselGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VesselGlyph.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -610,6 +614,8 @@
 		528535290D07A3E62C48991B /* Engine */ = {
 			isa = PBXGroup;
 			children = (
+				FDBA66066AC0533BDE7A514F /* AccountProbeScheduler.swift */,
+				0C5C9BD300560DFCC096199F /* LaneSchedule.swift */,
 				432AF864130D5870A2FC78CF /* PollingEngine.swift */,
 				C40B2D2A8F7E2BCA4823C279 /* SetupSessionCoordinator.swift */,
 				0CE3E0A64B321BCD7FDD13A6 /* UsageContinuityCache.swift */,
@@ -1208,6 +1214,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1711C6BE55754C6C8AF36E35 /* AccountProbeScheduler.swift in Sources */,
 				C783F2F2706BC1861515E895 /* APISpendPresentation.swift in Sources */,
 				93E3DBA60325FA9BA3B897F0 /* APISpendProviders.swift in Sources */,
 				01F5298BBF7958F27A848A8A /* Account.swift in Sources */,
@@ -1246,6 +1253,7 @@
 				D4487583EBB5122570323276 /* IOSWidgetTimelineMapping.swift in Sources */,
 				26A70E96DCC281DF9BDD869A /* IdentityRowResolver.swift in Sources */,
 				95463E3DC5B6918C5EC2768C /* LargeWidgetDensity.swift in Sources */,
+				395A2972881DEA48917A43E5 /* LaneSchedule.swift in Sources */,
 				C7E68A38A0A0E0D2CDC8A213 /* LaunchAtLogin.swift in Sources */,
 				4A24CB563FBA33154A7C025E /* MenuBarLabelGeometry.swift in Sources */,
 				665DCA78AFDF861D24572C15 /* MenuBarPalette.swift in Sources */,

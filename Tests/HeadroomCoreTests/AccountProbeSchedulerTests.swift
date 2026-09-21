@@ -84,6 +84,53 @@ struct AccountProbeSchedulerTests {
         #expect(order.keys.count == 4)
     }
 
+    @Test func latestPriorityLocatorGenerationCrossesTheSchedulerTaskHop() async {
+        let order = ProbeOrder()
+        let generations = LocatorGenerationRecorder()
+        let lane = ProviderPollingLane.serial("claude-cli")
+        let extraID = AccountID("work")
+        let primary = LaneProbe(
+            id: .claude,
+            accountID: .primary,
+            lane: lane,
+            order: order,
+            result: { .init(snapshot: self.liveSnapshot(.claude)) }
+        )
+        primary.suspendNextFetch()
+        let extra = LaneProbe(
+            id: .claude,
+            accountID: extraID,
+            lane: lane,
+            order: order,
+            onFetch: { generations.record(CLIExecutableRefreshContext.generation) },
+            result: { .init(snapshot: self.liveSnapshot(.claude)) }
+        )
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: preferences(),
+            accounts: [
+                .builtIn(for: .claude),
+                ProviderAccount(id: extraID, providerID: .claude, label: "Work"),
+            ]
+        )
+
+        let fleet = Task { await store.refreshAll() }
+        await primary.waitUntilStarted()
+        let first = UUID()
+        let latest = UUID()
+        CLIExecutableRefreshContext.$generation.withValue(first) {
+            store.refreshAccountNow(extra.accountKey)
+        }
+        CLIExecutableRefreshContext.$generation.withValue(latest) {
+            store.refreshAccountNow(extra.accountKey)
+        }
+        primary.release()
+        await fleet.value
+
+        #expect(extra.fetchCount == 1)
+        #expect(generations.values == [latest])
+    }
+
     // MARK: Concurrent lane and backoff (AE8)
 
     @Test func codexAccountsFetchConcurrentlyAndOnlyTheFailingOneBacksOff() async {
@@ -134,6 +181,54 @@ struct AccountProbeSchedulerTests {
         #expect(failing.fetchCount == 2)
     }
 
+    @Test func priorityAtConcurrentDispatchBoundaryCoalescesWithTheDispatchedProbe() async {
+        let order = ProbeOrder()
+        let provider = LaneProbe(
+            id: .codex,
+            accountID: .primary,
+            lane: .concurrent,
+            order: order,
+            result: { .init(snapshot: self.liveSnapshot(.codex)) }
+        )
+        provider.suspendNextFetch()
+        let store = UsageStore(providers: [provider], preferences: preferences())
+
+        // Keep this sequence synchronous: dispatch has reserved the account, but its task
+        // has not started. A user request in this boundary must share that dispatched probe.
+        store.scheduler.markAllDue()
+        store.scheduler.dispatchDue()
+        store.scheduler.requestPriority(provider.accountKey)
+
+        await provider.waitUntilStarted()
+        provider.release()
+        await store.scheduler.waitUntilUserWorkDrains()
+        await store.scheduler.waitUntilLanesIdle()
+
+        #expect(provider.fetchCount == 1)
+    }
+
+    @Test func concurrentReservationClearsWhenTheAccountBecomesIneligibleBeforeTaskStart() async {
+        let order = ProbeOrder()
+        let provider = LaneProbe(
+            id: .codex,
+            accountID: .primary,
+            lane: .concurrent,
+            order: order,
+            result: { .init(snapshot: self.liveSnapshot(.codex)) }
+        )
+        let store = UsageStore(providers: [provider], preferences: preferences())
+
+        // Both calls stay on the main actor without suspension, so the surface turns off
+        // after dispatch reserves the key and before the scheduler task can start it.
+        store.scheduler.markAllDue()
+        store.scheduler.dispatchDue()
+        store.setSurfaceEnabled(false, for: .codexSubscription)
+        await store.scheduler.waitUntilLanesIdle()
+
+        #expect(provider.fetchCount == 0)
+        #expect(store.scheduler.allLanesIdle)
+    }
+
     @Test func neverSignedInExtraWaitsFourIntervalsWhileThePrimaryStaysOnCadence() async {
         let clock = MutableDateSource(t0)
         let order = ProbeOrder()
@@ -155,6 +250,7 @@ struct AccountProbeSchedulerTests {
         clock.set(t0.addingTimeInterval(5 * 60 + 1))
         store.dispatchDueNow()
         await settle { primary.fetchCount == 2 }
+        await store.scheduler.waitUntilLanesIdle()
         #expect(primary.fetchCount == 2)
         #expect(extra.fetchCount == 1)
 
@@ -162,12 +258,14 @@ struct AccountProbeSchedulerTests {
         clock.set(t0.addingTimeInterval(15 * 60 + 1))
         store.dispatchDueNow()
         await settle { primary.fetchCount == 3 }
+        await store.scheduler.waitUntilLanesIdle()
         #expect(primary.fetchCount == 3)
         #expect(extra.fetchCount == 1)
 
         clock.set(t0.addingTimeInterval(20 * 60 + 1))
         store.dispatchDueNow()
         await settle { extra.fetchCount == 2 }
+        await store.scheduler.waitUntilLanesIdle()
         #expect(extra.fetchCount == 2)
     }
 
@@ -442,6 +540,13 @@ final class ProbeOrder: @unchecked Sendable {
     func record(_ key: AccountKey) { lock.withLock { _keys.append(key) } }
 }
 
+final class LocatorGenerationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [UUID?] = []
+    var values: [UUID?] { lock.withLock { recorded } }
+    func record(_ generation: UUID?) { lock.withLock { recorded.append(generation) } }
+}
+
 /// Provider double for scheduler tests: a fixed lane, a result closure, a shared start
 /// order, and a one-shot suspend gate the test releases.
 final class LaneProbe: UsageProvider, @unchecked Sendable {
@@ -451,6 +556,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
     let pollingLane: ProviderPollingLane
     let reportsProviderCapability: Bool
     private let result: @Sendable () -> UsageProviderFetchResult
+    private let onFetch: @Sendable () -> Void
     private let order: ProbeOrder
     private let gate = FetchGate()
     private let lock = NSLock()
@@ -462,6 +568,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
         lane: ProviderPollingLane,
         order: ProbeOrder,
         reportsProviderCapability: Bool = false,
+        onFetch: @escaping @Sendable () -> Void = {},
         result: @escaping @Sendable () -> UsageProviderFetchResult
     ) {
         self.id = id
@@ -470,6 +577,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
         self.pollingLane = lane
         self.order = order
         self.reportsProviderCapability = reportsProviderCapability
+        self.onFetch = onFetch
         self.result = result
     }
 
@@ -485,6 +593,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
     func fetchResult() async -> UsageProviderFetchResult {
         lock.withLock { count += 1 }
         order.record(accountKey)
+        onFetch()
         await gate.enter()
         return result()
     }

@@ -123,7 +123,7 @@ struct PollPhasingStoreTests {
         await store.start()
 
         // Four hours out is past this interval, so the fixed tick stands.
-        #expect(store.engine?.secondsUntilNextPoll == 5 * 60)
+        #expect(abs((store.engine?.secondsUntilNextPoll ?? 0) - 5 * 60) < 0.001)
     }
 
     @Test func theEngineWakesForTheEarliestDueAccountInAnIdleLane() async {
@@ -162,7 +162,7 @@ struct PollPhasingStoreTests {
         await primary.waitUntilStarted()
 
         // The only lane is draining, so nothing shortens the sleep to one second.
-        #expect(store.engine?.secondsUntilNextPoll == 5 * 60)
+        #expect(abs((store.engine?.secondsUntilNextPoll ?? 0) - 5 * 60) < 0.001)
 
         primary.release()
         await settle { (store.engine?.startCount ?? 0) == startsAfterLaunch + 1 }

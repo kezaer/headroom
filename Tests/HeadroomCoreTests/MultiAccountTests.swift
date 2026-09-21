@@ -1599,11 +1599,10 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         })
     }
 
-    @Test func setupRefreshQueuedDuringFleetRefreshIsDeduplicatedAndDrained() async {
+    @Test func setupRefreshDuringFleetProbeCoalescesWithTheInFlightAccount() async {
         let primary = SuspendedAccountProvider(id: .claude, accountID: .primary)
         let extraID = AccountID("work")
         let extra = SuspendedAccountProvider(id: .claude, accountID: extraID)
-        extra.releaseFetches()
         let accounts: [ProviderAccount] = [
             .builtIn(for: .claude),
             ProviderAccount(id: extraID, providerID: .claude, label: "Work"),
@@ -1615,15 +1614,16 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         )
         let fleet = Task { await store.refreshAll() }
         await primary.waitUntilStarted()
+        await extra.waitUntilStarted()
 
-        async let first: Void = store.refreshAccount(AccountKey(providerID: .claude, accountID: extraID))
-        async let second: Void = store.refreshAccount(AccountKey(providerID: .claude, accountID: extraID))
-        _ = await (first, second)
+        let key = AccountKey(providerID: .claude, accountID: extraID)
+        store.refreshAccountNow(key)
+        store.refreshAccountNow(key)
+        extra.releaseFetches()
         primary.releaseFetches()
         await fleet.value
 
-        // KTD7: the coalesced priority request is served first and consumes the fleet's due
-        // mark, so one fetch answers the fleet and both setup checks.
+        // KTD7: the in-flight probe answers both setup checks as well as the fleet refresh.
         #expect(extra.fetchCount == 1)
     }
 
