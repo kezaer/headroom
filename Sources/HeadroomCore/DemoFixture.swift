@@ -315,6 +315,10 @@ extension DemoFixture {
         case multiTwo = "multi-2"
         case multiThree = "multi-3"
         case multiFive = "multi-5"
+        /// R15 (2026-09-19 polling plan): the tested envelope — 20 Claude, 20 Codex, 20 Grok,
+        /// 1 Cursor. Claude and Grok rows simulate a 3-second probe so the measured
+        /// duty-cycle gate and the Settings cadence row are observable at a 2-minute interval.
+        case envelope = "multi-20"
         case multiMixed = "multi-mixed"
         /// Two Claude accounts under a provider-wide missing-CLI verdict: one retains
         /// last-known meters and one has never produced usage. Exercises U3 recovery UI.
@@ -372,7 +376,8 @@ extension DemoFixture {
         email: String? = nil,
         freshness: Freshness = .live,
         builtIn: Bool = false,
-        capability: ProviderCapabilityState? = nil
+        capability: ProviderCapabilityState? = nil,
+        probeDuration: TimeInterval? = nil
     ) -> (account: ProviderAccount, provider: any UsageProvider) {
         let accountID: AccountID = builtIn ? .primary : AccountID(id)
         let account = ProviderAccount(id: accountID, providerID: providerID, label: label, isBuiltIn: builtIn)
@@ -406,9 +411,47 @@ extension DemoFixture {
                 displayName: providerID.displayName,
                 snapshot: snapshot,
                 accountID: accountID,
-                capability: capability
+                capability: capability,
+                probeDuration: probeDuration
             )
         )
+    }
+
+    /// R15: N deterministic accounts for one provider, the first built-in, with labels and
+    /// utilizations spread from a seed so a 20-row list still shows every severity band.
+    /// Grok rows pose the billing-period snapshot because `demoAccount`'s 5h/weekly pair
+    /// is not that provider's window shape.
+    public static func generatedAccounts(
+        provider providerID: ProviderID,
+        count: Int,
+        probeDuration: TimeInterval? = nil
+    ) -> [(account: ProviderAccount, provider: any UsageProvider)] {
+        let plans = ["Max", "Pro", "Team", "Plus", "Prolite"]
+        return (0..<count).map { index in
+            let label = index == 0 ? "Personal" : "Account \(index + 1)"
+            let id = "\(providerID.raw)-generated-\(index + 1)"
+            if providerID == .grok {
+                let accountID: AccountID = index == 0 ? .primary : AccountID(id)
+                let account = ProviderAccount(id: accountID, providerID: .grok, label: label, isBuiltIn: index == 0)
+                return (account, DemoUsageProvider(
+                    id: .grok,
+                    displayName: ProviderID.grok.displayName,
+                    snapshot: grokSnapshot,
+                    accountID: accountID,
+                    probeDuration: probeDuration
+                ))
+            }
+            return demoAccount(
+                provider: providerID,
+                id: id,
+                label: label,
+                plan: plans[index % plans.count],
+                fiveHour: Double((index * 37) % 100),
+                weekly: Double((index * 53 + 11) % 100),
+                builtIn: index == 0,
+                probeDuration: probeDuration
+            )
+        }
     }
 
     /// A single built-in account posed from a ready-made snapshot — used for the
@@ -478,6 +521,11 @@ extension DemoFixture {
                 demoAccount(provider: .codex, id: "codex-work", label: "Work", plan: "Pro", fiveHour: 54, weekly: 79),
                 demoAccount(provider: .codex, id: "codex-studio", label: "Studio", plan: "Plus", fiveHour: 22, weekly: 48),
             ]
+        case .envelope:
+            pairs = generatedAccounts(provider: .claude, count: 20, probeDuration: 3)
+                + generatedAccounts(provider: .codex, count: 20)
+                + generatedAccounts(provider: .grok, count: 20, probeDuration: 3)
+                + [builtInProviderPair(provider: .cursor, snapshot: cursorSnapshot)]
         case .multiMixed:
             pairs = [
                 demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
@@ -641,6 +689,9 @@ public struct DemoUsageProvider: UsageProvider {
     public let displayName: String
     private let snapshot: UsageSnapshot
     private let capability: ProviderCapabilityState?
+    /// R15: a simulated probe cost so the envelope demo exercises the measured duty-cycle
+    /// gate (KTD4); nil returns the fixture instantly, as every other scenario expects.
+    private let probeDuration: TimeInterval?
     public var reportsProviderCapability: Bool { capability != nil }
 
     /// Mirrors the shipping capacities so a demo pane cannot advertise an affordance the
@@ -657,18 +708,23 @@ public struct DemoUsageProvider: UsageProvider {
         displayName: String,
         snapshot: UsageSnapshot,
         accountID: AccountID = .primary,
-        capability: ProviderCapabilityState? = nil
+        capability: ProviderCapabilityState? = nil,
+        probeDuration: TimeInterval? = nil
     ) {
         self.id = id
         self.accountID = accountID
         self.displayName = displayName
         self.snapshot = snapshot
         self.capability = capability
+        self.probeDuration = probeDuration
     }
 
-    public func fetchSnapshot() async -> UsageSnapshot { snapshot }
+    public func fetchSnapshot() async -> UsageSnapshot { await fetchResult().snapshot }
     public func fetchResult() async -> UsageProviderFetchResult {
-        UsageProviderFetchResult(snapshot: snapshot, capability: capability)
+        if let probeDuration, probeDuration > 0 {
+            try? await Task.sleep(for: .seconds(probeDuration))
+        }
+        return UsageProviderFetchResult(snapshot: snapshot, capability: capability)
     }
 }
 

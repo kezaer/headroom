@@ -51,9 +51,10 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
     DTOs), `CodexConnection`, shared login-shell `CLIExecutableResolver`, `RedirectBlocker`,
     `AccountStorage` (per-account config homes).
   - `Credentials/` — `CredentialStore` (Codex-only), `CodexAuthReader`, `Redaction`.
-  - `Engine/` — `PollingEngine`, `UsageStore` (`@MainActor @Observable`).
+  - `Engine/` — `PollingEngine` (wake timer), `LaneSchedule` (pure cadence decisions),
+    `AccountProbeScheduler` (per-lane due queue), `UsageStore` (`@MainActor @Observable`).
   - `Settings/` — `Preferences` (UserDefaults), `AccountRegistry` (persisted account
-    catalog, max 5 per provider), `LaunchAtLogin` (SMAppService).
+    catalog, capacity-aware; the tested envelope is 20 per provider), `LaunchAtLogin` (SMAppService).
 - `Sources/HeadroomApp` — SwiftUI `MenuBarExtra(.window)` shell + adaptive popover (Liquid
   Glass on Tahoe, native material on Sequoia), cards, settings, menu bar label.
   `MeterGauge` is the popover's single format × shape × fill renderer; `AppComposition` is
@@ -62,8 +63,10 @@ output. `/usage` is a free status fetch (no model call), so polling it costs no 
   lists the six `SettingsPane` destinations, and the stateless panes live in
   `SettingsPanes.swift`; Appearance previews choices with an inert `AppearanceSpecimen`.
 
-Data flow: `PollingEngine` → `UsageStore.refreshAll()` fetches providers concurrently →
-merges with continuity → menu bar label + popover bind to the `@Observable` store.
+Data flow: `PollingEngine` wakes at the earliest due account → `AccountProbeScheduler`
+drains each CLI lane one probe at a time (most overdue first) and fetches the HTTP lane's
+due accounts concurrently → `UsageStore` merges with continuity → menu bar label + popover
+bind to the `@Observable` store.
 
 The popover meter style is one global `MeterStyle`, persisted as three independent
 UserDefaults-backed preferences (format, shape, fill) and mirrored by `UsageStore`. It affects
@@ -73,7 +76,9 @@ as Chip until the user returns to Micro.
 
 ### Multi-account (Jul 2026)
 
-Claude, Codex, and Grok can each carry up to 5 signed-in accounts; Cursor is deliberately
+Claude, Codex, and Grok each carry any number of signed-in accounts up to a **tested
+envelope** of 20 (`AccountRegistry.testedEnvelope`, Sep 2026 — a bound the suites and the
+`multi-20` demo are proven at, not an advertised limit); Cursor is deliberately
 single-account because its CLI exposes no isolated config-home mechanism. Snapshots are keyed
 by `AccountKey` (provider + account); one `UsageProvider` instance exists per account. The
 **built-in** `.primary` account reads the CLI's default config (`~/.claude`, `~/.codex`,
@@ -125,7 +130,7 @@ swift test                         # unit suite (fast, all mocked — no CLI/net
 ./Scripts/build-app.sh --deps-only && xcodebuild -project Headroom.xcodeproj -scheme HeadroomAppTests -destination 'platform=macOS' -derivedDataPath ./.xcode-derived test
 # --deps-only unpacks the Sparkle XCFramework the project references (package resolution alone doesn't); the pinned derived data avoids a cached "no XCFramework found" build description.
 swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windows
-swift run Headroom --demo [multi-2|multi-3|multi-5|multi-mixed|spend-states|spend-retained]  # live app with fixture data (screenshots, multi-account preview)
+swift run Headroom --demo [multi-2|multi-3|multi-5|multi-20|multi-mixed|spend-states|spend-retained]  # live app with fixture data (screenshots, multi-account preview; multi-20 is the tested envelope)
 ./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
 ```
 
@@ -239,8 +244,20 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   fails inside `.regularExpression`.
 - Each Claude poll spawns a full `claude` process (print path ~3–5s including the auth and
   version pre-checks; the PTY fallback ~20–30s). Fine at the 5-min default; don't
-  poll aggressively. Configured Claude accounts are probed **serially in one Claude lane** while
-  Codex/network work can overlap; the account cap and enforced 2-min interval floor bound cost.
+  poll aggressively. **Polling is per account, not per sweep (Sep 2026).** Every account has
+  its own due time (last attempt + the chosen interval, with growing backoff after transient
+  failures and a four-interval wait for never-signed-in extras); each CLI lane (Claude, Grok,
+  Cursor) drains one probe at a time, primary first then most overdue, behind a **measured
+  duty-cycle gate** — timer probes start only while the lane has been busy for at most half of
+  the trailing window of twice the chosen interval. Codex's HTTP lane fetches its due accounts
+  concurrently and is not gated. User actions (Refresh, Check Now, Try Again, Make Main, setup
+  checks) are front-of-queue requests that bypass the gate; a full user refresh drains
+  everything back to back by design. Settings → General shows a provider's effective interval
+  when its accounts run slower than the chosen one. `isRefreshing` means user-initiated work
+  only; timer passes never show "Refreshing…". Don't reintroduce a sweep-per-tick path or a
+  computed stretch factor: the gate is measured from the probe log (`LaneSchedule`), so an
+  outage clears within one normal pass. See
+  `docs/plans/2026-09-19-2217-feat-per-account-polling-schedule-plan.md`.
 - **Per-account isolation is env-var based and verified**: a fresh `CLAUDE_CONFIG_DIR`
   reports "Not logged in · Please run /login" and a fresh `CODEX_HOME` reports "Not
   logged in"; a fresh `GROK_HOME` is isolated the same way. The CLIs never fall back to

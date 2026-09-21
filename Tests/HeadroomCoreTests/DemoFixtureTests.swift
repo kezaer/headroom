@@ -73,7 +73,19 @@ struct DemoFixtureTests {
     @Test func multiFixtureAccountCountsMatchScenario() {
         #expect(DemoFixture.multiFixture(for: .multiTwo).accounts.count == 3)   // 2 Claude + 1 Codex
         #expect(DemoFixture.multiFixture(for: .multiThree).accounts.count == 5)
-        #expect(DemoFixture.multiFixture(for: .multiFive).accounts.count == 8)  // 5 Claude + 3 Codex (past the cap for scroll)
+        #expect(DemoFixture.multiFixture(for: .multiFive).accounts.count == 8)  // 5 Claude + 3 Codex (past the old cap for scroll)
+        // R15: the tested envelope — 20 Claude, 20 Codex, 20 Grok, 1 Cursor, every key unique.
+        let envelope = DemoFixture.multiFixture(for: .envelope)
+        #expect(envelope.accounts.count == 61)
+        #expect(Set(envelope.accounts.map(\.key)).count == 61)
+        #expect(envelope.accounts.filter { $0.providerID == .claude }.count == AccountRegistry.testedEnvelope)
+        #expect(envelope.accounts.filter { $0.providerID == .cursor }.count == 1)
+        #expect(envelope.accounts.filter(\.isBuiltIn).count == 4)
+        // The generator's five-row shape matches the hand-authored scenario's fields.
+        let generated = DemoFixture.generatedAccounts(provider: .claude, count: 5)
+        #expect(generated.count == 5)
+        #expect(generated.first?.account.isBuiltIn == true)
+        #expect(Set(generated.map(\.account.label)).count == 5)
         // S2B/B3: 3 Claude + 1 Codex — the third Claude row poses the typed
         // `.claudeLoginRequired` outcome, the only state with a two-chip action row.
         #expect(DemoFixture.multiFixture(for: .multiMixed).accounts.count == 5)

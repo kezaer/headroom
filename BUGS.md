@@ -216,9 +216,13 @@ Deferred from `docs/plans/2026-09-19-1236-fix-claude-sign-in-handoff-plan.md`.
   to the registry. If a sweep is added, only remove homes that are unregistered **and** have no
   active setup marker.
 
-- **No backoff on repeated failures.** Both providers retry every cycle at the fixed
-  interval. Exponential backoff on consecutive transient failures would be gentler on a
-  down endpoint. Design choice — deferred.
+- **Backoff on repeated failures — shipped 2026-09-21** with the per-account scheduler
+  (`LaneSchedule`): consecutive transient failures double the account's spacing from the
+  chosen interval, capped at the larger of 30 minutes and the lane's effective interval; a
+  permanent setup state stays on cadence. Remaining probe-cost follow-ups from that plan:
+  skip the PTY fallback after a print-mode timeout on a print-capable CLI (bounds one bad
+  probe to about 25 seconds instead of 80); cache the `--version` band per executable per
+  lane pass; and version-gate the per-poll `claude auth status` call.
 
 - **Menu bar stays silent when a CLI is dead.** Provider capability failures are transient
   reasons, so `MenuBarLabel.needsAttention` does not light up for a missing or undiscoverable

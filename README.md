@@ -43,7 +43,7 @@ widgets that read a redaction-safe snapshot synced from the Mac through iCloud K
 
 ## Multiple subscription accounts
 
-Headroom can show up to five Claude, five Codex, and five Grok subscriptions side by side.
+Headroom can show any number of Claude, Codex, and Grok subscriptions side by side, tested up to 20 per provider. Each account is refreshed on its own schedule, so adding accounts never makes one slow probe hold up the rest; Settings → General shows when a provider's accounts run slower than the chosen interval.
 The built-in account keeps using the CLI's normal `~/.claude`, `~/.codex`, or `~/.grok`
 home, so existing installs need no migration. Additional accounts use Headroom-owned,
 owner-only config homes selected with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME`
@@ -97,13 +97,13 @@ The setup and recovery messages map to these actions:
 
 | What Headroom says | What to do |
 |---|---|
-| CLI not found, location unconfirmed, or waiting for the CLI | Use the provider's install action or link and finish installation. If Headroom shows **Check Again** or an account-level **Check Now**, use it afterward. For Claude, provider-level Check Again bypasses the held negative discovery result, searches again, and refreshes the built-in account without sweeping all five accounts. |
+| CLI not found, location unconfirmed, or waiting for the CLI | Use the provider's install action or link and finish installation. If Headroom shows **Check Again** or an account-level **Check Now**, use it afterward. For Claude, provider-level Check Again bypasses the held negative discovery result, searches again, and refreshes the built-in account without sweeping every account. |
 | Not logged in, expired, malformed, or unsafe sign-in | Use **Connect**, **Reconnect**, or **Open Setup** for that account. Codex and Grok also offer **Use Device Code**. Claude may instead ask you to approve Headroom's CLI workspace. |
 | Couldn't prepare the handoff / Terminal didn't open | Try again. If Headroom copied the official CLI command, open Terminal and paste it; if copying also failed, retry from Headroom. |
 | Setup window still open | Close the Terminal/setup window, then retry. Headroom refuses the action with “Close setup, then retry” instead of silently opening a competing handoff. |
 | Privacy denial / sign-in file cannot be read | Choose **Privacy & Security Help**, allow Headroom access in macOS System Settings, then choose **Check Now**. Codex can also offer **Resolve Storage** when its CLI saved credentials somewhere Headroom cannot read. |
 | Couldn't read usage / unrecognized CLI screen | Choose **Check Again**. If it persists, run that provider's probe above; probes print redacted classifications and parsed usage, not credentials. |
-| Sign-in wasn't confirmed / verification timed out | Choose **Check Now** or reopen setup. Verification has a bounded stop-loss (about four minutes in the worst five-Claude-account serial lane), so it settles to a typed failure instead of spinning forever. |
+| Sign-in wasn't confirmed / verification timed out | Choose **Check Now** or reopen setup. Verification has a bounded stop-loss (four minutes, covering one in-flight probe plus the check's own worst case), so it settles to a typed failure instead of spinning forever. |
 
 ## Troubleshooting API spend
 
