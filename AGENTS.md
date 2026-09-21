@@ -149,7 +149,7 @@ never collapse them into a generic “released.” Preflight dedicated test envi
 security/browser handoffs before publishing. Do not brute-force menu-bar UI, configure iPhone
 Mirroring during a release, or use broad process termination to clean up QA copies.
 
-Building requires Xcode 26 / Swift 6.3. The app targets macOS 15+ on Apple silicon; a real
+Building requires Xcode 27 / Swift 6.4. The app targets macOS 15+ on Apple silicon; a real
 macOS 15 Apple-silicon runtime smoke is required before advertising Sequoia support. Claude
 requires the `claude` CLI logged in; Codex requires its CLI-managed `~/.codex/auth.json`.
 When Codex auth is missing or rejected, the app delegates recovery to official `codex login`
@@ -176,8 +176,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
 - **Meter visual acceptance must use the live `MenuBarExtra` window.** Drive deterministic
   fixtures with `swift run Headroom --demo <scenario> --meter-style
   <format>.<shape>.<fill>` and inspect the native popover in both appearances. Do not accept
-  `--render-popover` output as evidence while the Xcode 26.5 appearance-capture bug remains in
-  `BUGS.md`; Core recipe tests prove decisions, not SwiftUI rendering or window sizing. The
+  `--render-popover` output as final evidence while the offscreen capture limitations tracked in
+  `BUGS.md` remain; Core recipe tests prove decisions, not SwiftUI rendering or window sizing. The
   harness does honour `--meter-style`, so `--render-popover <dir> --meter-style full.segmented.ghost`
   is the way to sanity-check the Settings swatches and specimen in a non-default style headlessly.
 
