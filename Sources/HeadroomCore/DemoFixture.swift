@@ -305,8 +305,9 @@ public enum DemoFixture {
 
 extension DemoFixture {
     /// Multi-account layouts under review (H3a band design): two accounts, three, five
-    /// (max cap + popover scroll — all render at the regular meter scale now), and a
-    /// mixed-health stack (one live, one waiting on sign-in, one transiently stale).
+    /// (popover scroll — all render at the regular meter scale now), the 20-per-provider
+    /// tested envelope (`multi-20`), and a mixed-health stack (one live, one waiting on
+    /// sign-in, one transiently stale).
     ///
     /// Shared between the offscreen `PopoverRenderHarness` (design-review PNGs) and the
     /// live `--demo <scenario>` launch mode (interactive multi-account preview + genuine
@@ -316,8 +317,10 @@ extension DemoFixture {
         case multiThree = "multi-3"
         case multiFive = "multi-5"
         /// R15 (2026-09-19 polling plan): the tested envelope — 20 Claude, 20 Codex, 20 Grok,
-        /// 1 Cursor. Claude and Grok rows simulate a 3-second probe so the measured
-        /// duty-cycle gate and the Settings cadence row are observable at a 2-minute interval.
+        /// 1 Cursor. Claude and Grok rows simulate a 4-second probe: 20 × 4 s spends the
+        /// 2-minute interval's 120 s budget partway through the second pass, so the measured
+        /// duty-cycle gate and the Settings cadence row are observable (3 s would sit exactly
+        /// on the ceiling and never close it).
         case envelope = "multi-20"
         case multiMixed = "multi-mixed"
         /// Two Claude accounts under a provider-wide missing-CLI verdict: one retains
@@ -523,9 +526,9 @@ extension DemoFixture {
                 demoAccount(provider: .codex, id: "codex-studio", label: "Studio", plan: "Plus", fiveHour: 22, weekly: 48),
             ]
         case .envelope:
-            pairs = generatedAccounts(provider: .claude, count: 20, probeDuration: 3)
+            pairs = generatedAccounts(provider: .claude, count: 20, probeDuration: 4)
                 + generatedAccounts(provider: .codex, count: 20)
-                + generatedAccounts(provider: .grok, count: 20, probeDuration: 3)
+                + generatedAccounts(provider: .grok, count: 20, probeDuration: 4)
                 + [builtInProviderPair(provider: .cursor, snapshot: cursorSnapshot)]
         case .multiMixed:
             pairs = [
@@ -720,7 +723,9 @@ public struct DemoUsageProvider: UsageProvider {
         self.probeDuration = probeDuration
     }
 
-    public func fetchSnapshot() async -> UsageSnapshot { await fetchResult().snapshot }
+    /// The fixture itself, instantly: tests enumerate every scenario's providers this way.
+    /// Only `fetchResult()`, the path the scheduler drives, pays the simulated probe cost.
+    public func fetchSnapshot() async -> UsageSnapshot { snapshot }
     public func fetchResult() async -> UsageProviderFetchResult {
         if let probeDuration, probeDuration > 0 {
             try? await Task.sleep(for: .seconds(probeDuration))

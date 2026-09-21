@@ -18,6 +18,9 @@ public enum LaneSchedule {
     public static let dutyCycleCeiling: Double = 0.5
     /// KTD6: the shortest sleep the wake timer takes when something is already overdue.
     public static let minimumWake: TimeInterval = 1
+    /// R10 / R12: a gap this far past the chosen interval is wake jitter plus at most one
+    /// probe's wait, which the promise allows, so it never reads as a stretched lane.
+    public static let cadenceTolerance: TimeInterval = 90
 
     /// Scheduler-owned per-account state (KTD3).
     public struct AccountRecord: Sendable, Equatable {
@@ -32,6 +35,10 @@ public enum LaneSchedule {
         public var forcedDue: Bool
         /// The account's own next tracked reset deadline, for per-account phasing (KTD6).
         public var resetDeadline: Date?
+        /// Whether the gap ending at `lastAttempt` was scheduled at the chosen interval.
+        /// Decided when the attempt starts (KTD4): a first success after backoff, or the
+        /// first capture after a sign-in, must not report its stretched gap as the lane's.
+        public var lastGapOnCadence: Bool
 
         public init(
             key: AccountKey,
@@ -41,7 +48,8 @@ public enum LaneSchedule {
             consecutiveFailures: Int = 0,
             isNeverSignedIn: Bool = false,
             forcedDue: Bool = true,
-            resetDeadline: Date? = nil
+            resetDeadline: Date? = nil,
+            lastGapOnCadence: Bool = true
         ) {
             self.key = key
             self.isPrimary = isPrimary
@@ -51,6 +59,7 @@ public enum LaneSchedule {
             self.isNeverSignedIn = isNeverSignedIn
             self.forcedDue = forcedDue
             self.resetDeadline = resetDeadline
+            self.lastGapOnCadence = lastGapOnCadence
         }
 
         /// Gap between the last two attempts — the measured cadence the account actually
@@ -63,6 +72,11 @@ public enum LaneSchedule {
         /// Accounts in backoff or on the never-signed-in rule are stretched on purpose;
         /// their gaps say nothing about the lane's cadence (KTD4).
         public var isOnCadence: Bool {
+            lastGapOnCadence && scheduledOnCadence
+        }
+
+        /// Whether the *next* gap will be scheduled at the chosen interval.
+        public var scheduledOnCadence: Bool {
             consecutiveFailures == 0 && !(isNeverSignedIn && !isPrimary)
         }
     }
@@ -104,8 +118,8 @@ public enum LaneSchedule {
     /// pass instead of being averaged for hours.
     public static func effectiveInterval(chosen: TimeInterval, attemptGaps: [TimeInterval]) -> TimeInterval {
         let longest = attemptGaps.max() ?? 0
-        let raw = max(chosen, longest)
-        return (raw / 60).rounded(.up) * 60
+        guard longest > chosen + cadenceTolerance else { return chosen }
+        return (longest / 60).rounded(.up) * 60
     }
 
     // MARK: Due times
@@ -118,9 +132,11 @@ public enum LaneSchedule {
     ) -> Date {
         guard !record.forcedDue, let last = record.lastAttempt else { return .distantPast }
         if record.consecutiveFailures > 0 {
+            // KTD5: doubling from the chosen interval, never sooner than a healthy account in
+            // a stretched lane (the effective interval), never later than the cap.
             let doubled = chosen * pow(2, Double(record.consecutiveFailures))
-            let cap = max(backoffCap, effective)
-            return last.addingTimeInterval(max(intervalFloor, min(doubled, cap)))
+            let spaced = min(max(doubled, effective), max(backoffCap, effective))
+            return last.addingTimeInterval(max(intervalFloor, spaced))
         }
         if record.isNeverSignedIn && !record.isPrimary {
             return last.addingTimeInterval(chosen * neverSignedInMultiplier)
@@ -187,8 +203,7 @@ public enum LaneSchedule {
 
     public static func window(chosen: TimeInterval) -> TimeInterval { 2 * chosen }
 
-    /// Seconds of probe time inside the trailing window ending at `now`. An in-flight
-    /// probe is passed as a span ending at `now`.
+    /// Seconds of probe time inside the trailing window ending at `now`.
     public static func busyTime(log: [ProbeSpan], now: Date, window: TimeInterval) -> TimeInterval {
         let left = now.addingTimeInterval(-window)
         return log.reduce(0) { total, span in

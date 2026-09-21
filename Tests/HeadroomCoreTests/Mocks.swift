@@ -334,7 +334,8 @@ extension UsageSnapshot {
 
 /// One-shot suspend gate for provider doubles: `suspendNextFetch()` holds the next fetch
 /// open until `release()`, and `waitUntilStarted()` lets a test observe that fetch begin.
-/// Providers call `enter()` at the top of each fetch.
+/// Providers call `enter()` at the top of each fetch. One waiter at a time: a second
+/// concurrent `waitUntilStarted()` would replace the first.
 final class FetchGate: @unchecked Sendable {
     private let lock = NSLock()
     private var suspendNext = false

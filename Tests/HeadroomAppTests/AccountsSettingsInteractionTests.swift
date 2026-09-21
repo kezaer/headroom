@@ -175,6 +175,21 @@ struct AccountsSettingsInteractionTests {
     @Test func accountCounterReadsAsATestedEnvelopeOnlyAtCapacity() {
         #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 19, capacity: 20) == "19 of 20")
         #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 20, capacity: 20) == "Tested up to 20")
+        // Cursor's single account is a design bound, not an envelope anyone tested up to.
+        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 1, capacity: 1) == "Single account")
+    }
+
+    @Test func singleAccountProviderExplainsItsBoundInsteadOfAnEnvelope() {
+        let cursor = AccountsSettingsInteractions.providerGroupPresentation(
+            providerDisplayName: "Cursor",
+            accounts: [ProviderAccount.builtIn(for: .cursor)],
+            capacity: 1,
+            hasFreeAccountSlot: false,
+            isSurfaceEnabled: true,
+            hasActiveHandoff: { _ in false }
+        )
+        #expect(!cursor.addAction.isEnabled)
+        #expect(cursor.addAction.helpText == "Cursor supports one account")
     }
 
     @Test func renameCommitsTrimmedFocusLossDraftAndRejectsBlankDraft() {

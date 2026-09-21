@@ -43,7 +43,7 @@ widgets that read a redaction-safe snapshot synced from the Mac through iCloud K
 
 ## Multiple subscription accounts
 
-Headroom can show any number of Claude, Codex, and Grok subscriptions side by side, tested up to 20 per provider. Each account is refreshed on its own schedule, so adding accounts never makes one slow probe hold up the rest; Settings → General shows when a provider's accounts run slower than the chosen interval.
+Headroom can show any number of Claude, Codex, and Grok subscriptions side by side, tested up to 20 per provider. Each account is refreshed on its own schedule, so one slow probe delays the others by at most one probe, and Settings → General shows when a provider's accounts run slower than the chosen interval.
 The built-in account keeps using the CLI's normal `~/.claude`, `~/.codex`, or `~/.grok`
 home, so existing installs need no migration. Additional accounts use Headroom-owned,
 owner-only config homes selected with `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GROK_HOME`

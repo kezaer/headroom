@@ -84,6 +84,13 @@ struct PollPhasingStoreTests {
         await store.start()
 
         #expect(store.engine?.secondsUntilNextPoll == 2 * 60 + 40 + PollPhasing.postResetGrace)
+
+        // The wake is only worth taking if the account is due when it fires: the deadline
+        // is phased against the last attempt, not against the (now later) clock.
+        clock.set(start.addingTimeInterval(2 * 60 + 40 + PollPhasing.postResetGrace))
+        store.dispatchDueNow()
+        await settle { provider.fetchCount == 2 }
+        #expect(provider.fetchCount == 2)
     }
 
     @Test func unavailableAndElapsedWindowsDoNotPhaseThePoll() async {

@@ -18,7 +18,8 @@ struct LaneScheduleTests {
         previousAttempt: TimeInterval? = nil,
         failures: Int = 0,
         neverSignedIn: Bool = false,
-        resetDeadline: TimeInterval? = nil
+        resetDeadline: TimeInterval? = nil,
+        lastGapOnCadence: Bool = true
     ) -> LaneSchedule.AccountRecord {
         LaneSchedule.AccountRecord(
             key: key,
@@ -28,7 +29,8 @@ struct LaneScheduleTests {
             consecutiveFailures: failures,
             isNeverSignedIn: neverSignedIn,
             forcedDue: false,
-            resetDeadline: resetDeadline.map { now.addingTimeInterval($0) }
+            resetDeadline: resetDeadline.map { now.addingTimeInterval($0) },
+            lastGapOnCadence: lastGapOnCadence
         )
     }
 
@@ -144,18 +146,31 @@ struct LaneScheduleTests {
     @Test func effectiveIntervalIsTheLongestGapRoundedUpToWholeMinutes() {
         #expect(LaneSchedule.effectiveInterval(chosen: 2 * 60, attemptGaps: [4 * 60]) == 4 * 60)
         #expect(LaneSchedule.effectiveInterval(chosen: 5 * 60, attemptGaps: [3, 3, 3]) == 5 * 60)
-        #expect(LaneSchedule.effectiveInterval(chosen: 5 * 60, attemptGaps: [6.2 * 60]) == 7 * 60)
+        #expect(LaneSchedule.effectiveInterval(chosen: 5 * 60, attemptGaps: [7.2 * 60]) == 8 * 60)
         #expect(LaneSchedule.effectiveInterval(chosen: 5 * 60, attemptGaps: []) == 5 * 60)
+    }
+
+    @Test func wakeJitterAndOneProbeOfWaitNeverReadAsAStretchedLane() {
+        // R10 / R12: a timer probe starts a few milliseconds after its due time, and a
+        // sibling may wait one probe behind an in-flight one; neither breaks the promise.
+        let chosen: TimeInterval = 5 * 60
+        #expect(LaneSchedule.effectiveInterval(chosen: chosen, attemptGaps: [chosen + 0.004]) == chosen)
+        #expect(LaneSchedule.effectiveInterval(chosen: chosen, attemptGaps: [chosen + LaneSchedule.cadenceTolerance]) == chosen)
+        #expect(LaneSchedule.effectiveInterval(chosen: chosen, attemptGaps: [chosen + LaneSchedule.cadenceTolerance + 1]) == 7 * 60)
     }
 
     @Test func onlyOnCadenceAccountsContributeGaps() {
         let backingOff = record(work, lastAttempt: 0, previousAttempt: -40 * 60, failures: 2)
         let exempt = record(lab, lastAttempt: 0, previousAttempt: -20 * 60, neverSignedIn: true)
         let healthy = record(claude, primary: true, lastAttempt: 0, previousAttempt: -5 * 60)
+        // A first success after backoff: healthy now, but its gap was scheduled stretched.
+        let recovered = record(claude, primary: true, lastAttempt: 0, previousAttempt: -20 * 60, lastGapOnCadence: false)
         #expect(!backingOff.isOnCadence)
         #expect(!exempt.isOnCadence)
         #expect(healthy.isOnCadence)
         #expect(healthy.attemptGap == 5 * 60)
+        #expect(!recovered.isOnCadence)
+        #expect(recovered.scheduledOnCadence)
     }
 
     // MARK: Backoff (AE5, KTD5)
@@ -169,12 +184,21 @@ struct LaneScheduleTests {
         #expect(LaneSchedule.nextDue(for: three, chosen: chosen, effective: chosen) == now.addingTimeInterval(30 * 60))
     }
 
-    @Test func backoffCapNeverFallsBelowTheEffectiveInterval() {
+    @Test func aFailingAccountIsNeverDueSoonerThanAHealthyOneInAStretchedLane() {
+        // KTD5 / AE5: at a 53 minute effective interval one failure is due 53 minutes after
+        // the attempt, never 10 and never 30 — otherwise the failing account would take the
+        // lane's budget from the healthy ones it is already delaying.
         let one = record(work, lastAttempt: 0, failures: 1)
         let stretched: TimeInterval = 53 * 60
-        #expect(LaneSchedule.nextDue(for: one, chosen: chosen, effective: stretched) == now.addingTimeInterval(10 * 60))
+        let healthy = record(claude, primary: true, lastAttempt: 0)
+        #expect(LaneSchedule.nextDue(for: one, chosen: chosen, effective: stretched) == now.addingTimeInterval(stretched))
+        #expect(LaneSchedule.nextDue(for: one, chosen: chosen, effective: stretched)
+            >= LaneSchedule.nextDue(for: healthy, chosen: chosen, effective: stretched))
         let four = record(work, lastAttempt: 0, failures: 4)
         #expect(LaneSchedule.nextDue(for: four, chosen: chosen, effective: stretched) == now.addingTimeInterval(stretched))
+        // In a healthy lane the doubling stands: 10 minutes, then the 30 minute cap.
+        #expect(LaneSchedule.nextDue(for: one, chosen: chosen, effective: chosen) == now.addingTimeInterval(10 * 60))
+        #expect(LaneSchedule.nextDue(for: four, chosen: chosen, effective: chosen) == now.addingTimeInterval(30 * 60))
     }
 
     @Test func aSuccessResetsBackoffToOneInterval() {
@@ -235,6 +259,14 @@ struct LaneScheduleTests {
         // Beyond the interval the ordinary due time stands.
         let far = record(claude, primary: true, lastAttempt: 0, resetDeadline: 4 * 3_600)
         #expect(LaneSchedule.nextDue(for: far, chosen: chosen, effective: chosen) == now.addingTimeInterval(chosen))
+        // Already behind the last attempt: the attempt we made answered it.
+        let behind = record(claude, primary: true, lastAttempt: 0, resetDeadline: -30)
+        #expect(LaneSchedule.nextDue(for: behind, chosen: chosen, effective: chosen) == now.addingTimeInterval(chosen))
+        // Just before the ordinary due time: overshooting by the grace is the point, since a
+        // probe 15 s before the reset would re-read the pre-reset number.
+        let late = record(claude, primary: true, lastAttempt: 0, resetDeadline: chosen - 15)
+        #expect(LaneSchedule.nextDue(for: late, chosen: chosen, effective: chosen)
+            == now.addingTimeInterval(chosen - 15 + PollPhasing.postResetGrace))
     }
 
     @Test func chosenIntervalHonorsTheTwoMinuteFloor() {

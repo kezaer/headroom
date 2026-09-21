@@ -77,8 +77,8 @@ as Chip until the user returns to Micro.
 ### Multi-account (Jul 2026)
 
 Claude, Codex, and Grok each carry any number of signed-in accounts up to a **tested
-envelope** of 20 (`AccountRegistry.testedEnvelope`, Sep 2026 — a bound the suites and the
-`multi-20` demo are proven at, not an advertised limit); Cursor is deliberately
+envelope** of 20 (`AccountRegistry.testedEnvelope`, Sep 2026 — the bound the suites and the
+`multi-20` demo exercise, not an advertised limit); Cursor is deliberately
 single-account because its CLI exposes no isolated config-home mechanism. Snapshots are keyed
 by `AccountKey` (provider + account); one `UsageProvider` instance exists per account. The
 **built-in** `.primary` account reads the CLI's default config (`~/.claude`, `~/.codex`,
@@ -271,7 +271,8 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   Don't re-enable snapshot notifications or translate capability failures into generic retry
   exhaustion; that loses provider scope and Codex's typed completion outcomes.
 - **Claude executable discovery is refresh-generation/epoch scoped.** Timer probes in one
-  store refresh generation share one negative search. A user action (`Check Now`, provider
+  Claude lane pass share one negative search; a user-requested probe served inside a pass
+  runs under its own generation (KTD8, 2026-09-19 polling plan). A user action (`Check Now`, provider
   `Check Again`, opening setup, or adding an account) advances the locator epoch and forces a
   fresh search at the app boundary. Results may publish hints, negative memo state, or
   launch-race state only while their starting epoch is current, and every search started in

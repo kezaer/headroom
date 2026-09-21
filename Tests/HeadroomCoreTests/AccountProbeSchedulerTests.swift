@@ -158,6 +158,13 @@ struct AccountProbeSchedulerTests {
         #expect(primary.fetchCount == 2)
         #expect(extra.fetchCount == 1)
 
+        // Fifteen minutes: past two doublings of backoff, still short of four intervals.
+        clock.set(t0.addingTimeInterval(15 * 60 + 1))
+        store.dispatchDueNow()
+        await settle { primary.fetchCount == 3 }
+        #expect(primary.fetchCount == 3)
+        #expect(extra.fetchCount == 1)
+
         clock.set(t0.addingTimeInterval(20 * 60 + 1))
         store.dispatchDueNow()
         await settle { extra.fetchCount == 2 }
@@ -186,6 +193,8 @@ struct AccountProbeSchedulerTests {
         provider.release()
         await refresh.value
         #expect(!store.isRefreshing)
+        // KTD7: the in-flight probe answered the refresh; it was not probed a second time.
+        #expect(provider.fetchCount == 2)
     }
 
     @Test func spendOnlyRefreshRunsWhileAClaudeLaneIsDraining() async {
@@ -210,21 +219,165 @@ struct AccountProbeSchedulerTests {
     // MARK: Provider-scoped dispatch (KTD11)
 
     @Test func enablingASurfaceDispatchesOnlyThatProvider() async {
+        let clock = MutableDateSource(t0)
         let order = ProbeOrder()
         let claude = LaneProbe(id: .claude, accountID: .primary, lane: .serial("claude-cli"), order: order,
-                               result: { .init(snapshot: self.liveSnapshot(.claude)) })
+                               result: { .init(snapshot: self.liveSnapshot(.claude, at: clock.now())) })
         let grok = LaneProbe(id: .grok, accountID: .primary, lane: .serial("grok-cli"), order: order,
-                             result: { .init(snapshot: self.liveSnapshot(.grok)) })
-        let store = UsageStore(providers: [claude, grok], preferences: preferences())
+                             result: { .init(snapshot: self.liveSnapshot(.grok, at: clock.now())) })
+        let store = UsageStore(providers: [claude, grok], preferences: preferences(), now: clock.now)
         await store.refreshAll()
         #expect(claude.fetchCount == 1)
         #expect(grok.fetchCount == 0)
 
+        // Claude is overdue by now, so only the provider scoping keeps it out of this dispatch.
+        clock.set(t0.addingTimeInterval(5 * 60 + 1))
         store.setSurfaceEnabled(true, for: .grokSubscription)
         store.dispatchDueNow(for: .grok)
         await settle { grok.fetchCount == 1 }
         #expect(grok.fetchCount == 1)
         #expect(claude.fetchCount == 1)
+
+        store.dispatchDueNow()
+        await settle { claude.fetchCount == 2 }
+        #expect(claude.fetchCount == 2)
+    }
+
+    @Test func disablingASurfaceMidRefreshReleasesTheRefreshInsteadOfStrandingIt() async {
+        // KTD11: a queued user request for an account that can no longer be scheduled must
+        // not pin `isRefreshing` and a full refresh open until the surface comes back.
+        let order = ProbeOrder()
+        let lane = ProviderPollingLane.serial("claude-cli")
+        let extraID = AccountID("work")
+        let primary = LaneProbe(id: .claude, accountID: .primary, lane: lane, order: order,
+                                result: { .init(snapshot: self.liveSnapshot(.claude)) })
+        let extra = LaneProbe(id: .claude, accountID: extraID, lane: lane, order: order,
+                              result: { .init(snapshot: self.liveSnapshot(.claude)) })
+        primary.suspendNextFetch()
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: preferences(),
+            accounts: [.builtIn(for: .claude), ProviderAccount(id: extraID, providerID: .claude, label: "Work")]
+        )
+
+        let refresh = Task { await store.refreshAll() }
+        await primary.waitUntilStarted()
+        store.setSurfaceEnabled(false, for: .claudeSubscription)
+        primary.release()
+        await refresh.value
+
+        #expect(!store.isRefreshing)
+        #expect(extra.fetchCount == 0)
+    }
+
+    @Test func aSingleAccountRequestDoesNotWakeTimerDueSiblings() async {
+        // KTD7 / AGENTS.md: Check Now, Make Main and a setup check refresh only their account;
+        // siblings that are merely due wait for the timer.
+        let order = ProbeOrder()
+        let lane = ProviderPollingLane.serial("claude-cli")
+        let extraID = AccountID("work")
+        let primary = LaneProbe(id: .claude, accountID: .primary, lane: lane, order: order,
+                                result: { .init(snapshot: self.liveSnapshot(.claude)) })
+        let extra = LaneProbe(id: .claude, accountID: extraID, lane: lane, order: order,
+                              result: { .init(snapshot: self.liveSnapshot(.claude)) })
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: preferences(),
+            accounts: [.builtIn(for: .claude), ProviderAccount(id: extraID, providerID: .claude, label: "Work")]
+        )
+
+        await store.refreshAccount(extra.accountKey)
+        #expect(extra.fetchCount == 1)
+        #expect(primary.fetchCount == 0)
+
+        store.dispatchDueNow()
+        await settle { primary.fetchCount == 1 }
+        #expect(primary.fetchCount == 1)
+        #expect(extra.fetchCount == 1)
+    }
+
+    @Test func aRequestAfterAHandoffBoundaryIsNotAnsweredByTheProbeThatPredatesIt() async {
+        // KTD7: the running probe's result will be rejected at the boundary, so the request
+        // queues a follow-up instead of coalescing onto it.
+        let order = ProbeOrder()
+        let provider = LaneProbe(id: .claude, accountID: .primary, lane: .serial("claude-cli"), order: order,
+                                 result: { .init(snapshot: self.liveSnapshot(.claude)) })
+        let store = UsageStore(providers: [provider], preferences: preferences())
+        provider.suspendNextFetch()
+        store.dispatchDueNow()
+        await provider.waitUntilStarted()
+
+        store.invalidateUsageForHandoffBoundary(provider.accountKey)
+        let check = Task { await store.refreshAccount(provider.accountKey) }
+        provider.release()
+        await check.value
+
+        #expect(provider.fetchCount == 2)
+        #expect(store.snapshot(for: provider.accountKey).freshness == .live)
+    }
+
+    @Test func theGateHoldsTimerWorkAfterALongProbeButNeverUserWork() async {
+        // KTD4 / R8 through the store: a 200 s probe in a 240 s window closes the gate for
+        // timer work until enough of it ages out; a user refresh runs regardless.
+        let clock = MutableDateSource(t0)
+        let order = ProbeOrder()
+        let prefs = preferences()
+        prefs.pollIntervalMinutes = 2
+        let provider = LaneProbe(id: .claude, accountID: .primary, lane: .serial("claude-cli"), order: order,
+                                 result: { .init(snapshot: self.liveSnapshot(.claude, at: clock.now())) })
+        let store = UsageStore(providers: [provider], preferences: prefs, now: clock.now)
+
+        provider.suspendNextFetch()
+        let launch = Task { await store.refreshAll() }
+        await provider.waitUntilStarted()
+        clock.set(t0.addingTimeInterval(200))
+        provider.release()
+        await launch.value
+        #expect(provider.fetchCount == 1)
+
+        clock.set(t0.addingTimeInterval(201))
+        store.dispatchDueNow()
+        for _ in 0..<20 { await Task.yield() }
+        #expect(provider.fetchCount == 1)
+
+        await store.refreshAll()
+        #expect(provider.fetchCount == 2)
+
+        // The 200 s span's excess (80 s) plus the window: reopens at t0 + 320.
+        clock.set(t0.addingTimeInterval(321))
+        store.dispatchDueNow()
+        await settle { provider.fetchCount == 3 }
+        #expect(provider.fetchCount == 3)
+        #expect(!store.pollCadence(for: .claude).isStretched)
+    }
+
+    @Test func aTimerPassAppliesTheNewestCapabilityVerdictAtItsEnd() async {
+        // KTD8: an earlier path miss in the pass is cleared by a later account that found the
+        // CLI, and nothing is applied before the pass ends.
+        let order = ProbeOrder()
+        let lane = ProviderPollingLane.serial("claude-cli")
+        let extraID = AccountID("work")
+        let primary = LaneProbe(id: .claude, accountID: .primary, lane: lane, order: order,
+                                reportsProviderCapability: true,
+                                result: { .init(snapshot: .stale(for: .claude, reason: .transient("cli missing")),
+                                                capability: .inconclusive(.shellTimeout)) })
+        let extra = LaneProbe(id: .claude, accountID: extraID, lane: lane, order: order,
+                              reportsProviderCapability: true,
+                              result: { .init(snapshot: self.liveSnapshot(.claude), capability: .available) })
+        extra.suspendNextFetch()
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: preferences(),
+            accounts: [.builtIn(for: .claude), ProviderAccount(id: extraID, providerID: .claude, label: "Work")]
+        )
+
+        store.dispatchDueNow()
+        await extra.waitUntilStarted()
+        #expect(store.providerCapabilities[.claude]?.state == .discovering)
+
+        extra.release()
+        await settle { store.providerCapabilities[.claude]?.state == .available }
+        #expect(store.providerCapabilities[.claude]?.state == .available)
     }
 
     @Test func fullRefreshExportsOnceAndAPrimaryTimerMergeExportsAtOnce() async {

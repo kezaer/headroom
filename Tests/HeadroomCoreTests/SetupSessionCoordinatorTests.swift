@@ -1017,7 +1017,8 @@ import Testing
     }
 
     /// KTD6: the polled chain is driven by landed results, never by a fixed interval —
-    /// `UsageStore.refreshAccount` holds a global flag a shorter interval would monopolise.
+    /// each check is a front-of-queue probe on the account's CLI lane, which a shorter
+    /// interval would monopolise.
     @Test func polledClaudeHandoffSchedulesOneCheckPerLandedResult() async {
         let harness = SetupCoordinatorHarness()
         harness.claudeScriptKind = .interactive

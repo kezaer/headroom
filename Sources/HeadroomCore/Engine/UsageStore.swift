@@ -116,16 +116,16 @@ public final class UsageStore {
     /// unmerged work. Timer-driven lane passes never set it, so the Refresh button does not
     /// disappear for half of every interval at the account envelope.
     public private(set) var isRefreshing = false
-    private var userWorkPending = false
-    private var apiSpendUserRefreshing = false
-    private var apiSpendInFlight = false
+    @ObservationIgnored private var userWorkPending = false
+    @ObservationIgnored private var apiSpendUserRefreshDepth = 0
+    @ObservationIgnored private var apiSpendInFlight = false
     /// KTD12: per-provider chosen vs effective interval for Settings, refreshed whenever a
     /// lane goes idle so the General pane observes it like any other store value.
     public private(set) var pollCadences: [ProviderID: PollCadence] = [:]
     /// Depth of user-initiated full refreshes in flight. While one runs, primary merges
     /// skip their own export because the refresh exports once at its end (KTD9), which
     /// keeps launch to a single widget write.
-    private var fullRefreshDepth = 0
+    @ObservationIgnored private var fullRefreshDepth = 0
     /// KTD1: per-lane due-queue engine. Owns the attempt clock, probe log, and priority
     /// requests; everything that touches snapshots comes back through the host protocol.
     let scheduler = AccountProbeScheduler()
@@ -352,14 +352,13 @@ public final class UsageStore {
     }
 
     /// R2M2: freshen on popover open, but only when the timer was about to fire anyway.
-    /// The popover is the app's highest-frequency moment and a Claude poll is a 20–30s CLI
-    /// session, so this refreshes only once the oldest live capture has already aged past a
-    /// full poll interval, then re-phases the cadence so the next tick is a full interval
-    /// after the fresh data. At most one extra poll per interval; the cadence itself is
-    /// never raised (AGENTS.md's cost warning).
+    /// The popover is the app's highest-frequency moment and a Claude poll is a full CLI
+    /// session, so this wakes the queue only once the oldest live capture has already aged
+    /// past a full poll interval; the lane's pass-end rephase then puts the next tick a full
+    /// interval after the fresh data. At most one extra poll per interval; the cadence
+    /// itself is never raised (AGENTS.md's cost warning).
     public func refreshOnPopoverOpen() {
-        // A cycle already in flight is freshening the data by itself, and re-phasing would
-        // cancel the loop task mid-tick.
+        // A user refresh already in flight is freshening the data by itself.
         guard !isRefreshing else { return }
         guard Self.shouldRefreshOnPopoverOpen(
             oldestLiveCapture: oldestLiveCapture,
@@ -401,7 +400,10 @@ public final class UsageStore {
     }
 
     /// Restart the loop so a changed poll interval takes effect now (R14).
-    public func reschedulePolling() { engine?.reschedule() }
+    public func reschedulePolling() {
+        refreshPollCadences()
+        engine?.reschedule()
+    }
 
     public func setShowMenuBarPercentage(_ enabled: Bool) {
         preferences.showMenuBarPercentage = enabled
@@ -594,6 +596,9 @@ public final class UsageStore {
             scheduler.markDueNow(keys)
         } else {
             enabledSurfaces.remove(surface)
+            // KTD11: queued user requests for these accounts can no longer be served.
+            let keys = providers.map(\.accountKey).filter { UsageSurface.subscription(for: $0.providerID) == surface }
+            scheduler.withdraw(keys)
         }
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
@@ -612,15 +617,19 @@ public final class UsageStore {
     /// contract the store tests and the launch refresh rely on.
     public func refreshAll() async {
         fullRefreshDepth += 1
+        // Raised before the subscription work so the flag does not blink off between the
+        // last merge and the spend fetch.
+        apiSpendUserRefreshDepth += 1
+        recomputeRefreshing()
         scheduler.markAllDue()
         scheduler.dispatchDue()
         await scheduler.waitUntilUserWorkDrains()
-        await scheduler.waitUntilLanesIdle()
+        // Timer candidates a lane keeps serving after the user's work merged export on their
+        // own; the refresh's single export below still follows every lane going idle.
         fullRefreshDepth -= 1
-        apiSpendUserRefreshing = true
-        recomputeRefreshing()
+        await scheduler.waitUntilLanesIdle()
         await refreshAPISpend(exportAfter: false)
-        apiSpendUserRefreshing = false
+        apiSpendUserRefreshDepth -= 1
         recomputeRefreshing()
         refreshPollCadences()
         exportWidgetSnapshot()
@@ -665,11 +674,11 @@ public final class UsageStore {
     public func refreshAPISpendOnly() async {
         if apiSpendInFlight { return }
         apiSpendInFlight = true
-        apiSpendUserRefreshing = true
+        apiSpendUserRefreshDepth += 1
         recomputeRefreshing()
         defer {
             apiSpendInFlight = false
-            apiSpendUserRefreshing = false
+            apiSpendUserRefreshDepth -= 1
             recomputeRefreshing()
         }
         await refreshAPISpend()
@@ -684,7 +693,7 @@ public final class UsageStore {
     }
 
     private func recomputeRefreshing() {
-        let next = userWorkPending || apiSpendUserRefreshing
+        let next = userWorkPending || apiSpendUserRefreshDepth > 0
         if isRefreshing != next { isRefreshing = next }
     }
 
@@ -1059,10 +1068,10 @@ extension UsageStore: AccountProbeSchedulerHost {
         snapshots[key]?.freshness
     }
 
-    /// R2M3 per account: the earliest live reset deadline still ahead on this account's
-    /// own windows. `.unavailable` rows are excluded — their retained deadline is no longer
-    /// evidence of anything on screen.
-    func schedulerResetDeadline(for key: AccountKey, now reference: Date) -> Date? {
+    /// R2M3 per account: the earliest live reset deadline on this account's own windows
+    /// later than `reference` (its last attempt). `.unavailable` rows are excluded — their
+    /// retained deadline is no longer evidence of anything on screen.
+    func schedulerResetDeadline(for key: AccountKey, after reference: Date) -> Date? {
         snapshots[key]?.windows
             .filter { !$0.freshness.isUnavailable }
             .compactMap(\.resetSchedule.deadline)

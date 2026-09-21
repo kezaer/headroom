@@ -11,7 +11,8 @@ protocol AccountProbeSchedulerHost: AnyObject {
     func schedulerIsEligible(_ key: AccountKey) -> Bool
     func schedulerIsPrimary(_ key: AccountKey) -> Bool
     func schedulerFreshness(for key: AccountKey) -> Freshness?
-    func schedulerResetDeadline(for key: AccountKey, now: Date) -> Date?
+    /// The account's earliest tracked reset deadline later than `after`.
+    func schedulerResetDeadline(for key: AccountKey, after: Date) -> Date?
     func schedulerAttachmentGeneration(for key: AccountKey) -> UInt64
     func schedulerBeginCapabilityRefresh(for providers: [any UsageProvider]) -> [ProviderID: UInt64]
     func schedulerApplyCapability(_ state: ProviderCapabilityState, for providerID: ProviderID, generation: UInt64?)
@@ -35,11 +36,13 @@ protocol AccountProbeSchedulerHost: AnyObject {
 final class AccountProbeScheduler {
     private struct LaneState {
         var draining = false
+        /// KTD7: a pass a user request started serves user work only; timer-due siblings
+        /// wait for the timer, so Check Now, Make Main and a setup check never fan out.
+        var userOnly = false
         var inFlight: Set<AccountKey> = []
         /// Ordered, unique: a repeated request for an account already waiting is coalesced (KTD7).
         var priority: [AccountKey] = []
         var log: [LaneSchedule.ProbeSpan] = []
-        var passGeneration: UUID?
         var passCapability: [ProviderID: UInt64] = [:]
         var newestCapability: [ProviderID: ProviderCapabilityState] = [:]
     }
@@ -50,6 +53,12 @@ final class AccountProbeScheduler {
 
     private var records: [AccountKey: LaneSchedule.AccountRecord] = [:]
     private var laneOf: [AccountKey: ProviderPollingLane] = [:]
+    /// Registration order (registry display order, primary first): the tie-break among
+    /// equally overdue accounts, so a launch pass fills rows in the order the user sees.
+    private var order: [AccountKey] = []
+    /// The attachment generation each in-flight probe started under. A request that
+    /// arrives after a reset or handoff boundary cannot be answered by that probe.
+    private var inFlightAttachment: [AccountKey: UInt64] = [:]
     private var lanes: [ProviderPollingLane: LaneState] = [:]
     /// Accounts a user action marked due and that have not merged yet (KTD2).
     private var userPending: Set<AccountKey> = []
@@ -64,11 +73,13 @@ final class AccountProbeScheduler {
         guard records[key] == nil else { return }
         records[key] = LaneSchedule.AccountRecord(key: key)
         laneOf[key] = provider.pollingLane
+        order.append(key)
         if lanes[provider.pollingLane] == nil { lanes[provider.pollingLane] = LaneState() }
     }
 
     func unregister(_ key: AccountKey) {
         records.removeValue(forKey: key)
+        order.removeAll { $0 == key }
         if let lane = laneOf.removeValue(forKey: key) {
             lanes[lane]?.priority.removeAll { $0 == key }
         }
@@ -78,7 +89,7 @@ final class AccountProbeScheduler {
     /// KTD11: a re-enabled or newly attached account is due now once, with no history, so
     /// its first gap can neither stretch the displayed interval nor read as overdue.
     func markDueNow(_ keys: [AccountKey]) {
-        for key in keys {
+        for key in keys where !isInFlight(key) {
             guard var record = records[key] else { continue }
             record.lastAttempt = nil
             record.previousAttempt = nil
@@ -93,22 +104,40 @@ final class AccountProbeScheduler {
     /// the duty-cycle gate; `waitUntilUserWorkDrains()` returns when all of them merged.
     func markAllDue() {
         guard let host else { return }
-        for key in records.keys where host.schedulerIsEligible(key) {
-            records[key]?.forcedDue = true
+        for key in order where host.schedulerIsEligible(key) {
             insertUserPending(key)
+            // KTD7 parity with `requestPriority`: a probe already running answers the
+            // request unless it started before a reset or handoff boundary.
+            if isInFlight(key) {
+                if !inFlightAnswers(key) { enqueuePriority(key) }
+                continue
+            }
+            records[key]?.forcedDue = true
         }
     }
 
     /// KTD7: front of the account's lane; served after the in-flight probe.
     func requestPriority(_ key: AccountKey) {
-        guard let host, records[key] != nil, host.schedulerIsEligible(key), let lane = laneOf[key] else { return }
+        guard let host, records[key] != nil, host.schedulerIsEligible(key) else { return }
         insertUserPending(key)
-        // A probe of this very account is already running; its result answers the request.
-        if lanes[lane]?.inFlight.contains(key) == true { return }
-        if lanes[lane]?.priority.contains(key) == false {
-            lanes[lane]?.priority.append(key)
+        if isInFlight(key) {
+            // The running probe answers the request; one that predates a reset or handoff
+            // boundary cannot (its result will be rejected), so a follow-up is queued.
+            if !inFlightAnswers(key) { enqueuePriority(key) }
+            return
         }
-        dispatchDue()
+        enqueuePriority(key)
+        if let lane = laneOf[key] { dispatchUserWork(in: lane) }
+    }
+
+    /// KTD11: a surface went off. Queued user requests for its accounts can no longer be
+    /// served, so their waiters are released instead of pinning `isRefreshing` and a full
+    /// refresh open; an in-flight probe still finishes on its own.
+    func withdraw(_ keys: [AccountKey]) {
+        for key in keys {
+            if let lane = laneOf[key] { lanes[lane]?.priority.removeAll { $0 == key } }
+            if !isInFlight(key) { finish(key) }
+        }
     }
 
     /// Timer tick, popover open, or a surface change: start every idle lane that has due
@@ -135,6 +164,17 @@ final class AccountProbeScheduler {
             case .concurrent:
                 dispatchConcurrent(lane, providerID: providerID)
             }
+        }
+    }
+
+    /// KTD7: start the request's own lane for user work only. A lane already draining
+    /// serves the request next from its loop.
+    private func dispatchUserWork(in lane: ProviderPollingLane) {
+        switch lane {
+        case .serial:
+            startSerialPassIfNeeded(lane, userOnly: true)
+        case .concurrent:
+            dispatchConcurrent(lane, userOnly: true)
         }
     }
 
@@ -167,10 +207,6 @@ final class AccountProbeScheduler {
 
     // MARK: Cadence readouts (KTD4, KTD12)
 
-    func effectiveInterval(for lane: ProviderPollingLane, chosen: TimeInterval) -> TimeInterval {
-        effectiveInterval(in: lane, records: liveRecords(in: lane), chosen: chosen)
-    }
-
     private func effectiveInterval(
         in lane: ProviderPollingLane, records: [LaneSchedule.AccountRecord], chosen: TimeInterval
     ) -> TimeInterval {
@@ -181,7 +217,7 @@ final class AccountProbeScheduler {
 
     func effectiveInterval(forProvider providerID: ProviderID, chosen: TimeInterval) -> TimeInterval {
         guard let lane = laneOf.first(where: { $0.key.providerID == providerID })?.value else { return chosen }
-        return effectiveInterval(for: lane, chosen: chosen)
+        return effectiveInterval(in: lane, records: liveRecords(in: lane), chosen: chosen)
     }
 
     func accountCount(for providerID: ProviderID) -> Int {
@@ -212,8 +248,10 @@ final class AccountProbeScheduler {
 
     // MARK: Lane passes
 
-    private func startSerialPassIfNeeded(_ lane: ProviderPollingLane) {
-        guard let state = lanes[lane], !state.draining, nextSerialKey(in: lane) != nil else { return }
+    private func startSerialPassIfNeeded(_ lane: ProviderPollingLane, userOnly: Bool = false) {
+        guard let state = lanes[lane], !state.draining else { return }
+        lanes[lane]?.userOnly = userOnly
+        guard nextSerialKey(in: lane) != nil else { lanes[lane]?.userOnly = false; return }
         lanes[lane]?.draining = true
         Task { @MainActor [weak self] in
             await self?.runSerialPass(lane)
@@ -224,7 +262,6 @@ final class AccountProbeScheduler {
         guard let host else { return }
         // KTD8: one locator generation and one capability generation per pass.
         let passGeneration = UUID()
-        lanes[lane]?.passGeneration = passGeneration
         let providers = laneOf.filter { $0.value == lane }.keys.compactMap { host.schedulerProvider(for: $0) }
         lanes[lane]?.passCapability = host.schedulerBeginCapabilityRefresh(for: providers)
         lanes[lane]?.newestCapability = [:]
@@ -249,7 +286,7 @@ final class AccountProbeScheduler {
         }
         lanes[lane]?.newestCapability = [:]
         lanes[lane]?.passCapability = [:]
-        lanes[lane]?.passGeneration = nil
+        lanes[lane]?.userOnly = false
         lanes[lane]?.draining = false
         host.schedulerLaneDidGoIdle(lane)
         notifyIdleWaitersIfNeeded()
@@ -257,12 +294,13 @@ final class AccountProbeScheduler {
         // loop exited, or the gate reopening); let the next wake or request restart it.
     }
 
-    private func dispatchConcurrent(_ lane: ProviderPollingLane, providerID: ProviderID? = nil) {
+    private func dispatchConcurrent(_ lane: ProviderPollingLane, providerID: ProviderID? = nil, userOnly: Bool = false) {
         guard let host, let state = lanes[lane] else { return }
         let now = host.schedulerNow
         let chosen = host.schedulerChosenInterval
         var records = liveRecords(in: lane)
         if let providerID { records = records.filter { $0.key.providerID == providerID } }
+        if userOnly { records = records.filter { userPending.contains($0.key) } }
         let due = LaneSchedule.dueAccounts(
             records: records, priority: state.priority, now: now, chosen: chosen, effective: chosen
         ).filter { !state.inFlight.contains($0) }
@@ -272,7 +310,9 @@ final class AccountProbeScheduler {
         let cycle = host.schedulerBeginCapabilityRefresh(for: due.compactMap { host.schedulerProvider(for: $0) })
         for key in due {
             lanes[lane]?.priority.removeAll { $0 == key }
-            guard host.schedulerProvider(for: key) != nil else { continue }
+            // A record without a provider would stay due forever; drop it rather than wake
+            // every second for it.
+            guard host.schedulerProvider(for: key) != nil else { unregister(key); continue }
             lanes[lane]?.inFlight.insert(key)
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -302,11 +342,16 @@ final class AccountProbeScheduler {
     ) async {
         guard let host, let provider = host.schedulerProvider(for: key), host.schedulerIsEligible(key) else {
             if alreadyInFlight { lanes[lane]?.inFlight.remove(key) }
-            finish(key)
+            // A record without a provider would be selected again at once (serial lane) or
+            // keep the wake at one second (concurrent lane).
+            if host?.schedulerProvider(for: key) == nil { unregister(key) } else { finish(key) }
             return
         }
         let start = host.schedulerNow
         if var record = records[key] {
+            record.isPrimary = host.schedulerIsPrimary(key)
+            record.isNeverSignedIn = LaneSchedule.isNeverSignedIn(host.schedulerFreshness(for: key))
+            record.lastGapOnCadence = record.scheduledOnCadence
             record.previousAttempt = record.lastAttempt
             record.lastAttempt = start
             record.forcedDue = false
@@ -314,22 +359,26 @@ final class AccountProbeScheduler {
         }
         if !alreadyInFlight { lanes[lane]?.inFlight.insert(key) }
         let attachment = host.schedulerAttachmentGeneration(for: key)
+        inFlightAttachment[key] = attachment
 
         let result = await CLIExecutableRefreshContext.$generation.withValue(locatorGeneration) {
             await provider.fetchResult()
         }
 
+        inFlightAttachment.removeValue(forKey: key)
         // The store may have gone away while the probe ran; nothing left to merge into.
         guard let liveHost = self.host else { return }
         let end = liveHost.schedulerNow
         lanes[lane]?.inFlight.remove(key)
         appendToLog(LaneSchedule.ProbeSpan(start: start, end: end), lane: lane, now: end, chosen: liveHost.schedulerChosenInterval)
-        let outcome = LaneSchedule.outcome(of: result)
-        if var record = records[key] {
+        let accepted = liveHost.schedulerMerge(key: key, result: result, attachmentGeneration: attachment)
+        // A result the store refused (reset, handoff boundary, detached row) says nothing
+        // about the row that now holds this key, so it must not move its backoff either.
+        if accepted, var record = records[key] {
+            let outcome = LaneSchedule.outcome(of: result)
             record.consecutiveFailures = LaneSchedule.consecutiveFailures(after: outcome, previous: record.consecutiveFailures)
             records[key] = record
         }
-        let accepted = liveHost.schedulerMerge(key: key, result: result, attachmentGeneration: attachment)
         if accepted, let capability = result.capability {
             if appliesCapabilityImmediately {
                 liveHost.schedulerApplyCapability(capability, for: key.providerID, generation: capabilityGeneration)
@@ -339,6 +388,9 @@ final class AccountProbeScheduler {
             lanes[lane]?.newestCapability[key.providerID] = capability
         }
         finish(key)
+        // A follow-up queued behind this probe: the serial loop picks it up itself, but a
+        // concurrent lane has no loop, so its batch is started here.
+        if case .concurrent = lane, lanes[lane]?.priority.contains(key) == true { dispatchUserWork(in: lane) }
     }
 
     // MARK: Helpers
@@ -348,28 +400,46 @@ final class AccountProbeScheduler {
     private func liveRecords(in lane: ProviderPollingLane) -> [LaneSchedule.AccountRecord] {
         guard let host else { return [] }
         let now = host.schedulerNow
-        return laneOf.compactMap { element -> LaneSchedule.AccountRecord? in
-            let (key, memberLane) = element
-            guard memberLane == lane, var record = records[key], host.schedulerIsEligible(key) else { return nil }
+        return order.compactMap { key -> LaneSchedule.AccountRecord? in
+            guard laneOf[key] == lane, var record = records[key], host.schedulerIsEligible(key) else { return nil }
             record.isPrimary = host.schedulerIsPrimary(key)
             record.isNeverSignedIn = LaneSchedule.isNeverSignedIn(host.schedulerFreshness(for: key))
-            record.resetDeadline = host.schedulerResetDeadline(for: key, now: now)
+            // R2M3: a deadline is phased relative to the attempt it must post-date, not to
+            // now — by the time the engine wakes at deadline + grace, the deadline has passed.
+            record.resetDeadline = host.schedulerResetDeadline(for: key, after: record.lastAttempt ?? now)
             return record
         }
+    }
+
+    private func isInFlight(_ key: AccountKey) -> Bool {
+        guard let lane = laneOf[key] else { return false }
+        return lanes[lane]?.inFlight.contains(key) == true
+    }
+
+    /// Whether the probe running for `key` started under the store's current attachment
+    /// generation, so its result will be accepted and can answer a user request.
+    private func inFlightAnswers(_ key: AccountKey) -> Bool {
+        guard let host, let started = inFlightAttachment[key] else { return false }
+        return started == host.schedulerAttachmentGeneration(for: key)
+    }
+
+    private func enqueuePriority(_ key: AccountKey) {
+        guard let lane = laneOf[key], lanes[lane]?.priority.contains(key) == false else { return }
+        lanes[lane]?.priority.append(key)
     }
 
     /// The account a serial lane probes next, or nil when nothing may start. One live read
     /// of the lane feeds both the effective-interval readout and the gated candidates.
     /// R8: timer work waits for the budget; user work never does, so a closed gate narrows
-    /// the candidates to user requests instead of ending the pass.
+    /// the candidates to user requests instead of ending the pass. A user-started pass
+    /// (KTD7) is narrowed the same way whatever the gate says.
     private func nextSerialKey(in lane: ProviderPollingLane) -> AccountKey? {
         guard let host, let state = lanes[lane] else { return nil }
         let now = host.schedulerNow
         let chosen = host.schedulerChosenInterval
         let records = liveRecords(in: lane)
-        let candidates = LaneSchedule.mayStartTimerProbe(log: state.log, now: now, chosen: chosen)
-            ? records
-            : records.filter { userPending.contains($0.key) }
+        let timerMayStart = !state.userOnly && LaneSchedule.mayStartTimerProbe(log: state.log, now: now, chosen: chosen)
+        let candidates = timerMayStart ? records : records.filter { userPending.contains($0.key) }
         return LaneSchedule.nextAccount(
             records: candidates,
             priority: state.priority,
@@ -402,6 +472,8 @@ final class AccountProbeScheduler {
     }
 
     private func finish(_ key: AccountKey) {
+        // A follow-up probe is still queued for this key; it answers the waiters instead.
+        if let lane = laneOf[key], lanes[lane]?.priority.contains(key) == true { return }
         if let waiters = completionWaiters.removeValue(forKey: key) {
             for waiter in waiters { waiter.resume() }
         }
