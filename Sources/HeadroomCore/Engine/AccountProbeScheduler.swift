@@ -325,19 +325,20 @@ final class AccountProbeScheduler {
             await provider.fetchResult()
         }
 
-        guard let host = self.host else { return }
-        let end = host.schedulerNow
+        // The store may have gone away while the probe ran; nothing left to merge into.
+        guard let liveHost = self.host else { return }
+        let end = liveHost.schedulerNow
         lanes[lane]?.inFlight.remove(key)
-        appendToLog(LaneSchedule.ProbeSpan(start: start, end: end), lane: lane, now: end, chosen: host.schedulerChosenInterval)
+        appendToLog(LaneSchedule.ProbeSpan(start: start, end: end), lane: lane, now: end, chosen: liveHost.schedulerChosenInterval)
         let outcome = LaneSchedule.outcome(of: result)
         if var record = records[key] {
             record.consecutiveFailures = LaneSchedule.consecutiveFailures(after: outcome, previous: record.consecutiveFailures)
             records[key] = record
         }
-        let accepted = host.schedulerMerge(key: key, result: result, attachmentGeneration: attachment)
+        let accepted = liveHost.schedulerMerge(key: key, result: result, attachmentGeneration: attachment)
         if accepted, let capability = result.capability {
             if appliesCapabilityImmediately {
-                host.schedulerApplyCapability(capability, for: key.providerID, generation: capabilityGeneration)
+                liveHost.schedulerApplyCapability(capability, for: key.providerID, generation: capabilityGeneration)
             }
             // Serial lanes keep the newest verdict for pass end so a recovered later account
             // clears an earlier path miss from the same pass.

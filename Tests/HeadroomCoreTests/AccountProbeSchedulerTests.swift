@@ -24,7 +24,8 @@ struct AccountProbeSchedulerTests {
         }
     }
 
-    private func liveSnapshot(_ id: ProviderID, at capturedAt: Date? = nil) -> UsageSnapshot {
+    /// Called from the doubles' `@Sendable` result closures off the main actor.
+    nonisolated private func liveSnapshot(_ id: ProviderID, at capturedAt: Date? = nil) -> UsageSnapshot {
         UsageSnapshot(
             providerID: id,
             windows: [UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: reset)],

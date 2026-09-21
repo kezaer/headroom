@@ -427,19 +427,20 @@ extension DemoFixture {
         probeDuration: TimeInterval? = nil
     ) -> [(account: ProviderAccount, provider: any UsageProvider)] {
         let plans = ["Max", "Pro", "Team", "Plus", "Prolite"]
-        return (0..<count).map { index in
+        return (0..<count).map { index -> (account: ProviderAccount, provider: any UsageProvider) in
             let label = index == 0 ? "Personal" : "Account \(index + 1)"
             let id = "\(providerID.raw)-generated-\(index + 1)"
             if providerID == .grok {
                 let accountID: AccountID = index == 0 ? .primary : AccountID(id)
                 let account = ProviderAccount(id: accountID, providerID: .grok, label: label, isBuiltIn: index == 0)
-                return (account, DemoUsageProvider(
+                let provider: any UsageProvider = DemoUsageProvider(
                     id: .grok,
                     displayName: ProviderID.grok.displayName,
                     snapshot: grokSnapshot,
                     accountID: accountID,
                     probeDuration: probeDuration
-                ))
+                )
+                return (account: account, provider: provider)
             }
             return demoAccount(
                 provider: providerID,

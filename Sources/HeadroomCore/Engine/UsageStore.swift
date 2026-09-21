@@ -128,7 +128,7 @@ public final class UsageStore {
     private var fullRefreshDepth = 0
     /// KTD1: per-lane due-queue engine. Owns the attempt clock, probe log, and priority
     /// requests; everything that touches snapshots comes back through the host protocol.
-    @ObservationIgnored let scheduler = AccountProbeScheduler()
+    let scheduler = AccountProbeScheduler()
 
     var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]

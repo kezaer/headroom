@@ -104,8 +104,9 @@ struct LaneScheduleTests {
         #expect(LaneSchedule.mayStartTimerProbe(log: log, now: now, chosen: twoMinutes))
         log.append(span(-125, -124))
         #expect(!LaneSchedule.mayStartTimerProbe(log: log, now: now, chosen: twoMinutes))
-        // Sixty seconds later, sixty seconds of old busy time have left the window.
-        #expect(LaneSchedule.mayStartTimerProbe(log: log, now: now.addingTimeInterval(60), chosen: twoMinutes))
+        // Two minutes on, the oldest probes have slid out of the window and it reopens.
+        #expect(!LaneSchedule.mayStartTimerProbe(log: log, now: now.addingTimeInterval(60), chosen: twoMinutes))
+        #expect(LaneSchedule.mayStartTimerProbe(log: log, now: now.addingTimeInterval(125), chosen: twoMinutes))
     }
 
     @Test func gateAllowsEveryProbeForThreeQuickAccounts() {
@@ -115,10 +116,11 @@ struct LaneScheduleTests {
 
     @Test func budgetReopensWhenEnoughBusyTimeFallsOutOfTheWindow() {
         let twoMinutes: TimeInterval = 2 * 60
-        // One 180s probe ending now inside a 240s window: 60s over the 120s budget.
+        // One 180s probe ending now inside a 240s window: 60s over the 120s budget. The
+        // window's left edge must pass 120s into the probe before only 120s remain inside.
         let log = [span(-180, 0)]
         let reopens = LaneSchedule.budgetReopens(log: log, now: now, chosen: twoMinutes)
-        #expect(reopens == now.addingTimeInterval(60))
+        #expect(reopens == now.addingTimeInterval(120))
         #expect(LaneSchedule.budgetReopens(log: [span(-10, 0)], now: now, chosen: twoMinutes) == nil)
     }
 
