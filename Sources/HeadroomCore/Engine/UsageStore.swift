@@ -123,6 +123,10 @@ public final class UsageStore {
     let accountRegistry: AccountRegistry?
     let accountStorage: any AccountStorageManaging
     let continuityCache: (any UsageContinuityCaching)?
+    /// KTD14 (2026-09-19 sign-in plan): diagnostics-only record of observed Claude
+    /// sign-outs. Optional so the render harness, demo stores, and tests that don't
+    /// care compose without it.
+    let signOutRecord: SignOutRecord?
     private let now: @Sendable () -> Date
     /// Counts timer-driven cycles for the not-signed-in poll backoff.
     private var timerCycleCount = 0
@@ -157,6 +161,7 @@ public final class UsageStore {
         accountStorage: any AccountStorageManaging = DefaultAccountStorage(),
         providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)? = nil,
         continuityCache: (any UsageContinuityCaching)? = nil,
+        signOutRecord: SignOutRecord? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         widgetExporter: (any WidgetSnapshotExporting)? = nil,
         phoneSyncExporter: (any WidgetSnapshotExporting)? = nil
@@ -168,6 +173,7 @@ public final class UsageStore {
         self.accountStorage = accountStorage
         self.providerFactory = providerFactory
         self.continuityCache = continuityCache
+        self.signOutRecord = signOutRecord
         self.now = now
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
@@ -848,12 +854,30 @@ public final class UsageStore {
             with: snapshots[key],
             at: now()
         )
+        recordSignOutEdge(next, for: key)
         // Skip the assignment when nothing changed so an unchanging state (e.g. a
         // provider that stays logged-out) doesn't invalidate observers every cycle.
         if snapshots[key] != next { snapshots[key] = next }
         updateContinuityCache(next, for: key)
         if notifiesSetup { setupCoordinator?.receive(next, for: key) }
         return true
+    }
+
+    /// KTD14 (2026-09-19 sign-in plan): merge is the one place the prior row and the
+    /// merged one are both settled and capability failures have already short-circuited,
+    /// so it is where the signed-in → signed-out edge is observed. A transient capture or
+    /// an unrecognized surface says nothing about the login, so both leave the flag and
+    /// the list alone — only a live reading re-arms the account.
+    private func recordSignOutEdge(_ snapshot: UsageSnapshot, for key: AccountKey) {
+        guard let signOutRecord, key.providerID == .claude else { return }
+        switch snapshot.freshness {
+        case .live:
+            signOutRecord.noteSignedIn(key)
+        case .stale(.providerSetup(.claudeLoginRequired)):
+            signOutRecord.noteSignedOut(key)
+        default:
+            break
+        }
     }
 
     private func updateContinuityCache(_ snapshot: UsageSnapshot, for key: AccountKey) {

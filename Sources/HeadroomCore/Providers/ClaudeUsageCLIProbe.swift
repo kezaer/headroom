@@ -44,6 +44,15 @@ public enum ClaudeAuthStatus: Sendable, Equatable {
     case unsupported
 }
 
+/// Whether the resolved CLI can be handed the sign-in command (`ClaudeUsageCLIProbe
+/// .signInSupport`). Three answers, because "too old" and "unreadable" take opposite
+/// branches at staging.
+public enum ClaudeCLISignInSupport: Sendable, Equatable {
+    case supported
+    case tooOld
+    case unreadable
+}
+
 /// Drives the interactive `claude` CLI in a pseudo-terminal, sends `/usage`, and
 /// returns the rendered panel text. This is the compliant path to the real 5-hour /
 /// weekly windows: the official client makes the request (a free status fetch, no model
@@ -241,15 +250,32 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
     /// `/usage` locally under `-p`; an unverified older build could forward it to the
     /// model as a prompt — spending real usage every poll — so anything below the
     /// floor (or unparseable) stays on the PTY path.
-    static func printUsageSupported(versionOutput: String) -> Bool {
+    public static func printUsageSupported(versionOutput: String) -> Bool {
         guard let version = parsedVersion(versionOutput) else { return false }
         return version >= (2, 1, 217)
     }
 
-    public static func versionBand(
+    /// KTD4 (2026-09-19 sign-in plan): the sign-in handoff's own floor, separate from
+    /// `ClaudeCLIVersionBand` because that enum is printed by the redaction-safe
+    /// diagnostic. A readable version below 2.1.41 blocks the handoff (R6) — those CLIs
+    /// could sign in and never be confirmed, since every usage check reads `auth
+    /// status` — while an unreadable one keeps today's interactive launch, so a change
+    /// to the CLI's version format cannot lock every user out of sign-in. Pure over the
+    /// already-captured `--version` string: probing by running the subcommand risks an
+    /// older CLI taking `auth login` as a paid model prompt.
+    public static func signInSupport(versionOutput: String) -> ClaudeCLISignInSupport {
+        guard let version = parsedVersion(versionOutput) else { return .unreadable }
+        return version >= (2, 1, 41) ? .supported : .tooOld
+    }
+
+    /// KTD4 (2026-09-19 sign-in plan): the raw `--version` output, off the main actor, for
+    /// callers that apply more than one floor to it — the sign-in handoff reads both
+    /// `signInSupport` and `printUsageSupported` from a single capture. Nil when the CLI
+    /// could not be launched or did not exit cleanly.
+    public static func versionOutput(
         executablePath: String,
         environmentOverrides: [String: String] = [:]
-    ) async -> ClaudeCLIVersionBand {
+    ) async -> String? {
         await Task.detached(priority: .utility) {
             switch runForOutput(
                 claudePath: executablePath,
@@ -258,11 +284,22 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
                 deadline: 5
             ) {
             case .launchNotFound, .failed:
-                return .unknown
+                return nil
             case .data(let data):
-                return classifyVersionBand(String(decoding: data, as: UTF8.self))
+                return String(decoding: data, as: UTF8.self)
             }
         }.value
+    }
+
+    public static func versionBand(
+        executablePath: String,
+        environmentOverrides: [String: String] = [:]
+    ) async -> ClaudeCLIVersionBand {
+        guard let output = await versionOutput(
+            executablePath: executablePath,
+            environmentOverrides: environmentOverrides
+        ) else { return .unknown }
+        return classifyVersionBand(output)
     }
 
     static func classifyVersionBand(_ versionOutput: String) -> ClaudeCLIVersionBand {

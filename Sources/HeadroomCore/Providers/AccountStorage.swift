@@ -366,6 +366,73 @@ public enum AccountStorage {
         return startedAt
     }
 
+    /// KTD8/KTD13 (2026-09-19 sign-in plan): write the handoff's own record beside its
+    /// generation. It deliberately lives outside the pending and generation-state lines,
+    /// which `SetupCompletionCommand.wrap` pins at open and compares at exit — appending to
+    /// either would make every wrapper record no completion. All fields are allowlisted
+    /// protocol data; the account is identified by the marker path alone, exactly as the
+    /// other handoff files are.
+    public static func writeSetupHandoffRecord(
+        _ record: SetupHandoffRecord,
+        marker: SetupCompletionMarker,
+        generation: String
+    ) throws {
+        guard isMarkerGeneration(generation) else { return }
+        let identifier = record.terminalBundleIdentifier.flatMap(bundleIdentifier(_:)) ?? ""
+        // KTD11: the interactive reason joins the record for the same reason the policy did
+        // — R15 asks a restored handoff to state its phase, and the CLI version the reason
+        // was read from can change while the original Terminal is still open.
+        let reason = record.claudeInteractiveReason?.rawValue ?? ""
+        try writeOwnerOnly(
+            "record:\(record.waitingPolicy.rawValue):\(identifier):\(reason)\n",
+            to: URL(fileURLWithPath: setupHandoffRecordPath(marker, generation: generation))
+        )
+    }
+
+    /// KTD8: the current generation's record, or nil when the handoff was opened by a
+    /// build that wrote none — restore then falls back by purpose rather than guessing.
+    public static func setupHandoffRecord(
+        marker: SetupCompletionMarker
+    ) -> SetupHandoffRecord? {
+        guard case .active(let generation) = parseGenerationState(marker: marker),
+              let value = markerValue(
+                  atPath: setupHandoffRecordPath(marker, generation: generation)
+              )
+        else { return nil }
+        let parts = value.split(separator: ":", omittingEmptySubsequences: false)
+        // A three-field record was written by a build before KTD11's reason field; it reads
+        // back with no reason, which is the safe default (the plain sign-in copy).
+        guard parts.count == 3 || parts.count == 4,
+              parts[0] == "record",
+              let policy = SetupWaitingPolicy(rawValue: String(parts[1]))
+        else { return nil }
+        return SetupHandoffRecord(
+            waitingPolicy: policy,
+            terminalBundleIdentifier: bundleIdentifier(String(parts[2])),
+            claudeInteractiveReason: parts.count == 4
+                ? ClaudeInteractiveLaunchReason(rawValue: String(parts[3]))
+                : nil
+        )
+    }
+
+    static func setupHandoffRecordPath(
+        _ marker: SetupCompletionMarker,
+        generation: String
+    ) -> String {
+        precondition(isMarkerGeneration(generation))
+        return marker.pendingPath + ".record." + generation
+    }
+
+    /// Reverse-DNS identifiers only. Anything else — a separator that would break the
+    /// record's own format, whitespace, a shell metacharacter — is dropped rather than
+    /// stored and later handed to AppKit.
+    private static func bundleIdentifier(_ value: String) -> String? {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-".utf8)
+        guard !value.isEmpty, value.utf8.count <= 255, value.utf8.allSatisfy(allowed.contains)
+        else { return nil }
+        return value
+    }
+
     /// Restore the explicit login mode after an app relaunch while Terminal remains
     /// open. New opening markers include mode; legacy PID-only markers are standard.
     public static func setupHandoffMode(marker: SetupCompletionMarker) -> SetupHandoffMode? {
@@ -567,6 +634,11 @@ public enum AccountStorage {
         try? FileManager.default.removeItem(
             atPath: generatedCompletedPath(marker, generation: generation)
         )
+        // KTD8: the record belongs to this generation, so it goes wherever the generation's
+        // markers go — handoff end, force-cancel, and a successor superseding it.
+        try? FileManager.default.removeItem(
+            atPath: setupHandoffRecordPath(marker, generation: generation)
+        )
     }
 
     private static func markerValue(atPath path: String) -> String? {
@@ -670,6 +742,31 @@ public enum AccountStorage {
               let permissions = attributes[.posixPermissions] as? NSNumber
         else { return false }
         return permissions.intValue & 0o077 == 0
+    }
+}
+
+/// KTD8/KTD13 (2026-09-19 sign-in plan): what a handoff has to remember about itself
+/// across a relaunch, beyond the wrapper protocol's own marker lines. The waiting policy
+/// is read back rather than re-derived, because the CLI version it was chosen from can
+/// change while the original Terminal is still open.
+public struct SetupHandoffRecord: Sendable, Equatable {
+    public let waitingPolicy: SetupWaitingPolicy
+    /// The app LaunchServices resolved when the handoff opened, so Show Terminal fronts
+    /// the window that actually holds it. Nil when none was resolved.
+    public let terminalBundleIdentifier: String?
+    /// KTD11/R6: why staging chose the interactive launch, which decides whether the
+    /// waiting copy tells the user to type `/login`. Nil for a sign-in script, for a
+    /// non-Claude handoff, and for a record written before this field existed.
+    public let claudeInteractiveReason: ClaudeInteractiveLaunchReason?
+
+    public init(
+        waitingPolicy: SetupWaitingPolicy,
+        terminalBundleIdentifier: String?,
+        claudeInteractiveReason: ClaudeInteractiveLaunchReason? = nil
+    ) {
+        self.waitingPolicy = waitingPolicy
+        self.terminalBundleIdentifier = terminalBundleIdentifier
+        self.claudeInteractiveReason = claudeInteractiveReason
     }
 }
 

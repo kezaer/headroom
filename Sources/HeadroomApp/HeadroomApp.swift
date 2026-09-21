@@ -109,7 +109,8 @@ enum Entry {
                 account: accountCategory,
                 versionBand: versionBand,
                 outcome: diagnosticOutcome(for: result),
-                events: events
+                events: events,
+                signOutEvents: AppComposition.signOutRecord.events
             ).forEach { print($0) }
 
             switch result {
@@ -682,6 +683,12 @@ enum AppComposition {
     /// defaults object, so every call site shares one domain regardless of instance.
     static var launchPreferences: Preferences { Preferences(defaults: launchDefaults) }
 
+    /// KTD14 (2026-09-19 sign-in plan): the sign-out record over that same one domain,
+    /// so the running app and `--probe-claude` read and write the same entries. An
+    /// unbundled `swift run Headroom` resolves `.standard` to a different domain than
+    /// the app bundle, so the record is read from the built app's binary.
+    static var signOutRecord: SignOutRecord { SignOutRecord(defaults: launchDefaults) }
+
     /// `arguments` is injected so the demo isolation can be tested from a process that was
     /// not itself launched with `--demo`.
     static func resolveLaunchDefaults(arguments: [String] = CommandLine.arguments) -> UserDefaults {
@@ -736,6 +743,7 @@ enum AppComposition {
             accountRegistry: registry,
             providerFactory: { account in provider(for: account, credentials: credentials) },
             continuityCache: UsageContinuityCache(),
+            signOutRecord: signOutRecord,
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
         )
@@ -1025,8 +1033,26 @@ enum AppComposition {
         ]
     }
 
-    static func widgetExporter() -> any WidgetSnapshotExporting {
-        WidgetSnapshotExporter(cache: .appGroup()) {
+    /// `HeadroomAppTests` runs inside this app as its XCTest host, so every run launches the
+    /// real app: `UsageStore.start()` → `refreshAll` → `exportWidgetSnapshot` reaches for the
+    /// App Group container, and macOS answers the first reach with the "would like to access
+    /// data from other apps" consent alert. That alert blocks the container call on the main
+    /// thread until a human dismisses it, which stalls the whole test run — on every rebuild.
+    /// Nothing under test observes the export, so the test host gets an exporter that writes
+    /// nothing. The environment is a parameter so the decision is provable without a launch.
+    static func usesNoOpWidgetExporter(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+    }
+
+    static func widgetExporter(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> any WidgetSnapshotExporting {
+        guard !usesNoOpWidgetExporter(environment: environment) else {
+            return NoOpWidgetSnapshotExporter()
+        }
+        return WidgetSnapshotExporter(cache: .appGroup()) {
             WidgetCenter.shared.reloadAllTimelines()
         }
     }
@@ -1034,6 +1060,12 @@ enum AppComposition {
     static func phoneSyncExporter() -> any WidgetSnapshotExporting {
         iCloudSnapshotPublisher(sync: iCloudSnapshotSync(store: UbiquitousKeyValueSyncStore()))
     }
+}
+
+/// The exporter the XCTest host composes in place of the App Group one. See
+/// `AppComposition.usesNoOpWidgetExporter`.
+struct NoOpWidgetSnapshotExporter: WidgetSnapshotExporting {
+    func export(_ envelope: WidgetSnapshotEnvelope) {}
 }
 
 private struct UnavailableAccountProvider: UsageProvider {

@@ -67,6 +67,29 @@ struct DemoLaunchTokenTests {
         ) == .neutral)
     }
 
+    // MARK: XCTest-host widget exporter
+
+    /// The app hosts its own test bundle, so a run launches it for real and its first refresh
+    /// reached the App Group container — which made macOS put up the "access data from other
+    /// apps" alert and block the run until someone dismissed it. Only the XCTest host may
+    /// swap the exporter; every other launch still composes the App Group one.
+    ///
+    /// The real branch is asserted through the decision rather than by building it: calling
+    /// `widgetExporter(environment: [:])` here would reach the container and raise the very
+    /// alert this exists to avoid.
+    @Test func onlyTheXCTestHostComposesANoOpWidgetExporter() {
+        #expect(AppComposition.usesNoOpWidgetExporter(
+            environment: ["XCTestConfigurationFilePath": "/tmp/probe.xctestconfiguration"]
+        ))
+        #expect(!AppComposition.usesNoOpWidgetExporter(environment: [:]))
+        #expect(!AppComposition.usesNoOpWidgetExporter(
+            environment: ["PATH": "/usr/bin", "XCTestConfigurationFilePathX": "/tmp/probe"]
+        ))
+        // This process is the test host, so its own composition must take the no-op branch.
+        #expect(AppComposition.usesNoOpWidgetExporter())
+        #expect(AppComposition.widgetExporter() is NoOpWidgetSnapshotExporter)
+    }
+
     @Test func meterStyleAndAccountTitleInkTokensCoexist() {
         let arguments = [
             "Headroom", "--demo", "multi-2",

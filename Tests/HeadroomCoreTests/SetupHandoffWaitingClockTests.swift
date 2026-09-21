@@ -183,6 +183,127 @@ import Testing
             atPath: AccountStorage.generatedCompletedPath(marker, generation: generation)
         ))
     }
+    // MARK: - KTD8/KTD13: the per-handoff record beside the marker
+
+    /// KTD8: the waiting policy and the app that opened the window have to survive a
+    /// relaunch, and they cannot ride in the marker lines the wrapper pins and compares.
+    @Test func handoffRecordRoundTripsThePolicyAndTheTerminalThatOpenedIt() throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let generation = try AccountStorage.prepareSetupCompletionMarker(marker)
+
+        try AccountStorage.writeSetupHandoffRecord(
+            SetupHandoffRecord(
+                waitingPolicy: .exitSignalled,
+                terminalBundleIdentifier: "com.apple.Terminal"
+            ),
+            marker: marker,
+            generation: generation
+        )
+
+        let record = try #require(AccountStorage.setupHandoffRecord(marker: marker))
+        #expect(record.waitingPolicy == .exitSignalled)
+        #expect(record.terminalBundleIdentifier == "com.apple.Terminal")
+        // The protocol the wrapper reads is untouched by it.
+        #expect(AccountStorage.setupHandoffGeneration(marker: marker) == generation)
+        #expect(AccountStorage.setupHandoffIsActive(marker: marker))
+
+        let mode = try #require(FileManager.default.attributesOfItem(
+            atPath: AccountStorage.setupHandoffRecordPath(marker, generation: generation)
+        )[.posixPermissions] as? NSNumber)
+        #expect(mode.intValue & 0o077 == 0)
+    }
+
+    @Test func handoffRecordKeepsThePolicyWhenNoTerminalWasResolved() throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let generation = try AccountStorage.prepareSetupCompletionMarker(marker)
+
+        try AccountStorage.writeSetupHandoffRecord(
+            SetupHandoffRecord(waitingPolicy: .polled, terminalBundleIdentifier: nil),
+            marker: marker,
+            generation: generation
+        )
+
+        let record = try #require(AccountStorage.setupHandoffRecord(marker: marker))
+        #expect(record.waitingPolicy == .polled)
+        #expect(record.terminalBundleIdentifier == nil)
+    }
+
+    /// The record is allowlisted like every other handoff file: anything that is not a
+    /// bundle identifier is dropped rather than stored and later handed to AppKit.
+    @Test func handoffRecordDropsAnIdentifierThatIsNotABundleIdentifier() throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let generation = try AccountStorage.prepareSetupCompletionMarker(marker)
+
+        try AccountStorage.writeSetupHandoffRecord(
+            SetupHandoffRecord(
+                waitingPolicy: .polled,
+                terminalBundleIdentifier: "com.apple.Terminal:rm -rf /\n"
+            ),
+            marker: marker,
+            generation: generation
+        )
+
+        let record = try #require(AccountStorage.setupHandoffRecord(marker: marker))
+        #expect(record.waitingPolicy == .polled)
+        #expect(record.terminalBundleIdentifier == nil)
+    }
+
+    /// A record belongs to one generation. A successor's restore must not read the
+    /// abandoned handoff's policy, and the abandoned file must not be left on disk.
+    @Test func handoffRecordIsSupersededWithItsGeneration() throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try AccountStorage.prepareSetupCompletionMarker(marker)
+        try AccountStorage.writeSetupHandoffRecord(
+            SetupHandoffRecord(waitingPolicy: .polled, terminalBundleIdentifier: "com.apple.Terminal"),
+            marker: marker,
+            generation: first
+        )
+        let firstPath = AccountStorage.setupHandoffRecordPath(marker, generation: first)
+
+        try AccountStorage.prepareSetupCompletionMarker(marker)
+
+        #expect(!FileManager.default.fileExists(atPath: firstPath))
+        #expect(AccountStorage.setupHandoffRecord(marker: marker) == nil)
+    }
+
+    @Test(arguments: [0, 1, 2])
+    func handoffRecordIsClearedWhereverItsMarkersAre(_ clearIndex: Int) throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let generation = try AccountStorage.prepareSetupCompletionMarker(marker)
+        try AccountStorage.writeSetupHandoffRecord(
+            SetupHandoffRecord(waitingPolicy: .exitSignalled, terminalBundleIdentifier: "com.apple.Terminal"),
+            marker: marker,
+            generation: generation
+        )
+        let path = AccountStorage.setupHandoffRecordPath(marker, generation: generation)
+        #expect(FileManager.default.fileExists(atPath: path))
+
+        switch clearIndex {
+        case 0: AccountStorage.clearSetupCompletionMarkers(marker)
+        case 1: AccountStorage.clearFinishedSetupCompletionMarkers(marker)
+        default: AccountStorage.clearPreparedSetupCompletionMarker(marker)
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: path))
+        #expect(AccountStorage.setupHandoffRecord(marker: marker) == nil)
+    }
+
+    /// A handoff opened by a build that wrote no record still reads as open; restore then
+    /// falls back by purpose rather than inventing a policy.
+    @Test func aHandoffWithNoRecordReadsAsAbsentNotAsADefault() throws {
+        let (marker, directory) = try makeMarker()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try AccountStorage.prepareSetupCompletionMarker(marker)
+
+        #expect(AccountStorage.setupHandoffRecord(marker: marker) == nil)
+        #expect(AccountStorage.setupHandoffIsActive(marker: marker))
+    }
+
     @Test(arguments: [SetupHandoffPurpose.trust, .approval])
     func approvalHandoffWrapperRunsAndRecordsCompletion(_ purpose: SetupHandoffPurpose) throws {
         let (marker, directory) = try makeMarker()

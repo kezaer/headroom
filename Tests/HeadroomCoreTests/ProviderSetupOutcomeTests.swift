@@ -39,7 +39,7 @@ import Testing
         let expectations: [(ProviderSetupOutcome, SetupRecoveryAction, SetupRecoveryAction?, SetupAutomaticPolicy)] = [
             (.claudeCLIMissing, .installClaudeCLI, .checkNow, .none),
             (.claudeLoginRequired, .openClaudeSetup, .checkNow, .boundedChecksAfterHandoff),
-            (.claudeTrustRequired, .openClaudeSetup, .checkNow, .boundedChecksAfterHandoff),
+            (.claudeTrustRequired, .openClaudeWorkspace, .checkNow, .boundedChecksAfterHandoff),
             (.claudeUnknownUI, .checkNow, .openClaudeSetup, .none),
             (.claudeTransientCapture, .checkNow, .openClaudeSetup, .none),
             (.codexCLIMissing, .installCodexCLI, nil, .none),
@@ -80,8 +80,19 @@ import Testing
     @Test func changingDisplayCopyCannotChangeRecoveryAction() {
         let reason = FailureReason.providerSetup(.claudeTrustRequired)
         #expect(reason.providerSetupOutcome == .claudeTrustRequired)
-        #expect(reason.providerSetupOutcome?.recoveryPresentation.primaryAction == .openClaudeSetup)
+        #expect(reason.providerSetupOutcome?.recoveryPresentation.primaryAction == .openClaudeWorkspace)
         #expect(reason.message == ProviderSetupOutcome.claudeTrustRequired.message)
+    }
+
+    /// AE3/KTD5: workspace approval is its own act. While it shared Sign In's action it
+    /// staged Sign In's script, which on an account that is already signed in prints
+    /// "already signed in", exits, and leaves the approval prompt to be detected again.
+    @Test func claudeWorkspaceApprovalIsNotTheSignInAction() {
+        let approval = ProviderSetupOutcome.claudeTrustRequired.recoveryPresentation
+        #expect(approval.primaryAction == .openClaudeWorkspace)
+        #expect(approval.primaryLabel == "Open Claude Workspace")
+        #expect(ProviderSetupOutcome.claudeLoginRequired.recoveryPresentation.primaryAction
+            == .openClaudeSetup)
     }
 
     @Test func onlyTransientSetupOutcomesAreRetryableWithoutUserAction() {
@@ -231,6 +242,158 @@ import Testing
         }
     }
 
+    /// R7/KTD11 (2026-09-19 sign-in plan): the three phases come off the typed session
+    /// state, never off `.waiting(attempt:)`'s retry counter — which the card's animation
+    /// key deliberately flattens.
+    @Test func thePhaseFollowsTheSessionStateAndTheOpenHandoff() {
+        #expect(SetupWaitingPhase.resolve(
+            state: .preparing,
+            hasActiveHandoff: false,
+            purpose: .setup
+        ) == .openingTerminal)
+        for attempt in [0, 3, 11] {
+            #expect(SetupWaitingPhase.resolve(
+                state: .waiting(attempt: attempt),
+                hasActiveHandoff: true,
+                purpose: .setup
+            ) == .waitingForUser(.signIn))
+        }
+        #expect(SetupWaitingPhase.resolve(
+            state: .verifying,
+            hasActiveHandoff: false,
+            purpose: .setup
+        ) == .confirming(.signIn, reportedFinished: false))
+        for state in [SetupSessionState.idle, .connected, .cancelled, .removed,
+                      .blockedByOpenHandoff, .failed(.waitingTimedOut)] {
+            #expect(SetupWaitingPhase.resolve(
+                state: state,
+                hasActiveHandoff: false,
+                purpose: .setup
+            ) == nil, "\(state) is not a waiting phase")
+        }
+    }
+
+    /// KTD11: the wrapper's recorded completion is what tells "sign-in said it finished"
+    /// apart from a window that closed with no verdict.
+    @Test func confirmingDistinguishesAReportedFinishFromAnUnknownOne() {
+        let finished = SetupWaitingPhase.resolve(
+            state: .verifying,
+            hasActiveHandoff: false,
+            purpose: .setup,
+            reportedCompletion: .succeeded
+        )
+        #expect(finished == .confirming(.signIn, reportedFinished: true))
+        #expect(finished?.copy.title == "Confirming sign-in…")
+        #expect(finished?.copy.body == "Terminal closed. Headroom is reading your usage.")
+
+        for completion in [SetupHandoffCompletion.unknown, .failed] {
+            let unknown = SetupWaitingPhase.resolve(
+                state: .verifying,
+                hasActiveHandoff: false,
+                purpose: .setup,
+                reportedCompletion: completion
+            )
+            #expect(unknown == .confirming(.signIn, reportedFinished: false))
+            #expect(unknown?.copy.title == "Checking sign-in…")
+            #expect(unknown?.copy.body
+                == "Terminal closed. Headroom is checking whether sign-in finished.")
+        }
+    }
+
+    /// R6: only the launch chosen *because the version could not be read* leaves the user at
+    /// the CLI's own screen with a command to type. AE7's never-onboarded extra config shows
+    /// the CLI's own login selector, so it keeps the plain sign-in copy.
+    @Test func onlyAnUnreadableVersionAsksTheUserToTypeLogin() {
+        let hinted = SetupWaitingPhase.resolve(
+            state: .waiting(attempt: 0),
+            hasActiveHandoff: true,
+            purpose: .setup,
+            interactiveReason: .versionUnreadable
+        )
+        #expect(hinted == .waitingForUser(.signInNeedsLoginCommand))
+        #expect(hinted?.copy.token == SetupWaitingToken(text: "/login", isCommand: true))
+        #expect(hinted?.copy.body
+            == "In Terminal, type the command below and press Return, then finish in your browser.")
+
+        for reason in [ClaudeInteractiveLaunchReason.neverOnboardedExtraAccount, nil] {
+            let plain = SetupWaitingPhase.resolve(
+                state: .waiting(attempt: 0),
+                hasActiveHandoff: true,
+                purpose: .setup,
+                interactiveReason: reason
+            )
+            #expect(plain == .waitingForUser(.signIn))
+            #expect(plain?.copy.token == nil)
+        }
+    }
+
+    /// AE3/R5: a workspace-approval handoff is *always* the interactive launch, so keying the
+    /// hint on the launch shape would have told every approval to sign in again. It keeps
+    /// today's guidance and its literal trust-prompt option.
+    @Test func aWorkspaceApprovalHandoffNeverSelectsTheLoginVariant() {
+        for reason in [ClaudeInteractiveLaunchReason.versionUnreadable,
+                       .neverOnboardedExtraAccount, nil] {
+            let phase = SetupWaitingPhase.resolve(
+                state: .waiting(attempt: 0),
+                hasActiveHandoff: true,
+                purpose: .trust,
+                interactiveReason: reason
+            )
+            #expect(phase == .waitingForUser(.workspaceApproval))
+            #expect(phase?.copy.title == "Waiting for approval…")
+            #expect(phase?.copy.token
+                == SetupWaitingToken(text: "“Yes, I trust this folder”", isCommand: false))
+        }
+        #expect(SetupWaitingPhase.resolve(
+            state: .verifying,
+            hasActiveHandoff: false,
+            purpose: .trust
+        )?.copy.title == "Checking approval…")
+    }
+
+    /// The device-code handoffs Codex and Grok already offer keep their own line.
+    @Test func aDeviceCodeHandoffKeepsItsOwnPrompt() {
+        let phase = SetupWaitingPhase.resolve(
+            state: .waiting(attempt: 0),
+            hasActiveHandoff: true,
+            purpose: .setup,
+            mode: .deviceCode
+        )
+        #expect(phase == .waitingForUser(.deviceCode))
+        #expect(phase?.copy.title == "Waiting for device code…")
+    }
+
+    /// KTD6: the old waiting body promised "Headroom checks this account automatically",
+    /// which an exit-signalled handoff does not do — nothing is checked until the CLI
+    /// process exits.
+    @Test func noWaitingCopyPromisesAutomaticChecking() {
+        for text in allWaitingPhaseStrings {
+            #expect(!text.localizedCaseInsensitiveContains("automatically"),
+                    "\(text) still promises automatic checking")
+        }
+    }
+
+    /// R2B1/R2C6/PA11: the phase copy joins the same rules the outcome copy has always been
+    /// held to — curly apostrophes, non-breaking em dashes, one sign-in verb, and no
+    /// borrowed button labels.
+    @Test func thePhaseCopyObeysTheSameRulesAsTheOutcomeCopy() {
+        for text in allWaitingPhaseStrings {
+            #expect(!text.isEmpty)
+            #expect(!text.contains("'"), "\(text) carries a straight apostrophe")
+            #expect(!text.localizedCaseInsensitiveContains("connect"),
+                    "\(text) still names signing in \"connect\"")
+            #expect(!text.localizedCaseInsensitiveContains("Check Again"))
+            #expect(!text.localizedCaseInsensitiveContains("Refresh"))
+            let characters = Array(text)
+            for (index, character) in characters.enumerated() where character == "\u{2014}" {
+                #expect(index > 0 && characters[index - 1] == "\u{00A0}",
+                        "\(text) has a breaking space before its em dash")
+                #expect(index + 1 < characters.count && characters[index + 1] == "\u{00A0}",
+                        "\(text) has a breaking space after its em dash")
+            }
+        }
+    }
+
     @Test func neverSignedInClassificationIsTyped() {
         #expect(ProviderSetupOutcome.claudeLoginRequired.isNeverSignedIn)
         #expect(ProviderSetupOutcome.codexAuthAbsent.isNeverSignedIn)
@@ -261,6 +424,21 @@ private var allPresentationStrings: [String] {
         }
     }
     return strings
+}
+
+/// Every string the waiting-phase table can produce, so a copy rule is asserted across the
+/// whole of it rather than the variants someone remembered.
+private var allWaitingPhaseStrings: [String] {
+    var phases: [SetupWaitingPhase] = [.openingTerminal]
+    for prompt in SetupWaitingPrompt.allCases {
+        phases.append(.waitingForUser(prompt))
+        phases.append(.confirming(prompt, reportedFinished: true))
+        phases.append(.confirming(prompt, reportedFinished: false))
+    }
+    return phases.flatMap { phase -> [String] in
+        let copy = phase.copy
+        return [copy.title, copy.body] + (copy.token.map { [$0.text] } ?? [])
+    }
 }
 
 /// Every `ProviderSetupOutcome`, so a copy rule can be asserted across all of them without
