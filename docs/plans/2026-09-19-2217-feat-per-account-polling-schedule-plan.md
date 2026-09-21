@@ -54,7 +54,7 @@ The interval setting already reads as a promise about freshness; past a handful 
 - R1. Every account of every provider carries its own due time, the last capture attempt plus the effective interval, and its lane always serves the most overdue account next.
 - R2. A CLI lane (Claude, Grok, Cursor) runs one probe at a time; the Codex HTTP lane fetches all of its due accounts concurrently; lanes for different providers overlap with each other.
 - R3. When the provider's primary account and any extra are both overdue, the primary is probed first.
-- R4. Account-level Check Now, provider-level Check Again, Make Main, and setup verification probe that account at the front of the queue without waiting for other due accounts, and reset its due time on completion.
+- R4. Every user or setup action that requests a refresh of one account (Check Now, Check Again, Try Again, Make Main, and setup verification through the coordinator) probes that account at the front of its lane's queue without waiting for other due accounts, and resets its due time on completion.
 - R5. Manual actions in R4 keep their current semantics for locator epochs, capability recovery, and setup session completion.
 - R6. Each probe continues to run the official CLI once per account with the account's isolated config home; no shared credential, endpoint, or token path is introduced.
 
@@ -158,6 +158,8 @@ This plan covers scheduling, guardrails, and the cap. The breakdown below is the
 - Probe durations were measured on a Linux container with Claude Code 2.1.278 as a native binary and a logged-out config: about 0.4 seconds for the auth check, 1.9 seconds for print mode without the network fetch. Planning validates macOS timings with the existing `--probe-claude` diagnostic before fixing the duty-cycle window.
 - Claude Code 2.1.278 exposes no usage subcommand and its JSON output mode wraps the same report text, so one CLI spawn per account per probe remains the floor.
 - Other development is landing on the default branch concurrently; implementation merges the default branch before building and before pushing.
+- The Claude sign-in handoff work merged on 2026-09-21 (`docs/plans/2026-09-19-1236-fix-claude-sign-in-handoff-plan.md`) keeps all setup verification on the single-account refresh path, polls an `interactive` handoff 10 seconds after each result lands, and records in its KTD6 that the store-wide refreshing flag stalls every other provider during a wait. This plan's per-lane busy state is the fix that decision anticipated; the coordinator's own timers and the 5-minute waiting timeout are unchanged by it.
+- Exporting the widget snapshot after each primary capture multiplies exposure to the known main-thread block in the app-group container read (BUGS.md, sign-in residuals). Planning bounds export frequency to primary captures and the end of a lane pass rather than every probe.
 
 ### Outstanding Questions
 
@@ -173,6 +175,7 @@ This plan covers scheduling, guardrails, and the cap. The breakdown below is the
 - The measurement window for the duty-cycle ceiling in R8.
 - Whether the effective-interval display in R9 lives on the Accounts pane, the General pane, or both.
 - How the due-queue interacts with the existing reset-deadline phasing of the timer, which today shifts a single tick toward the nearest reset.
+- Whether the scheduler's per-account gate should also suppress timer captures for an account with an open reset handoff, which BUGS.md lists as a store-level gap ("Reset leaks old-login usage through the store"); it is adjacent to this work, not required by it.
 
 ### Sources / Research
 
