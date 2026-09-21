@@ -185,7 +185,7 @@ This plan covers scheduling, guardrails, and the cap. The breakdown below is the
 - `Sources/HeadroomCore/Engine/PollingEngine.swift` — single sleep-then-tick loop with reset-deadline phasing; no per-account scheduling.
 - `Sources/HeadroomCore/Settings/AccountRegistry.swift` — `maxPerProvider = 5`, consumed by `accounts(for:)`, `canAddAccount`, `addAccount`, and the `accountCapacity` default on `UsageProvider`.
 - `Sources/HeadroomCore/Providers/ClaudeUsageCLIProbe.swift` — per-account sequence of auth status (5s), version (5s), print (20s), PTY fallback (30s boot, 26s panel); version result is not cached across accounts.
-- `Sources/HeadroomCore/Setup/SetupSessionCoordinator.swift` — `verificationStopLoss` is a fixed 240 seconds, not derived from account count.
+- `Sources/HeadroomCore/Engine/SetupSessionCoordinator.swift` — `verificationStopLoss` is a fixed 240 seconds, not derived from account count.
 - `Sources/HeadroomApp/UI/AccountsSettingsTile.swift` — add-account gating on `accountCapacity` and `canAddAccount`; no scroll or height handling for large lists.
 - `Sources/HeadroomApp/UI/PopoverView.swift` — 640pt card list cap; header "Updated" label aggregates the oldest live capture.
 - `BUGS.md` — "No backoff on repeated failures" listed as deferred.
@@ -209,15 +209,15 @@ This plan covers scheduling, guardrails, and the cap. The breakdown below is the
 ### Key Technical Decisions
 
 - KTD1. **The scheduler is a pure decision enum plus a main-actor engine type owned by the store.** `LaneSchedule` holds static, clock-injected functions (next account to serve, due time, effective interval, backoff spacing); `AccountProbeScheduler` holds per-account state and drains lanes. This mirrors how `PollPhasing` and `SetupSessionCoordinator` already separate cadence decisions from lifecycle. (session-settled: user-approved — chosen over adding the queue inside `UsageStore`: the store is already over 1,100 lines and the codebase tests cadence as pure functions.) Governs R1, R2, R3, R7, R8, R11, R13.
-- KTD2. **Busy state is per lane; the store-wide flag becomes derived.** Each lane records whether a probe is in flight. `isRefreshing` stays as the popover's indicator and means "any lane is draining or API spend is fetching". A manual `refreshAll()` marks every enabled account due now and returns when the lanes that were busy have drained, which preserves the contract the existing store tests rely on. Governs R2, R4, R12.
-- KTD3. **The scheduler owns the attempt clock.** Per account it keeps the last attempt time, the last three probe durations, and the consecutive-failure count. `UsageSnapshot.capturedAt` is never used for scheduling because a failed probe deliberately preserves the prior capture time. Governs R1, R11.
+- KTD2. **Busy state is per lane; the store-wide flag becomes derived.** Each lane records whether a probe is in flight. `isRefreshing` stays as the popover's indicator and means "any lane is draining or API spend is fetching". A manual `refreshAll()` marks every enabled account due now and returns when the lanes that were busy have drained, which preserves the contract the existing store tests rely on. `refreshAPISpendOnly()` guards on its own API-spend in-flight flag rather than the derived `isRefreshing`, so Settings spend controls keep working while a CLI lane drains. Governs R2, R4, R12.
+- KTD3. **The scheduler owns the attempt clock.** Per account it keeps the last attempt time, the last three probe durations, and the consecutive-failure count. `UsageSnapshot.capturedAt` is never used for scheduling because a failed probe deliberately preserves the prior capture time. A failure for backoff is a result whose snapshot is `.stale` with a non-permanent reason, or a provider capability failure; a permanent setup state (`isPermanent`, including never-signed-in and login or trust required) does not increment the count. Governs R1, R11.
 - KTD4. **Effective interval per CLI lane is the chosen interval or twice the lane's summed probe cost, whichever is larger, never below the two-minute floor.** Each account contributes the mean of its recent durations, defaulting to 5 seconds until observed. Twice the summed cost keeps the lane idle at least half the time (R8). The HTTP lane's effective interval is the chosen interval. The value shown in Settings rounds up to whole minutes. Governs R7, R8, R20.
-- KTD5. **Backoff doubles from the effective interval and caps at 30 minutes; never-signed-in extras wait four intervals.** After n consecutive failures the next due time is the last attempt plus the smaller of the effective interval times 2ⁿ and 30 minutes; one success resets n. A non-primary account whose snapshot is stale for a never-signed-in reason is due every four effective intervals, replacing the timer-cycle modulo. Governs R11, R13.
-- KTD6. **The existing wake timer stays and sleeps until the earliest due account.** `PollingEngine` keeps its loop; its sleep becomes the time until the earliest due account across all lanes, each account's due time phased toward its own tracked reset deadline with the existing `PollPhasing` arithmetic, clamped between one second and the chosen interval. A tick asks the scheduler to dispatch every due account; a CLI lane then drains one probe at a time in its own task until nothing is due, and the HTTP lane fetches all due accounts concurrently. Popover open keeps its age gate and then dispatches due accounts instead of forcing a full refresh. Governs R1, R2, R7.
-- KTD7. **Manual actions are front-of-queue requests.** `refreshAccountNow` enqueues a priority request for one account; an idle lane starts it immediately and a busy lane serves it after the in-flight probe. The setup coordinator, Try Again, Check Now, Check Again, and Make Main all continue to call `refreshAccountNow`, so no caller changes. Governs R4, R5.
+- KTD5. **Backoff doubles from the effective interval and caps at 30 minutes; never-signed-in extras wait four intervals.** After n consecutive failures the next due time is the last attempt plus the smaller of the effective interval times 2ⁿ and 30 minutes; one success resets n. Permanent setup states stay on the effective interval (KTD3), so a signed-out primary recovers within one interval after an outside sign-in. A non-primary account whose snapshot is stale for a never-signed-in reason is due every four effective intervals, replacing the timer-cycle modulo, and that rule alone governs it. Governs R11, R13.
+- KTD6. **The existing wake timer stays and sleeps until the earliest due account.** `PollingEngine` keeps its loop; its sleep becomes the time until the earliest due account across all lanes, each account's due time phased toward its own tracked reset deadline with the existing `PollPhasing` arithmetic, clamped between one second and the chosen interval, and computed over accounts in idle lanes only, because a draining lane serves its own due accounts until nothing is due. A tick asks the scheduler to dispatch every due account; a CLI lane then drains one probe at a time in its own task until nothing is due, and the HTTP lane fetches all due accounts concurrently. Popover open keeps its age gate and then dispatches due accounts instead of forcing a full refresh. Governs R1, R2, R7.
+- KTD7. **Manual actions are front-of-queue requests.** `refreshAccountNow` enqueues a priority request for one account; an idle lane starts it immediately and a busy lane serves it after the in-flight probe. The setup coordinator, Try Again, Check Now, Check Again, and Make Main all continue to call `refreshAccountNow`, so no caller changes. A lane's priority requests are a set keyed by account: a repeated request for an account already waiting is coalesced, which preserves the existing dedupe test. Governs R4, R5.
 - KTD8. **Generation boundaries move from "refresh cycle" to "lane pass".** A lane pass begins when an idle lane starts draining and ends when nothing is due. One locator generation (`CLIExecutableRefreshContext`) and one capability generation per provider are minted per pass, so a negative CLI discovery is shared within a pass and re-searched on the next, matching the existing "one negative search per timer generation" rule. Attachment generations are captured at dispatch exactly as today. Governs R5, R6.
 - KTD9. **Widget and phone snapshots export after a primary-account merge and at the end of a lane pass.** Extras' merges do not export. This meets R19 while bounding exposure to the app-group container read that BUGS.md records as a main-thread block. Governs R19.
-- KTD10. **The registry becomes capacity-aware per provider.** `AccountRegistry.maxPerProvider` becomes `testedEnvelope = 20`, and `accounts(for:)`, `canAddAccount`, and `addAccount` take the provider's capacity (Cursor passes 1) instead of reading the constant. `UsageProvider.accountCapacity` defaults to the envelope. Governs R14, R15, R16.
+- KTD10. **The registry becomes capacity-aware per provider.** `AccountRegistry.maxPerProvider` becomes `testedEnvelope = 20`, and `accounts(for:)`, `canAddAccount`, and `addAccount` take the provider's capacity (Cursor passes 1) instead of reading the constant. `UsageProvider.accountCapacity` defaults to the envelope. The `capacity` parameter defaults to the envelope for the registry's internal calls, and `SubscriptionProviderRegistration` gains a static `accountCapacity` (Cursor 1) that `HeadroomApp.providers(credentials:registry:)` passes at composition, before any provider instance exists. Governs R14, R15, R16.
 - KTD11. **A disabled provider surface freezes its accounts' due state.** Its accounts leave the schedule; on re-enable each is due now once, not overdue by the elapsed time, so re-enabling never triggers a stretch. Governs R7.
 - KTD12. **Settings reads cadence from the store.** `UsageStore.pollCadence(for:)` returns the chosen interval, the effective interval, and the account count for a provider; the General pane renders one read-only row per provider whose effective interval exceeds the chosen one, beneath the interval stepper, following the stateless-pane convention. The Accounts header reads "Tested up to N" when a provider is at the envelope. Governs R9, R10, R15.
 - KTD13. **The 240 second verification stop-loss is kept and re-justified.** Its comment derives the bound from one worst-case probe of about 80 seconds plus the coordinator's own retry ladder, not from five serial accounts. Governs R21.
@@ -260,7 +260,7 @@ stateDiagram-v2
 
 ### Assumptions
 
-- The observed probe durations on macOS are within the same order as the Linux measurements in Dependencies; the duty-cycle arithmetic in KTD4 holds for any duration because it is derived from observations, not constants.
+- The observed probe durations on macOS are within the same order as the Linux measurements in Dependencies; the duty-cycle arithmetic in KTD4 holds for any duration because it is derived from observations, not constants. A signed-in print probe includes the network fetch and may sit above the 5 second default, which makes the envelope stretch past the chosen interval sooner than F1 assumes; the Probe timing gate records the real figure.
 - `SlowCountingProvider`'s continuation gate is sufficient to assert lane ordering deterministically; no new test infrastructure is needed beyond a small helper that fills a registry to the envelope.
 - The Xcode app-test scheme's known app-group prompt (BUGS.md) may stall `HeadroomAppTests`; that is pre-existing and outside this plan.
 
@@ -283,7 +283,7 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
   2. `effectiveInterval(chosen:lane:accounts:)` per KTD4, with the HTTP lane returning the chosen interval.
   3. `nextDue(for:effective:)` per KTD5, including the four-interval never-signed-in rule.
   4. `nextAccount(lane:now:priority:)` per KTD6/KTD7 ordering: priority request, then an overdue primary, then the most overdue; nil when nothing is due.
-  5. `wakeDelay(earliestDue:now:chosen:)` clamped to one second and the chosen interval, with per-account reset phasing reusing `PollPhasing`.
+  5. `wakeDelay(earliestDue:now:chosen:)` clamped to one second and the chosen interval, computed over idle lanes only, with per-account reset phasing reusing `PollPhasing`.
 - **Patterns to follow:** `PollPhasing.secondsUntilNextPoll` and `UsageStore.shouldBackOffNeverSignedInAccount` (pure static functions with explicit `now`).
 - **Test scenarios:**
   - Covers AE1. Primary and one extra both overdue: primary is selected first.
@@ -292,10 +292,12 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
   - Covers AE3. Chosen 5 minutes, three accounts at 3 seconds: effective interval equals the chosen interval.
   - HTTP lane with 20 accounts: effective interval equals the chosen interval.
   - Effective interval never drops below 2 minutes when the chosen interval is at the floor and the lane is near idle.
-  - Covers AE5. Three consecutive failures at a 5 minute effective interval: next due is 40 minutes after the attempt, capped at 30 minutes on the fourth.
+  - Covers AE5. Consecutive transient failures at a 5 minute effective interval: next due is 10, 20, then 30 minutes after the attempt (5 × 2³ = 40, capped at 30).
   - One success after failures: next due is one effective interval after the attempt.
-  - Never-signed-in extra: due every four effective intervals; a never-signed-in primary is not exempted.
-  - Wake delay clamps to one second when an account is already overdue and to the chosen interval when nothing is due within it.
+  - A primary whose snapshot is permanently stale (login required) does not back off and stays on the effective interval.
+  - Never-signed-in extra: due every four effective intervals and never doubled; a never-signed-in primary stays on the effective interval.
+  - Wake delay clamps to one second when an account in an idle lane is already overdue and to the chosen interval when nothing is due within it.
+  - Overdue accounts in a draining lane do not shorten the wake delay; the earliest due account in an idle lane does.
   - An account whose reset deadline falls before its due time is phased to the deadline plus grace.
 - **Verification:** `LaneScheduleTests` passes with no store, no clock waits.
 
@@ -326,6 +328,8 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
   - The widget exporter is invoked after the primary's merge and not after an extra's merge in the same pass.
   - Capability failure results still route through `applyCapability` once per pass.
   - `isRefreshing` is true while any lane is draining and false once all lanes and API spend are idle.
+  - A spend-only refresh runs to completion while a Claude lane probe is in flight.
+  - Two `refreshAccountNow` calls for the same extra during a fleet refresh yield exactly one extra fetch (existing dedupe test preserved).
 - **Verification:** `UsageStoreTests` and `MultiAccountTests` pass; no test calls `Task.sleep` for scheduling.
 
 ### U3. Wake timer, popover open, and reset phasing
@@ -342,7 +346,8 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
 - **Patterns to follow:** `PollPhasingStoreTests` drives `MutableDateSource` and reads `engine.secondsUntilNextPoll` and `startCount`.
 - **Test scenarios:**
   - With one account due in 90 seconds and another in 4 minutes, the engine's next wake is 90 seconds.
-  - With an account overdue, the next wake is one second.
+  - With an account overdue in an idle lane, the next wake is one second.
+  - With the Claude lane draining and its remaining accounts overdue, the next wake is the earliest due time in an idle lane, not one second.
   - Popover open before the age gate elapses dispatches nothing; after it elapses it dispatches only due accounts and restarts the engine once.
   - An account whose tracked reset lands inside its interval wakes at the deadline plus grace; other accounts are unaffected.
 - **Verification:** `PollPhasingTests` passes with clock jumps only.
@@ -351,8 +356,8 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
 
 - **Goal:** The fixed cap is gone, the envelope is one constant the provider capacity flows through, Cursor stays at one, and the stop-loss comment states the new basis.
 - **Requirements:** R14, R15, R16, R21; KTD10, KTD13.
-- **Dependencies:** U2 (for the never-signed-in rule tests at the envelope).
-- **Files:** `Sources/HeadroomCore/Settings/AccountRegistry.swift`; `Sources/HeadroomCore/Models/UsageProvider.swift`; `Sources/HeadroomCore/Engine/UsageStoreAccountLifecycle.swift`; `Sources/HeadroomCore/Providers/CursorProvider.swift`; `Sources/HeadroomCore/Engine/SetupSessionCoordinator.swift` (comment only); `Sources/HeadroomApp/UI/AccountsSettingsInteractions.swift`; `Sources/HeadroomApp/UI/AccountsSettingsTile.swift`; `Tests/HeadroomCoreTests/MultiAccountTests.swift`; `Tests/HeadroomCoreTests/DemoFixtureWindowOrderTests.swift`; `Tests/HeadroomAppTests/AccountsSettingsInteractionTests.swift`.
+- **Dependencies:** U2 (the store passes provider capacity at every registry call, and the envelope tests run through the scheduler's dispatch).
+- **Files:** `Sources/HeadroomCore/Settings/AccountRegistry.swift`; `Sources/HeadroomCore/Models/UsageProvider.swift`; `Sources/HeadroomCore/Engine/UsageStoreAccountLifecycle.swift`; `Sources/HeadroomCore/Providers/CursorProvider.swift`; `Sources/HeadroomApp/HeadroomApp.swift`; `Sources/HeadroomCore/Engine/SetupSessionCoordinator.swift` (comment only); `Sources/HeadroomApp/UI/AccountsSettingsInteractions.swift`; `Sources/HeadroomApp/UI/AccountsSettingsTile.swift`; `Tests/HeadroomCoreTests/MultiAccountTests.swift`; `Tests/HeadroomCoreTests/DemoFixtureWindowOrderTests.swift`; `Tests/HeadroomAppTests/AccountsSettingsInteractionTests.swift`.
 - **Approach:**
   1. Rename the constant to `testedEnvelope = 20` and thread a `capacity` parameter through `accounts(for:capacity:)`, `canAddAccount(for:capacity:)`, `addAccount(for:capacity:label:)`, and `countIncludingHidden`.
   2. `UsageStore` passes `accountCapacity(for:)` at every registry call; Cursor's override stays 1.
@@ -384,7 +389,7 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
   - Covers AE3. Equal values: no row.
   - Codex with 20 accounts: no row (HTTP lane is never stretched).
   - Rounding: an effective interval of 6.2 minutes presents as "about 7 min".
-- **Verification:** presentation tests pass; the row appears in the live Settings window under `--demo multi-20` with a 2 minute interval.
+- **Verification:** presentation tests pass; the live-window check runs under the Envelope demo gate after U6 lands, because only the envelope fixture simulates probe cost.
 
 ### U6. Envelope demo scenario, generator, and documentation
 
@@ -393,7 +398,7 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
 - **Dependencies:** U4, U5.
 - **Files:** `Sources/HeadroomCore/DemoFixture.swift`; `Tests/HeadroomCoreTests/DemoFixtureTests.swift`; `AGENTS.md`; `README.md`; `BUGS.md`.
 - **Approach:**
-  1. Add a generator that synthesizes N demo accounts per provider from a seed, and a `multi-20` scenario with 20 Claude, 20 Codex, 20 Grok, and 1 Cursor account.
+  1. Add a generator that synthesizes N demo accounts per provider from a seed, and a `multi-20` scenario with 20 Claude, 20 Codex, 20 Grok, and 1 Cursor account. Give `DemoUsageProvider` an optional `probeDuration` that `fetchResult()` awaits, set to about 3 seconds on the Claude and Grok rows of this scenario and nil elsewhere, so KTD4 yields a stretched interval at a 2 minute setting.
   2. Update AGENTS.md's multi-account paragraph, the Settings/Engine architecture lines, and the "probed serially in one Claude lane" gotcha to describe lanes, the per-account promise, the envelope, and the duty-cycle guardrail; update the commands line for `multi-20`.
   3. README: "up to five" becomes the envelope wording.
   4. BUGS.md: close "No backoff on repeated failures" and add the probe-trimming follow-ups from Scope Boundaries.
@@ -413,7 +418,7 @@ U1 first (pure decisions), then U2 (scheduler and store), then U3 (wake timer) w
 | Core build | `swift build` | all | macOS with Xcode 26 |
 | Core suite | `swift test` | U1–U6 | macOS |
 | App tests | `./Scripts/build-app.sh --deps-only && xcodebuild -project Headroom.xcodeproj -scheme HeadroomAppTests -destination 'platform=macOS' -derivedDataPath ./.xcode-derived test` | U4, U5 | macOS |
-| Envelope demo | `swift run Headroom --demo multi-20`, then open the popover and Settings → Accounts and Settings → General with a 2 minute interval | U5, U6 | macOS, live window |
+| Envelope demo | `swift run Headroom --demo multi-20`, then open the popover, Settings → Accounts, and Settings → General with a 2 minute interval; the General pane shows the effective-interval rows because the fixture's Claude and Grok rows simulate a 3 second probe | U5, U6 | macOS, live window |
 | Probe timing | `swift run Headroom --probe-claude` three times; note durations against KTD4's 5 second default | U1 | macOS with `claude` signed in |
 | Lane ordering | `keyedCLILanesSerializePerProviderAndOverlapEachOther` and the new ordering tests green | U2 | macOS |
 
