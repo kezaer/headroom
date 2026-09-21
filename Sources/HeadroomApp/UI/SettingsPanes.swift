@@ -56,6 +56,9 @@ struct GeneralSettingsPane: View {
     @Binding var launchAtLogin: Bool
     @Binding var automaticUpdateChecks: Bool
     let softwareUpdates: SoftwareUpdateControlling
+    /// KTD12: one line per provider whose effective interval exceeds the chosen one;
+    /// empty while every promise is kept (R10).
+    let cadenceRows: [String]
     let onIntervalChange: (Int) -> Void
     let onLaunchAtLoginChange: (Bool) -> Void
     let onAutomaticUpdateChecksChange: (Bool) -> Void
@@ -95,7 +98,10 @@ struct GeneralSettingsPane: View {
                         }
                     }
                     // Non-breaking spaces keep "2 min." from orphaning onto its own line.
-                    SettingsHelpText(text: "Each Claude refresh runs a CLI session (~20–30s). Minimum\u{00A0}2\u{00A0}min.")
+                    SettingsHelpText(text: "Each account is refreshed on its own schedule. A CLI-probed provider stays idle at least half the time, so many accounts stretch the effective interval. Minimum\u{00A0}2\u{00A0}min.")
+                    ForEach(cadenceRows, id: \.self) { row in
+                        SettingsHelpText(text: row)
+                    }
                 }
                 SettingsSwitchRow(title: "Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, newValue in

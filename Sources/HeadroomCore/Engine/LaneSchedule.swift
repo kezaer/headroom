@@ -272,3 +272,31 @@ public enum LaneSchedule {
         return outcome.isNeverSignedIn
     }
 }
+
+/// KTD12: what Settings reads for one provider. `effectiveInterval` is measured (KTD4),
+/// so it can only exceed `chosenInterval`, and only for a CLI lane.
+public struct PollCadence: Sendable, Equatable {
+    public let chosenInterval: TimeInterval
+    public let effectiveInterval: TimeInterval
+    public let accountCount: Int
+
+    public init(chosenInterval: TimeInterval, effectiveInterval: TimeInterval, accountCount: Int) {
+        self.chosenInterval = chosenInterval
+        self.effectiveInterval = effectiveInterval
+        self.accountCount = accountCount
+    }
+
+    public var isStretched: Bool { effectiveInterval > chosenInterval }
+}
+
+/// KTD12 / R9, R10: the read-only Settings row for a provider whose accounts run slower
+/// than the chosen interval. Nil when the promise is being kept, so nothing extra shows.
+public enum PollCadencePresentation {
+    public static func row(for cadence: PollCadence, providerName: String) -> String? {
+        guard cadence.isStretched else { return nil }
+        let chosen = Int((cadence.chosenInterval / 60).rounded(.up))
+        let effective = Int((cadence.effectiveInterval / 60).rounded(.up))
+        let accounts = cadence.accountCount == 1 ? "1 account" : "\(cadence.accountCount) accounts"
+        return "\(providerName): \(chosen)\u{00A0}min chosen · about \(effective)\u{00A0}min effective · \(accounts)"
+    }
+}

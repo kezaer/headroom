@@ -229,7 +229,7 @@ struct AccountsSettingsTile: View {
                     // while Add Account is disabled.
                     let usedSlots = accounts.count
                         + (store.isBuiltInTrackingStopped(for: providerID) ? 1 : 0)
-                    Text("\(usedSlots) of \(capacity)")
+                    Text(AccountsSettingsInteractions.accountCounterText(usedSlots: usedSlots, capacity: capacity))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

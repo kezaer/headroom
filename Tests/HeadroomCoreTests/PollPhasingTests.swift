@@ -167,6 +167,49 @@ struct PollPhasingStoreTests {
         ) == 5 * 60)
     }
 
+    @Test func theEngineWakesForTheEarliestDueAccountInAnIdleLane() async {
+        // KTD6 (2026-09-19 polling plan): two accounts on one lane, one refreshed later by a
+        // user action, so their due times differ; the sleep targets the earlier one.
+        let clock = MutableDateSource(start)
+        let extraID = AccountID("work")
+        let primary = ClockedCountingProvider(clock: clock, deadline: start.addingTimeInterval(3_600))
+        let extra = ClockedCountingProvider(clock: clock, deadline: start.addingTimeInterval(3_600), accountID: extraID)
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: isolatedPreferences(),
+            accounts: [.builtIn(for: .claude), ProviderAccount(id: extraID, providerID: .claude, label: "Work")],
+            now: clock.now
+        )
+        await store.start()
+
+        clock.set(start.addingTimeInterval(150))
+        await store.refreshAccount(AccountKey(providerID: .claude, accountID: extraID))
+        clock.set(start.addingTimeInterval(210))
+
+        // Primary due at +300 (90s away); the extra at +450 after its own refresh.
+        #expect(store.engine?.secondsUntilNextPoll == 90)
+    }
+
+    @Test func overdueAccountsInADrainingLaneDoNotShortenTheWakeAndThePassEndRephasesOnce() async {
+        let clock = MutableDateSource(start)
+        let primary = SuspendableClockedProvider(clock: clock)
+        let store = UsageStore(providers: [primary], preferences: isolatedPreferences(), now: clock.now)
+        await store.start()
+        let startsAfterLaunch = store.engine?.startCount ?? 0
+
+        clock.set(start.addingTimeInterval(5 * 60 + 1))
+        primary.suspendNextFetch()
+        store.dispatchDueNow()
+        await primary.waitUntilStarted()
+
+        // The only lane is draining, so nothing shortens the sleep to one second.
+        #expect(store.engine?.secondsUntilNextPoll == 5 * 60)
+
+        primary.release()
+        await settle { (store.engine?.startCount ?? 0) == startsAfterLaunch + 1 }
+        #expect(store.engine?.startCount == startsAfterLaunch + 1)
+    }
+
     private func isolatedPreferences() -> Preferences {
         let suite = "headroom.pollphasing.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -188,7 +231,9 @@ struct PollPhasingStoreTests {
 /// the thing R2M2 gates on — is deterministic.
 private final class ClockedCountingProvider: UsageProvider, @unchecked Sendable {
     let id: ProviderID = .claude
+    let accountID: AccountID
     let displayName = "Claude"
+    let pollingLane: ProviderPollingLane = .serial("claude-cli")
     private let clock: MutableDateSource
     private let deadline: Date
     private let lock = NSLock()
@@ -196,9 +241,10 @@ private final class ClockedCountingProvider: UsageProvider, @unchecked Sendable 
 
     var fetchCount: Int { lock.withLock { _count } }
 
-    init(clock: MutableDateSource, deadline: Date) {
+    init(clock: MutableDateSource, deadline: Date, accountID: AccountID = .primary) {
         self.clock = clock
         self.deadline = deadline
+        self.accountID = accountID
     }
 
     func fetchSnapshot() async -> UsageSnapshot {
@@ -206,6 +252,71 @@ private final class ClockedCountingProvider: UsageProvider, @unchecked Sendable 
         return UsageSnapshot(
             providerID: id,
             windows: [UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: deadline)],
+            planLabel: nil,
+            capturedAt: clock.now(),
+            freshness: .live
+        )
+    }
+}
+
+/// Clocked provider whose next fetch can be held open, so a lane can be observed draining.
+private final class SuspendableClockedProvider: UsageProvider, @unchecked Sendable {
+    let id: ProviderID = .claude
+    let displayName = "Claude"
+    let pollingLane: ProviderPollingLane = .serial("claude-cli")
+    private let clock: MutableDateSource
+    private let lock = NSLock()
+    private var suspendNext = false
+    private var didStart = false
+    private var started: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+    private var shouldRelease = false
+
+    init(clock: MutableDateSource) { self.clock = clock }
+
+    func suspendNextFetch() {
+        lock.withLock { suspendNext = true; shouldRelease = false; didStart = false }
+    }
+
+    func waitUntilStarted() async {
+        if lock.withLock({ didStart }) { return }
+        await withCheckedContinuation { continuation in
+            var resumeNow = false
+            lock.withLock { if didStart { resumeNow = true } else { started = continuation } }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            shouldRelease = true
+            let pending = release
+            release = nil
+            return pending
+        }
+        pending?.resume()
+    }
+
+    func fetchSnapshot() async -> UsageSnapshot {
+        let (suspend, started) = lock.withLock { () -> (Bool, CheckedContinuation<Void, Never>?) in
+            didStart = true
+            let pending = self.started
+            self.started = nil
+            let suspend = suspendNext
+            suspendNext = false
+            return (suspend, pending)
+        }
+        started?.resume()
+        if suspend, !lock.withLock({ shouldRelease }) {
+            await withCheckedContinuation { continuation in
+                var resumeNow = false
+                lock.withLock { if shouldRelease { resumeNow = true } else { release = continuation } }
+                if resumeNow { continuation.resume() }
+            }
+        }
+        return UsageSnapshot(
+            providerID: id,
+            windows: [UsageWindow(kind: .fiveHour, utilization: 10, resetsAt: clock.now().addingTimeInterval(3_600))],
             planLabel: nil,
             capturedAt: clock.now(),
             freshness: .live

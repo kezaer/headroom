@@ -10,12 +10,16 @@ import Foundation
 ///   persisted primary choice is listed first when it is visible. A provider
 ///   never ends up with zero rows: the tombstone only takes effect alongside at least
 ///   one extra, and removing the last extra clears it.
-/// - At most `maxPerProvider` accounts per provider (UI affordances are designed to 5).
-///   A hidden built-in keeps its slot so resuming can never overflow the cap.
+/// - At most `capacity` accounts per provider — the caller's provider capacity, defaulting
+///   to `testedEnvelope` (2026-09-19 polling plan, KTD10). A hidden built-in keeps its slot
+///   so resuming can never overflow the cap.
 /// - Built-in accounts can be renamed and stop-tracked but never deleted — their config
 ///   home is the user's own CLI login, which Headroom must never touch.
 public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-safe
-    public static let maxPerProvider = 5
+    /// R15: the account count every surface, fixture, and test is proven at. A bound the
+    /// product does not advertise as a limit; raise it only with the envelope demo and the
+    /// suites re-run at the new value. Cursor passes 1 because it has no config-home isolation.
+    public static let testedEnvelope = 20
 
     private let defaults: UserDefaults
     private static let storageKey = "providerAccounts.v1"
@@ -27,7 +31,10 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
     /// Accounts for one provider, with the selected primary first and the remaining
     /// rows in canonical built-in/creation order. The built-in account is synthesized
     /// when nothing is stored yet, so first launch after upgrade needs no migration.
-    public func accounts(for providerID: ProviderID) -> [ProviderAccount] {
+    public func accounts(
+        for providerID: ProviderID,
+        capacity: Int = AccountRegistry.testedEnvelope
+    ) -> [ProviderAccount] {
         let stored = load().filter { $0.providerID == providerID }
         // Treat persisted metadata as untrusted input: older builds, manual defaults
         // edits, or a torn write must not create duplicate rows or multiple built-ins.
@@ -57,27 +64,31 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
                 saveHiddenBuiltIns(hidden.subtracting([providerID]))
             } else {
                 return applyingPrimarySelection(
-                    to: Array(extras.prefix(Self.maxPerProvider - 1)),
+                    to: Array(extras.prefix(max(0, capacity - 1))),
                     for: providerID
                 )
             }
         }
         return applyingPrimarySelection(
-            to: Array(([builtIn] + extras).prefix(Self.maxPerProvider)),
+            to: Array(([builtIn] + extras).prefix(max(0, capacity))),
             for: providerID
         )
     }
 
-    public func canAddAccount(for providerID: ProviderID) -> Bool {
-        countIncludingHidden(accounts(for: providerID), for: providerID) < Self.maxPerProvider
+    public func canAddAccount(for providerID: ProviderID, capacity: Int = AccountRegistry.testedEnvelope) -> Bool {
+        countIncludingHidden(accounts(for: providerID, capacity: capacity), for: providerID) < capacity
     }
 
     /// Create and persist a new account with a fresh ID and a default label
     /// ("Account 2", "Account 3", …). Nil once the provider is at the cap.
     @discardableResult
-    public func addAccount(for providerID: ProviderID, label: String? = nil) -> ProviderAccount? {
-        let visible = accounts(for: providerID)
-        guard countIncludingHidden(visible, for: providerID) < Self.maxPerProvider else { return nil }
+    public func addAccount(
+        for providerID: ProviderID,
+        capacity: Int = AccountRegistry.testedEnvelope,
+        label: String? = nil
+    ) -> ProviderAccount? {
+        let visible = accounts(for: providerID, capacity: capacity)
+        guard countIncludingHidden(visible, for: providerID) < capacity else { return nil }
         let account = ProviderAccount(
             id: AccountID(UUID().uuidString.lowercased()),
             providerID: providerID,
@@ -205,7 +216,7 @@ public struct AccountRegistry: @unchecked Sendable { // UserDefaults is thread-s
     }
 
     /// Row count with a hidden built-in still occupying its slot — the cap gate, so
-    /// resuming a tombstoned built-in can never push a provider past `maxPerProvider`.
+    /// resuming a tombstoned built-in can never push a provider past its capacity.
     private func countIncludingHidden(_ visible: [ProviderAccount], for providerID: ProviderID) -> Int {
         let hiddenSlot = isBuiltInHidden(for: providerID)
             && !visible.contains(where: { $0.isBuiltIn })

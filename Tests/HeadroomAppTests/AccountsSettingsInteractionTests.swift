@@ -152,7 +152,8 @@ struct AccountsSettingsInteractionTests {
         defer { fixture.cleanup() }
         var opened: [AccountKey] = []
 
-        for _ in 0..<4 {
+        let extras = AccountRegistry.testedEnvelope - 1
+        for _ in 0..<extras {
             let added = AccountsSettingsInteractions.addAccount(
                 for: .claude,
                 to: fixture.store,
@@ -161,14 +162,19 @@ struct AccountsSettingsInteractionTests {
             #expect(added != nil)
         }
 
-        #expect(fixture.store.accounts(for: .claude).count == AccountRegistry.maxPerProvider)
-        #expect(Set(opened).count == 4)
+        #expect(fixture.store.accounts(for: .claude).count == AccountRegistry.testedEnvelope)
+        #expect(Set(opened).count == extras)
         #expect(AccountsSettingsInteractions.addAccount(
             for: .claude,
             to: fixture.store,
             openSetup: { opened.append($0.key) }
         ) == nil)
-        #expect(opened.count == 4)
+        #expect(opened.count == extras)
+    }
+
+    @Test func accountCounterReadsAsATestedEnvelopeOnlyAtCapacity() {
+        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 19, capacity: 20) == "19 of 20")
+        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 20, capacity: 20) == "Tested up to 20")
     }
 
     @Test func renameCommitsTrimmedFocusLossDraftAndRejectsBlankDraft() {
@@ -511,7 +517,7 @@ struct AccountsSettingsInteractionTests {
         // must never displace the capacity one — it would send the user through the
         // switch for nothing.
         #expect(!full.addAction.isEnabled)
-        #expect(full.addAction.helpText == "Up to 5 accounts per provider")
+        #expect(full.addAction.helpText == "Tested up to 5 accounts per provider")
 
         let fullAndOn = AccountsSettingsInteractions.providerGroupPresentation(
             providerDisplayName: "Grok",
@@ -522,7 +528,7 @@ struct AccountsSettingsInteractionTests {
             hasActiveHandoff: { _ in false }
         )
         #expect(!fullAndOn.addAction.isEnabled)
-        #expect(fullAndOn.addAction.helpText == "Up to 5 accounts per provider")
+        #expect(fullAndOn.addAction.helpText == "Tested up to 5 accounts per provider")
     }
 
     @Test func addAccountIgnoresAnOpenHandoffButStillFollowsTheSwitch() {

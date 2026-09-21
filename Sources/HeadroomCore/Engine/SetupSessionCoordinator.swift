@@ -244,8 +244,10 @@ public final class SetupSessionCoordinator {
     public init(
         scheduler: any SetupRetryScheduling = TaskSetupRetryScheduler(),
         retryDelays: [Duration] = [.seconds(3), .seconds(7), .seconds(15), .seconds(30)],
-        // Five serial Claude probes at the 40-second worst-case path, plus one probe
-        // of margin. This intentionally exceeds the short retry ladder.
+        // KTD13 (2026-09-19 polling plan): verification requests jump the per-account
+        // queue, so the bound covers one in-flight probe plus the request's own worst-case
+        // probe (about 80 seconds each on the PTY fallback path) with margin. It no longer
+        // scales with the account count.
         verificationStopLoss: Duration = .seconds(240),
         // KTD7: the bounded wait the user asked for. It equals
         // `AccountStorage.preparedMarkerGracePeriod`, which only matters when the wrapper

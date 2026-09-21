@@ -29,14 +29,15 @@ public enum PollPhasing {
     }
 }
 
-/// Interval loop that drives periodic refreshes (U6). Kept separate from the store
-/// so the cadence mechanics are isolated. `reschedule()` restarts the loop so a
-/// changed poll interval takes effect immediately (R14).
+/// Wake loop for the per-account scheduler (U6; KTD6 of the 2026-09-19 polling plan).
+/// Kept separate from the store so the cadence mechanics are isolated. The sleep length
+/// comes from `nextWake` — the time until the earliest due account in an idle lane — and
+/// `reschedule()`/`rephase()` restart the loop so a changed poll interval (R14) or a
+/// lane pass ending is picked up at once.
 @MainActor
 public final class PollingEngine {
     private var task: Task<Void, Never>?
-    private let intervalMinutes: @MainActor () -> Int
-    private let nextResetDeadline: @MainActor () -> Date?
+    private let nextWake: @MainActor () -> TimeInterval
     private let now: @Sendable () -> Date
     private let tick: @MainActor () async -> Void
     /// How many times the sleep loop has been (re)started. Test seam for the R2M2
@@ -45,13 +46,11 @@ public final class PollingEngine {
     private(set) var startCount = 0
 
     public init(
-        intervalMinutes: @escaping @MainActor () -> Int,
-        nextResetDeadline: @escaping @MainActor () -> Date? = { nil },
+        nextWake: @escaping @MainActor () -> TimeInterval,
         now: @escaping @Sendable () -> Date = { Date() },
         tick: @escaping @MainActor () async -> Void
     ) {
-        self.intervalMinutes = intervalMinutes
-        self.nextResetDeadline = nextResetDeadline
+        self.nextWake = nextWake
         self.now = now
         self.tick = tick
     }
@@ -60,19 +59,15 @@ public final class PollingEngine {
         max(Preferences.minimumIntervalMinutes, minutes)
     }
 
-    /// Seconds this loop would sleep for right now. Exposed so the phasing decision can be
+    /// Seconds this loop would sleep for right now. Exposed so the wake decision can be
     /// asserted without waiting on a real timer.
     public var secondsUntilNextPoll: TimeInterval {
-        PollPhasing.secondsUntilNextPoll(
-            intervalMinutes: intervalMinutes(),
-            nextDeadline: nextResetDeadline(),
-            now: now()
-        )
+        nextWake()
     }
 
-    /// Start (or restart) the loop. Reads the interval and the next reset deadline each
-    /// cycle, so a preference change or a newly captured deadline is picked up on the next
-    /// wake without an explicit reschedule.
+    /// Start (or restart) the loop. The wake length is re-read on every cycle, so a
+    /// preference change or a newly captured deadline is picked up on the next wake
+    /// without an explicit reschedule.
     public func start() {
         startCount += 1
         task?.cancel()
@@ -89,8 +84,9 @@ public final class PollingEngine {
 
     public func reschedule() { start() }
 
-    /// R2M2: restart the sleep after an off-cadence refresh already answered this interval,
-    /// so the next tick is a full interval later instead of firing on top of fresh data.
+    /// R2M2 / KTD6: restart the sleep after off-cadence work already answered this
+    /// interval — a popover-open dispatch or a lane pass ending — so the next tick is
+    /// computed from the fresh due times instead of firing on top of fresh data.
     /// Identical mechanics to `reschedule()`; separate name because the reason differs.
     public func rephase() { start() }
 

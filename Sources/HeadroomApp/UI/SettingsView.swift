@@ -220,6 +220,7 @@ struct SettingsView: View {
                 launchAtLogin: $launchAtLogin,
                 automaticUpdateChecks: $automaticUpdateChecks,
                 softwareUpdates: softwareUpdates,
+                cadenceRows: cadenceRows,
                 onIntervalChange: { newValue in
                     preferences.pollIntervalMinutes = newValue
                     store.reschedulePolling()
@@ -296,6 +297,17 @@ struct SettingsView: View {
             .joined(separator: "|")
     }
 
+    /// KTD12: read from the store's observable cadences so the rows update as lanes drain.
+    private var cadenceRows: [String] {
+        store.registeredProviderOrder.compactMap { providerID in
+            guard let cadence = store.pollCadences[providerID] else { return nil }
+            return PollCadencePresentation.row(
+                for: cadence,
+                providerName: store.displayNames[providerID] ?? providerID.displayName
+            )
+        }
+    }
+
     // MARK: - Shared bindings
 
     private func surfaceBinding(_ surface: UsageSurface) -> Binding<Bool> {
@@ -312,7 +324,17 @@ struct SettingsView: View {
                     store.setSurfaceEnabled(newValue, for: surface)
                 }
                 if surface.isSubscription {
-                    store.refreshNow()
+                    // KTD11 (2026-09-19 polling plan): wake only this provider's now-due
+                    // accounts. A full `refreshNow()` here marked every other provider's
+                    // accounts due too, which at the account envelope is the very sweep the
+                    // per-account scheduler removes.
+                    if let providerID = store.registeredProviderOrder.first(where: {
+                        UsageSurface.subscription(for: $0) == surface
+                    }) {
+                        store.dispatchDueNow(for: providerID)
+                    } else {
+                        store.dispatchDueNow()
+                    }
                 } else {
                     store.refreshAPISpendNow()
                 }

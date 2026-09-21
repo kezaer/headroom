@@ -64,7 +64,7 @@ public extension UsageProvider {
     var accountID: AccountID { .primary }
     var accountKey: AccountKey { AccountKey(providerID: id, accountID: accountID) }
     var pollingLane: ProviderPollingLane { .concurrent }
-    var accountCapacity: Int { AccountRegistry.maxPerProvider }
+    var accountCapacity: Int { AccountRegistry.testedEnvelope }
     var reportsProviderCapability: Bool { false }
     func fetchResult() async -> UsageProviderFetchResult {
         UsageProviderFetchResult(snapshot: await fetchSnapshot())

@@ -17,7 +17,7 @@ private struct AccountStubProvider: UsageProvider {
         accountID: AccountID,
         displayName: String,
         snapshot: UsageSnapshot,
-        accountCapacity: Int = AccountRegistry.maxPerProvider,
+        accountCapacity: Int = AccountRegistry.testedEnvelope,
         reportsProviderCapability: Bool = false,
         capability: ProviderCapabilityState = .available
     ) {
@@ -732,23 +732,22 @@ private final class IgnoringSetupScheduler: SetupRetryScheduling {
         for _ in 0..<5 { await Task.yield() }
     }
 
-    @Test func timerBackoffFollowsPrimaryPositionInsteadOfBuiltInIdentity() {
-        let neverSignedIn = Freshness.stale(.notLoggedIn("sign in"))
-        let builtIn = AccountKey(providerID: .claude, accountID: .primary)
-        let promoted = AccountKey(providerID: .claude, accountID: AccountID("work"))
-
-        #expect(!UsageStore.shouldBackOffNeverSignedInAccount(
-            promoted,
-            primary: promoted,
-            timerCycle: 1,
-            freshness: neverSignedIn
-        ))
-        #expect(UsageStore.shouldBackOffNeverSignedInAccount(
-            builtIn,
-            primary: promoted,
-            timerCycle: 1,
-            freshness: neverSignedIn
-        ))
+    @Test func neverSignedInExemptionFollowsPrimaryPositionInsteadOfBuiltInIdentity() {
+        // KTD5 (2026-09-19 polling plan): the four-interval wait keys off whichever row is
+        // the selected primary, not the built-in identity, so a promoted extra stays on
+        // cadence while the demoted built-in waits.
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let chosen: TimeInterval = 5 * 60
+        let builtIn = LaneSchedule.AccountRecord(
+            key: AccountKey(providerID: .claude, accountID: .primary),
+            isPrimary: false, lastAttempt: now, isNeverSignedIn: true, forcedDue: false
+        )
+        let promoted = LaneSchedule.AccountRecord(
+            key: AccountKey(providerID: .claude, accountID: AccountID("work")),
+            isPrimary: true, lastAttempt: now, isNeverSignedIn: true, forcedDue: false
+        )
+        #expect(LaneSchedule.nextDue(for: promoted, chosen: chosen, effective: chosen) == now.addingTimeInterval(chosen))
+        #expect(LaneSchedule.nextDue(for: builtIn, chosen: chosen, effective: chosen) == now.addingTimeInterval(4 * chosen))
     }
 
     @Test func anyAccountNeedingReauthFlagsMenuBarAttention() async {

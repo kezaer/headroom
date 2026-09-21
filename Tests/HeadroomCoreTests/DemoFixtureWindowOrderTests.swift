@@ -110,6 +110,6 @@ struct DemoFixtureWindowOrderTests {
             displayName: "Claude",
             snapshot: DemoFixture.claudeSnapshot
         )
-        #expect(claude.accountCapacity == AccountRegistry.maxPerProvider)
+        #expect(claude.accountCapacity == AccountRegistry.testedEnvelope)
     }
 }

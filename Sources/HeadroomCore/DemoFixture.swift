@@ -649,7 +649,7 @@ public struct DemoUsageProvider: UsageProvider {
     /// `accountCapacity` to 1. `--demo multi-4` was rendering it as "1 of 5" with an
     /// "Add Account…" button.
     public var accountCapacity: Int {
-        id == .cursor ? 1 : AccountRegistry.maxPerProvider
+        id == .cursor ? 1 : AccountRegistry.testedEnvelope
     }
 
     public init(
