@@ -146,6 +146,35 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(snapshot.windows.first?.utilization == 29)
     }
 
+    @Test func completedNamedPoolsDoNotRequireIncluded() async {
+        let snapshot = await snapshot(for: """
+        Usage • Pro+ Resets Sep 1
+        Monthly plan and on-demand usage
+        Auto 12% used
+        API 47% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.map(\.kind) == namedPoolKinds)
+        #expect(snapshot.windows.map(\.utilization) == [12, 47])
+    }
+
+    @Test func completedAPIOnlyPanelPublishesOtherModels() async {
+        let snapshot = await snapshot(for: """
+        Usage • Start Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 17% used
+        API 41% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Other Models", duration: 30 * 24 * 60 * 60))
+        #expect(snapshot.windows.first?.utilization == 41)
+    }
+
     @Test func truncatedOneNamedPoolPanelFailsStale() async {
         let snapshot = await snapshot(for: """
         Usage • Start Resets Sep 1
@@ -318,6 +347,8 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usages\n/context"))
 
         #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nIncluded 1% used"))
+        #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\n  Auto 1% used"))
+        #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nAPI 3% used"))
         #expect(!CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nLoading…"))
         #expect(!CursorUsageCLIProbe.isUsagePanel("Included 1% used"))
     }

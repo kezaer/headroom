@@ -151,7 +151,7 @@ public enum CursorUsageParser {
 
     private static func decodeSubscriptionRows(
         _ lines: ArraySlice<String>
-    ) -> (included: Double, subscription: CursorSubscriptionUsage)? {
+    ) -> (included: Double?, subscription: CursorSubscriptionUsage)? {
         var included: Double?
         var auto: Double?
         var api: Double?
@@ -172,7 +172,6 @@ public enum CursorUsageParser {
             }
         }
 
-        guard let included else { return nil }
         var pools: [CursorSubscriptionPool] = []
         if let auto {
             pools.append(CursorSubscriptionPool(label: "Cursor Models", percentUsed: auto))
@@ -180,10 +179,11 @@ public enum CursorUsageParser {
         if let api {
             pools.append(CursorSubscriptionPool(label: "Other Models", percentUsed: api))
         }
-        return (
-            included,
-            pools.isEmpty ? .includedFallback(percentUsed: included) : .namedPools(pools)
-        )
+        if !pools.isEmpty {
+            return (included, .namedPools(pools))
+        }
+        guard let included else { return nil }
+        return (included, .includedFallback(percentUsed: included))
     }
 
     private static func parseHeader(_ line: String) -> (plan: String, resetText: String)? {
