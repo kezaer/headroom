@@ -565,12 +565,10 @@ struct PopoverView: View {
                     .accessibilityLabel("Refreshing usage")
                 } else {
                     // PA11b (Kyle): "we do need the resting container for all our buttons."
-                    // These two were the model B3H pointed the card chips at — bare labels
-                    // whose only affordance arrived with the pointer — so they are the ones
-                    // that had to move. `.regular` keeps the footer's 12.5pt type; the chip
-                    // brings the container, the border and the press step with it.
+                    // Keep the footer on AppKit's native bordered style. A custom `ButtonStyle`
+                    // label is rehosted upside down when a cached `MenuBarExtra` panel changes
+                    // appearance; the native style owns its label and chrome as one surface.
                     Button("Refresh") { store.refreshNow() }
-                        .buttonStyle(SetupChipButtonStyle(size: .regular))
                         // R2M8: ⌘R is the category's own convention (Raycast, Linear, Ice
                         // all ship it) and a utility opened 30× a day should not need the
                         // pointer. The action itself is instant — the footer's swap is
@@ -587,11 +585,14 @@ struct PopoverView: View {
                 value: store.isRefreshing
             )
             Spacer()
-            // PA11b: same chip as Refresh — the app's only two whole-app controls read as
-            // one pair.
+            // PA11b: same native bordered control as Refresh — the app's only two
+            // whole-app controls read as one pair and share the appearance-safe path.
             Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(SetupChipButtonStyle(size: .regular))
         }
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+        .buttonBorderShape(.roundedRectangle(radius: 7))
+        .font(.system(size: 12.5, weight: .semibold))
     }
 }
 
