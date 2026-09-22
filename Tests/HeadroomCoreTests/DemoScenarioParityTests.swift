@@ -50,10 +50,10 @@ struct DemoScenarioParityTests {
         #expect(grok?.windows.first?.isBillingPeriod == true)
         #expect(grok?.windows.first?.displayPercentRemaining == 56)
         #expect(grok?.primarySubscriptionWindow != nil)
-        #expect(cursor?.windows.first?.label == "Monthly")
-        #expect(cursor?.windows.first?.isBillingPeriod == true)
-        #expect(cursor?.windows.first?.displayPercentRemaining == 69)
-        #expect(cursor?.primarySubscriptionWindow != nil)
+        #expect(cursor?.windows.map(\.label) == ["Cursor Models", "Other Models"])
+        #expect(cursor?.windows.allSatisfy(\.isBillingPeriod) == true)
+        #expect(cursor?.windows.map(\.displayPercentRemaining) == [69, 37])
+        #expect(cursor?.primarySubscriptionWindow?.label == "Other Models")
     }
 
     @Test func encodedIOSDemoContainsNoSensitiveSentinels() throws {

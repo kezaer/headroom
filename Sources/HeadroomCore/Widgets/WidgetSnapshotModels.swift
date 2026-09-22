@@ -141,11 +141,17 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
     }
 
     /// The one period-level meter used by constrained widget families. Existing
-    /// providers keep preferring weekly; period-only providers fall back honestly.
+    /// providers keep preferring weekly; providers with multiple billing pools use
+    /// the tightest remaining pool and preserve source order as the equality tie-break.
     public var primarySubscriptionWindow: WidgetWindowSummary? {
-        weeklyWindow
-            ?? subscriptionWindows.first(where: \.isBillingPeriod)
-            ?? subscriptionWindows.first
+        if let weeklyWindow { return weeklyWindow }
+        let billingPeriods = subscriptionWindows.filter(\.isBillingPeriod)
+        if let first = billingPeriods.first {
+            return billingPeriods.dropFirst().reduce(first) { tightest, candidate in
+                candidate.percentRemaining < tightest.percentRemaining ? candidate : tightest
+            }
+        }
+        return subscriptionWindows.first
     }
 
     public var subscriptionWindows: [WidgetWindowSummary] {

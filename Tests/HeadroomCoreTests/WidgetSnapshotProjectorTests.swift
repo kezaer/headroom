@@ -506,4 +506,43 @@ struct WidgetSnapshotProjectorTests {
 
         #expect(envelope.providers[0].windows.map(\.kind) == [.other("Monthly"), .other("Pool")])
     }
+
+    @Test func cursorNamedPoolsPreserveTheirProjectionContract() {
+        let duration = 30 * 24 * 60 * 60.0
+        let schedule = ResetSchedule.scheduled(reset)
+        let envelope = WidgetSnapshotProjector.project(
+            snapshots: [.cursor: UsageSnapshot(
+                providerID: .cursor,
+                windows: [
+                    UsageWindow(
+                        kind: .billingPeriod(label: "Cursor Models", duration: duration),
+                        utilization: 31,
+                        resetSchedule: schedule,
+                        resetLabel: "Resets Oct 1"
+                    ),
+                    UsageWindow(
+                        kind: .billingPeriod(label: "Other Models", duration: duration),
+                        utilization: 63,
+                        resetSchedule: schedule,
+                        resetLabel: "Resets Oct 1"
+                    ),
+                ],
+                planLabel: "Pro+",
+                capturedAt: now,
+                freshness: .live
+            )],
+            providerOrder: [.cursor],
+            displayNames: [.cursor: "Cursor"],
+            renewalDate: { _ in nil },
+            widgetsEnabled: true,
+            generatedAt: now
+        )
+
+        let windows = envelope.providers[0].windows
+        #expect(windows.map(\.label) == ["Cursor Models", "Other Models"])
+        #expect(windows.map(\.displayPercentRemaining) == [69, 37])
+        #expect(windows.map(\.billingPeriodDuration) == [duration, duration])
+        #expect(windows.map(\.resetSchedule) == [schedule, schedule])
+        #expect(windows.map(\.resetLabel) == ["Resets Oct 1", "Resets Oct 1"])
+    }
 }
