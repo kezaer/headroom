@@ -2,7 +2,7 @@
 
 Use this runbook to ship a new public macOS Headroom release at
 `https://headroom.zantos.co`. It covers the whole chain: version metadata, Developer ID
-signing, Apple notarization, Sparkle appcast generation, the portfolio-hosted download files,
+signing, Apple notarization, Sparkle appcast generation, the externally archived download files,
 and live verification. It also includes the installed-app acceptance test for Sparkle updates.
 
 For a coordinated macOS + TestFlight release, start with `release-operations.md`. It defines the
@@ -97,8 +97,17 @@ ditto \
 ```
 
 The prior local staging folder is retained under ignored `dist/release-staging-backups/` so this
-step never destroys a recoverable artifact. Do not remove old versioned DMGs from the portfolio
-`public/` directory unless intentionally retiring a supported update path.
+step never destroys a recoverable artifact. The portfolio no longer bundles DMGs or deltas. After copying its small public files,
+hydrate the staging directory from the verified archive:
+
+```bash
+python3 \
+  "/Users/kylezantos/App Development/Manual Library/kz-portfolio/scripts/restore-headroom-binaries.py" \
+  "$STAGING"
+```
+
+This restores older installers and deltas for Sparkle without growing website deployments.
+Never remove historical mappings from `config/headroom-downloads.json`.
 
 ## 3. Build, sign, notarize, and generate the feed
 
@@ -182,33 +191,26 @@ output and the timeout fallback.
 
 ## 4. Publish assets through the portfolio repository
 
-Create a branch in `kz-portfolio`. Copy only the generated files needed by the new appcast:
+Create a branch in `kz-portfolio`. The website keeps only metadata, notes and checksums;
+signed binaries live in the public artifact-only `kylezantos/headroom-downloads` repository.
+The app source remains private. Run from the current portfolio checkout:
 
 ```bash
-HEADROOM_REPO='/absolute/path/to/this/headroom/checkout'
-SOURCE="$HEADROOM_REPO/dist/headroom.zantos.co"
-TARGET='/Users/kylezantos/App Development/Manual Library/kz-portfolio/public'
-
-ditto "$SOURCE/Headroom-<version>-<build>.dmg" "$TARGET/Headroom-<version>-<build>.dmg"
-ditto "$SOURCE/Headroom-<version>-<build>.dmg.sha256" "$TARGET/Headroom-<version>-<build>.dmg.sha256"
-ditto "$SOURCE/Headroom-<version>-<build>.html" "$TARGET/Headroom-<version>-<build>.html"
-ditto "$SOURCE/Headroom.dmg" "$TARGET/Headroom.dmg"
-ditto "$SOURCE/Headroom.dmg.sha256" "$TARGET/Headroom.dmg.sha256"
-ditto "$SOURCE/appcast.xml" "$TARGET/appcast.xml"
-ditto "$SOURCE/latest.json" "$TARGET/latest.json"
-```
-
-Also copy every `Headroom*.delta` file referenced in the new appcast. Keep the older versioned
-DMGs and their checksums in place.
-
-Before committing, verify the stable file and manifest agree:
-
-```bash
-jq -e '.version == "<version>" and .build == "<build>"' "$TARGET/latest.json"
-shasum -a 256 "$TARGET/Headroom.dmg"
-cat "$TARGET/Headroom.dmg.sha256"
+pnpm publish:headroom /absolute/path/to/headroom/dist/headroom.zantos.co
+pnpm check:headroom-storage
 pnpm build
 ```
+
+The publisher verifies the local appcast and latest metadata, refuses to overwrite versioned
+assets, uploads new binaries to a GitHub Release, and anonymously downloads them to verify
+size and SHA-256 before updating the website manifest and small public files. The existing
+`headroom.zantos.co` URLs redirect to the archive; appcast URLs and signatures stay intact.
+The stable `Headroom.dmg` redirect follows the version in `latest.json` and is not permanent.
+
+Do not copy DMGs/deltas into `public/`: the website build rejects them. Preserve all historical
+manifest mappings and release assets. Use the hydration command above whenever local staging
+needs older installers. If publication fails, leave the current website live and fix the failure;
+do not bypass verification or overwrite an existing versioned archive asset.
 
 Open a PR to `kz-portfolio/main`, wait for the Vercel preview check, then merge it. Promote the
 portfolio site through its documented production path, never by pushing directly to its
@@ -252,7 +254,7 @@ Use a VM/dedicated Mac, or install into `~/Applications` in a dedicated macOS te
 does not replace a working development install. A separate user alone does not isolate the shared
 `/Applications` directory.
 
-1. Download an older **public** versioned DMG from the portfolio `public/` history. Verify its
+1. Download an older **public** versioned DMG through its URL in the portfolio download manifest. Verify its
    Developer ID signature, notarization, version, and build before installing it. A local or
    Apple Development-signed bundle is not a valid starting point.
 2. Before launching, inspect exact Headroom process paths. Keep only this public installation

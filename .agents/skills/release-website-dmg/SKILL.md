@@ -17,8 +17,9 @@ each platform runbook as a separate release lane. Report their states separately
 
 - Treat `https://headroom.zantos.co` as the public site. Do not substitute a similarly named
   domain.
-- The source repo is Headroom; the public assets and Vercel deployment belong to
-  `/Users/kylezantos/App Development/Manual Library/kz-portfolio`.
+- The source repo is Headroom. Website metadata and Vercel deployment belong to
+  `/Users/kylezantos/App Development/Manual Library/kz-portfolio`; signed binaries live in
+  the public artifact-only `kylezantos/headroom-downloads` GitHub Releases archive.
 - Never release from an unmerged Headroom branch, deploy `dist/` as a separate Vercel project,
   force-push, or delete versioned DMGs, checksum files, or Sparkle deltas.
 - Perform external publishing only when the user explicitly asks to ship or publish. For a
@@ -46,16 +47,18 @@ each platform runbook as a separate release lane. Report their states separately
    `swift test` plus `bash Tests/ReleaseScripts/sparkle-release-notes-tests.sh`, and merge the
    release bump and notes to `main` before generating public artifacts.
 2. Seed `dist/headroom.zantos.co` from the current `kz-portfolio/public` using the runbook's
-   non-destructive staging step. This retains the current appcast history so Sparkle can produce
+   non-destructive staging step, then hydrate archived binaries with the portfolio
+   `scripts/restore-headroom-binaries.py` helper. This retains the current appcast history so Sparkle can produce
    deltas; the latest full versioned DMG remains the fallback for all older installations.
 3. Run `HEADROOM_NOTARY_PROFILE=headroom-notary ./Scripts/release-app.sh`. Do not echo,
    inspect, or commit credentials, signing keys, auth files, or generated secret values.
 4. Validate notarization, Gatekeeper, checksums, `latest.json`, every appcast enclosure, and the
    target build's versioned release-note link and staged HTML before copying release outputs.
    Confirm the app has `SUFeedURL`, `SUPublicEDKey`, and the new `CFBundleVersion` stamped.
-5. Create a normal branch and PR in `kz-portfolio`; copy the versioned DMG and checksum, stable
-   DMG and checksum, versioned release-note HTML, `appcast.xml`, `latest.json`, and every delta
-   referenced by the new feed. Preserve every existing versioned asset. Build, preview, merge,
+5. Create a normal branch and PR in `kz-portfolio`; run `pnpm publish:headroom <staging-directory>`.
+   This publishes and verifies binaries in GitHub Releases, updates the download redirect
+   manifest, and copies only small website metadata. Never copy DMGs or deltas into `public/`.
+   Preserve every existing versioned archive asset and mapping. Build, preview, merge,
    then use the portfolio's documented `pnpm ship` path.
 6. Validate the live manifest, appcast, stable-DMG checksum, mounted DMG signature, and public
    diagnostic. Then run the runbook's installed-app update test from an older public release in
