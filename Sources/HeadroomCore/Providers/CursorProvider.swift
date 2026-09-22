@@ -90,8 +90,7 @@ public enum CursorUsageParser {
               let latestHeader = parseHeader(lines[latestHeaderIndex])
         else { return nil }
 
-        let completedCandidates = completedCandidates(in: lines)
-        let selectedCandidate = completedCandidates.last
+        let selectedCandidate = latestCompletedCandidate(in: lines)
         let header = selectedCandidate?.header ?? latestHeader
         guard let resetsAt = resetDate(header.resetText, now: now, calendar: calendar)
         else { return nil }
@@ -121,16 +120,19 @@ public enum CursorUsageParser {
         let subscription: CursorSubscriptionUsage
     }
 
-    private static func completedCandidates(in lines: [String]) -> [CompletedCandidate] {
+    private static func latestCompletedCandidate(in lines: [String]) -> CompletedCandidate? {
         let headerIndices = lines.indices.filter { parseHeader(lines[$0]) != nil }
-        return headerIndices.compactMap { headerIndex in
-            let nextHeader = headerIndices.first(where: { $0 > headerIndex }) ?? lines.endIndex
+        for position in headerIndices.indices.reversed() {
+            let headerIndex = headerIndices[position]
+            let nextHeader = position < headerIndices.index(before: headerIndices.endIndex)
+                ? headerIndices[headerIndices.index(after: position)]
+                : lines.endIndex
             guard let completionIndex = lines[(headerIndex + 1)..<nextHeader]
                 .firstIndex(where: isOnDemandRow)
-            else { return nil }
+            else { continue }
 
             let tableLines = lines[(headerIndex + 1)..<completionIndex]
-            guard let header = parseHeader(lines[headerIndex]) else { return nil }
+            guard let header = parseHeader(lines[headerIndex]) else { continue }
             guard let decoded = decodeSubscriptionRows(tableLines) else {
                 return CompletedCandidate(
                     header: header,
@@ -144,6 +146,7 @@ public enum CursorUsageParser {
                 subscription: decoded.subscription
             )
         }
+        return nil
     }
 
     private static func decodeSubscriptionRows(
@@ -337,7 +340,6 @@ public struct CursorProvider: UsageProvider {
 
         switch panel {
         case .panel(let text):
-            let email = await emailTask.value
             let capturedAt = now()
             guard let parsed = CursorUsageParser.parse(text, now: capturedAt) else {
                 return stale(.providerSetup(.cursorTransientCapture))
@@ -345,6 +347,7 @@ public struct CursorProvider: UsageProvider {
             guard let pools = parsed.subscription.visiblePools else {
                 return stale(.providerSetup(.cursorTransientCapture))
             }
+            let email = await emailTask.value
             return UsageSnapshot(
                 providerID: id,
                 windows: pools.map { pool in

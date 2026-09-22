@@ -146,12 +146,8 @@ public struct WidgetProviderSummary: Codable, Equatable, Sendable, Identifiable 
     public var primarySubscriptionWindow: WidgetWindowSummary? {
         if let weeklyWindow { return weeklyWindow }
         let billingPeriods = subscriptionWindows.filter(\.isBillingPeriod)
-        if let first = billingPeriods.first {
-            return billingPeriods.dropFirst().reduce(first) { tightest, candidate in
-                candidate.percentRemaining < tightest.percentRemaining ? candidate : tightest
-            }
-        }
-        return subscriptionWindows.first
+        return billingPeriods.min { $0.percentRemaining < $1.percentRemaining }
+            ?? subscriptionWindows.first
     }
 
     public var subscriptionWindows: [WidgetWindowSummary] {
