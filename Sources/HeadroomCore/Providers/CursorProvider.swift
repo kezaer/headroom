@@ -35,16 +35,45 @@ public enum CursorOnDemandUsage: Sendable, Equatable {
     }
 }
 
+public struct CursorSubscriptionPool: Sendable, Equatable {
+    public let label: String
+    public let percentUsed: Double
+
+    init(label: String, percentUsed: Double) {
+        self.label = label
+        self.percentUsed = percentUsed
+    }
+}
+
+public enum CursorSubscriptionUsage: Sendable, Equatable {
+    case namedPools([CursorSubscriptionPool])
+    case includedFallback(percentUsed: Double)
+    case incomplete
+
+    var visiblePools: [CursorSubscriptionPool]? {
+        switch self {
+        case .namedPools(let pools): pools
+        case .includedFallback(let percentUsed): [
+            CursorSubscriptionPool(label: "Included", percentUsed: percentUsed),
+        ]
+        case .incomplete: nil
+        }
+    }
+}
+
 public struct ParsedCursorUsage: Sendable, Equatable {
     public let planName: String
-    public let includedPercentUsed: Double
+    public let includedPercentUsed: Double?
+    public let subscription: CursorSubscriptionUsage
     public let resetLabel: String
     public let resetsAt: Date
     public let onDemand: CursorOnDemandUsage
 }
 
 /// Parses only the stable labels rendered by the official Cursor Agent `/usage`
-/// panel. Repeated TUI paints are harmless because the last complete match wins.
+/// panel. Subscription rows must come from one completed paint; independent row
+/// searches across the accumulated PTY transcript could otherwise combine values
+/// from two partial repaints into a result Cursor never displayed.
 public enum CursorUsageParser {
     public static func parse(
         _ text: String,
@@ -57,19 +86,104 @@ public enum CursorUsageParser {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
 
-        guard let header = lines.reversed().compactMap(parseHeader).first,
-              let included = lines.reversed().compactMap(parseIncluded).first,
-              let resetsAt = resetDate(header.resetText, now: now, calendar: calendar)
+        guard let latestHeaderIndex = lines.lastIndex(where: { parseHeader($0) != nil }),
+              let latestHeader = parseHeader(lines[latestHeaderIndex])
         else { return nil }
 
-        let onDemand = lines.reversed().compactMap(parseOnDemand).first ?? .unavailable(usedDollars: nil)
+        let selectedCandidate = latestCompletedCandidate(in: lines)
+        let header = selectedCandidate?.header ?? latestHeader
+        guard let resetsAt = resetDate(header.resetText, now: now, calendar: calendar)
+        else { return nil }
+
+        let subscription = selectedCandidate?.subscription ?? .incomplete
+        let included = selectedCandidate?.included
+            ?? lines[latestHeaderIndex...].compactMap(parseIncluded).last
+
+        // Spend is intentionally decoded independently. A completed On-Demand row
+        // remains useful even when an unknown or partial subscription table makes the
+        // subscription snapshot stale.
+        let onDemand = lines.reversed().compactMap(parseOnDemand).first
+            ?? .unavailable(usedDollars: nil)
         return ParsedCursorUsage(
             planName: header.plan,
             includedPercentUsed: included,
+            subscription: subscription,
             resetLabel: "Resets \(header.resetText)",
             resetsAt: resetsAt,
             onDemand: onDemand
         )
+    }
+
+    private struct CompletedCandidate {
+        let header: (plan: String, resetText: String)
+        let included: Double?
+        let subscription: CursorSubscriptionUsage
+    }
+
+    private static func latestCompletedCandidate(in lines: [String]) -> CompletedCandidate? {
+        let headerIndices = lines.indices.filter { parseHeader(lines[$0]) != nil }
+        for position in headerIndices.indices.reversed() {
+            let headerIndex = headerIndices[position]
+            let nextHeader = position < headerIndices.index(before: headerIndices.endIndex)
+                ? headerIndices[headerIndices.index(after: position)]
+                : lines.endIndex
+            guard let completionIndex = lines[(headerIndex + 1)..<nextHeader]
+                .firstIndex(where: isOnDemandRow)
+            else { continue }
+
+            let tableLines = lines[(headerIndex + 1)..<completionIndex]
+            guard let header = parseHeader(lines[headerIndex]) else { continue }
+            guard let decoded = decodeSubscriptionRows(tableLines) else {
+                return CompletedCandidate(
+                    header: header,
+                    included: tableLines.compactMap(parseIncluded).last,
+                    subscription: .incomplete
+                )
+            }
+            return CompletedCandidate(
+                header: header,
+                included: decoded.included,
+                subscription: decoded.subscription
+            )
+        }
+        return nil
+    }
+
+    private static func decodeSubscriptionRows(
+        _ lines: ArraySlice<String>
+    ) -> (included: Double?, subscription: CursorSubscriptionUsage)? {
+        var included: Double?
+        var auto: Double?
+        var api: Double?
+
+        for line in lines {
+            if let row = parsePercentRow(line) {
+                switch row.label.lowercased() {
+                case "included": included = row.percent
+                case "auto": auto = row.percent
+                case "api": api = row.percent
+                default: return nil
+                }
+            } else if looksLikeUsageRow(line) {
+                // A known row with malformed data or an unknown sibling means Cursor
+                // changed or incompletely painted the table. Do not disguise it as an
+                // Included-only legacy layout.
+                return nil
+            }
+        }
+
+        var pools: [CursorSubscriptionPool] = []
+        if let auto {
+            pools.append(CursorSubscriptionPool(label: "Cursor Models", percentUsed: auto))
+        }
+        if let api {
+            pools.append(CursorSubscriptionPool(label: "Other Models", percentUsed: api))
+        }
+        if !pools.isEmpty {
+            return (included, .namedPools(pools))
+        }
+        guard let included else { return nil }
+        return (included, .includedFallback(percentUsed: included))
     }
 
     private static func parseHeader(_ line: String) -> (plan: String, resetText: String)? {
@@ -83,10 +197,34 @@ public enum CursorUsageParser {
     }
 
     private static func parseIncluded(_ line: String) -> Double? {
+        guard let row = parsePercentRow(line), row.label.caseInsensitiveCompare("Included") == .orderedSame
+        else { return nil }
+        return row.percent
+    }
+
+    private static func parsePercentRow(_ line: String) -> (label: String, percent: Double)? {
         guard let match = line.firstMatch(
-            of: /^Included\s+(\d+(?:\.\d+)?)%\s+used\b/.ignoresCase()
+            of: /^(.+?)\s+(\d+(?:\.\d+)?)%\s+used\b/.ignoresCase()
         ) else { return nil }
-        return Double(match.1).flatMap { $0.isFinite ? min(100, max(0, $0)) : nil }
+        let label = String(match.1).trimmingCharacters(in: .whitespaces)
+        guard !label.isEmpty,
+              let value = Double(match.2),
+              value.isFinite
+        else { return nil }
+        return (label, min(100, max(0, value)))
+    }
+
+    private static func looksLikeUsageRow(_ line: String) -> Bool {
+        let normalized = line.trimmingCharacters(in: .whitespaces)
+        return normalized.localizedCaseInsensitiveContains("% used")
+            || ["Included", "Auto", "API"].contains(where: {
+                normalized.localizedCaseInsensitiveCompare($0) == .orderedSame
+                    || normalized.lowercased().hasPrefix($0.lowercased() + " ")
+            })
+    }
+
+    private static func isOnDemandRow(_ line: String) -> Bool {
+        line.firstMatch(of: /^On-Demand:?\s+.+$/.ignoresCase()) != nil
     }
 
     private static func parseOnDemand(_ line: String) -> CursorOnDemandUsage? {
@@ -202,19 +340,24 @@ public struct CursorProvider: UsageProvider {
 
         switch panel {
         case .panel(let text):
-            let email = await emailTask.value
             let capturedAt = now()
             guard let parsed = CursorUsageParser.parse(text, now: capturedAt) else {
                 return stale(.providerSetup(.cursorTransientCapture))
             }
+            guard let pools = parsed.subscription.visiblePools else {
+                return stale(.providerSetup(.cursorTransientCapture))
+            }
+            let email = await emailTask.value
             return UsageSnapshot(
                 providerID: id,
-                windows: [UsageWindow(
-                    kind: BillingPeriodWindowClassifier.kind(periodType: "monthly", durationSeconds: nil),
-                    utilization: parsed.includedPercentUsed,
-                    resetsAt: parsed.resetsAt,
-                    resetLabel: parsed.resetLabel
-                )],
+                windows: pools.map { pool in
+                    UsageWindow(
+                        kind: .billingPeriod(label: pool.label, duration: 30 * 24 * 60 * 60),
+                        utilization: pool.percentUsed,
+                        resetsAt: parsed.resetsAt,
+                        resetLabel: parsed.resetLabel
+                    )
+                },
                 planLabel: parsed.planName,
                 accountEmail: email,
                 capturedAt: capturedAt,

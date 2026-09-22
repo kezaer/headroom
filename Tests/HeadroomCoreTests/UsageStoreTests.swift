@@ -1370,6 +1370,51 @@ struct UsageStoreTests {
         #expect(!store.hasSelectableMenuBarWindows(for: .grok))
     }
 
+    @Test func cursorMenuBarUsesTighterNamedPoolAndKeepsBothForAppDisplay() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .cursorSubscription)
+        preferences.menuBarFillSource = .providers([.cursor])
+        let duration = 30 * 86_400.0
+        let cursorModels = WindowKind.billingPeriod(label: "Cursor Models", duration: duration)
+        let otherModels = WindowKind.billingPeriod(label: "Other Models", duration: duration)
+        let store = UsageStore(providers: [
+            StubProvider(id: .cursor, displayName: "Cursor", snapshot: .live(.cursor, windows: [
+                UsageWindow(kind: cursorModels, utilization: 31, resetsAt: reset),
+                UsageWindow(kind: otherModels, utilization: 63, resetsAt: reset),
+            ])),
+        ], preferences: preferences)
+        await store.refreshAll()
+
+        #expect(store.menuBarSummary.text == "37%")
+        #expect(store.menuBarSummary.detail == "Cursor other models")
+        #expect(store.menuBarFill == 0.37)
+        #expect(store.appDisplaySnapshot(for: .cursor).windows.map(\.kind) == [cursorModels, otherModels])
+    }
+
+    @Test func cursorMenuBarBreaksEqualPoolTieBySourceOrder() async {
+        let preferences = freshPreferences()
+        preferences.setSurfaceEnabled(true, for: .cursorSubscription)
+        preferences.menuBarFillSource = .providers([.cursor])
+        let duration = 30 * 86_400.0
+        let store = UsageStore(providers: [
+            StubProvider(id: .cursor, displayName: "Cursor", snapshot: .live(.cursor, windows: [
+                UsageWindow(
+                    kind: .billingPeriod(label: "Cursor Models", duration: duration),
+                    utilization: 58,
+                    resetsAt: reset
+                ),
+                UsageWindow(
+                    kind: .billingPeriod(label: "Other Models", duration: duration),
+                    utilization: 58,
+                    resetsAt: reset
+                ),
+            ])),
+        ], preferences: preferences)
+        await store.refreshAll()
+
+        #expect(store.menuBarSummary.detail == "Cursor cursor models")
+    }
+
     @Test func menuBarMetersDefaultToSingleSummary() async {
         let store = makeStore(providers: [
             StubProvider(id: .claude, displayName: "Claude", snapshot: .live(.claude, windows: [

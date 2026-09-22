@@ -141,16 +141,21 @@ struct DemoFixtureTests {
         #expect(remaining(grok, grok.windows[0].kind) == 56)
     }
 
-    /// Cursor bills a monthly included pool with a calendar reset day, 31% used = 69% left.
-    @Test func cursorDemoSnapshotIsBillingPeriodMonthly() {
+    /// Cursor exposes two named monthly pools with one calendar reset. Unequal values make
+    /// accidental collapsing, duplication, or reordering visible in screenshots and tests.
+    @Test func cursorDemoSnapshotIncludesBothNamedBillingPools() {
         let cursor = DemoFixture.cursorSnapshot
         #expect(cursor.planLabel == "Pro+")
-        #expect(cursor.windows.count == 1)
-        guard case .billingPeriod(let label, _)? = cursor.windows.first?.kind else {
-            Issue.record("expected a billing-period window"); return
+        #expect(cursor.windows.count == 2)
+        #expect(cursor.windows.map(\.kind.shortLabel) == ["Cursor Models", "Other Models"])
+        #expect(cursor.windows.map { remaining(cursor, $0.kind) } == [69, 37])
+        #expect(cursor.windows.map(\.resetSchedule).allSatisfy { $0 == cursor.windows[0].resetSchedule })
+        for window in cursor.windows {
+            guard case .billingPeriod(_, let duration) = window.kind else {
+                Issue.record("expected a billing-period window"); return
+            }
+            #expect(duration == 30 * 24 * 60 * 60)
         }
-        #expect(label == "Monthly")
-        #expect(remaining(cursor, cursor.windows[0].kind) == 69)
     }
 
     /// U12 parity: the four-provider scenario's provider list is derived from — and equals —

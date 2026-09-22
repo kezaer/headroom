@@ -302,7 +302,17 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   which would let a stray Enter submit a model prompt. The probe passes `--trust` for
   its own empty `CursorProbe` workspace only; a trust or MCP screen that still appears
   (older CLIs, or a gate painted after the ready frame) is classified and handed to the
-  user in Terminal, never typed into. Cursor is single-account (no
+  user in Terminal, never typed into. **The current subscription table has two named source
+  rows:** `Auto` maps empirically to the customer-facing **Cursor Models** pool and `API` maps
+  to **Other Models**. Cursor Agent `2026.09.18-9a7762b` returned 1% and 3% respectively, which
+  matched the same account's Plan & Usage screen; Cursor documents the product pools but not
+  those CLI source-label mappings. Parse the rows only from one coherent panel candidate whose
+  later On-Demand row proves the table completed. Both rows produce two lanes, one recognized
+  row produces that one lane, and a completed parent-only layout falls back to `Included`.
+  Incomplete, cross-repaint, or unknown-sibling layouts fail stale. Never render `Included`
+  alongside named pools or claim it is their sum, maximum, or authoritative aggregate.
+  `--probe-cursor` must list every parsed subscription window without exposing the raw panel,
+  credentials, account email, or account identifier. Cursor is single-account (no
   config-home isolation equivalent to `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`GROK_HOME` was
   found). Re-diagnose the panel with `--probe-cursor`; see
   `docs/solutions/cursor-agent-usage-feasibility.md`.

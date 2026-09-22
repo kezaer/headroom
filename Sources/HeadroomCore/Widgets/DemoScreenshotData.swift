@@ -318,11 +318,19 @@ public enum DemoScreenshotData {
                     freshness: .live,
                     windows: [
                         window(
-                            .other("Monthly"),
-                            label: "Monthly",
+                            .other("Cursor Models"),
+                            label: "Cursor Models",
                             percent: 69,
                             reset: "Resets Sep 1",
                             severity: .healthy,
+                            billingPeriodDuration: 30 * 24 * 60 * 60
+                        ),
+                        window(
+                            .other("Other Models"),
+                            label: "Other Models",
+                            percent: 37,
+                            reset: "Resets Sep 1",
+                            severity: .low,
                             billingPeriodDuration: 30 * 24 * 60 * 60
                         ),
                     ],

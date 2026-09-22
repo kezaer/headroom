@@ -70,16 +70,24 @@ public enum DemoFixture {
         )
     }
 
-    /// Cursor bills a monthly included-usage pool (billing-period window) with a calendar
-    /// reset day — the shape the official `/usage` panel exposes.
+    /// Cursor bills two monthly pools with one calendar reset. Distinct values keep the
+    /// demo useful for spotting collapsed, duplicated, reordered, or omitted rows.
     public static var cursorSnapshot: UsageSnapshot {
-        UsageSnapshot(
+        let resetsAt = soon(days: 12)
+        let duration = 30 * 24 * 60 * 60.0
+        return UsageSnapshot(
             providerID: .cursor,
             windows: [
                 UsageWindow(
-                    kind: BillingPeriodWindowClassifier.kind(periodType: "monthly", durationSeconds: nil),
+                    kind: .billingPeriod(label: "Cursor Models", duration: duration),
                     utilization: 31,
-                    resetsAt: soon(days: 12),
+                    resetsAt: resetsAt,
+                    resetLabel: "Resets Sep 1"
+                ),
+                UsageWindow(
+                    kind: .billingPeriod(label: "Other Models", duration: duration),
+                    utilization: 63,
+                    resetsAt: resetsAt,
                     resetLabel: "Resets Sep 1"
                 ),
             ],

@@ -95,6 +95,26 @@ struct MirrorPresentationTests {
         #expect(MirrorPresentation.windows(for: provider).map(\.label) == ["Session", "Weekly (Fable)"])
     }
 
+    @Test func companionRendersBothCursorPoolsInSourceOrder() {
+        let duration = 30 * 24 * 60 * 60.0
+        let provider = WidgetProviderSummary(
+            id: "cursor",
+            displayName: "Cursor",
+            planLabel: "Pro+",
+            freshness: .live,
+            windows: [
+                billingWindow(label: "Cursor Models", percentRemaining: 69, duration: duration),
+                billingWindow(label: "Other Models", percentRemaining: 37, duration: duration),
+            ],
+            renewalDate: nil
+        )
+
+        let windows = MirrorPresentation.windows(for: provider)
+        #expect(windows.map(\.label) == ["Cursor Models", "Other Models"])
+        #expect(windows.map(\.displayPercentRemaining) == [69, 37])
+        #expect(windows.map(\.billingPeriodDuration) == [duration, duration])
+    }
+
     @Test func unavailableWindowHidesPercentageAndUsesUnavailableResetCopy() {
         let unavailable = WidgetWindowSummary(
             kind: .other("Weekly (Fable)"),
@@ -122,6 +142,22 @@ struct MirrorPresentationTests {
             resetsAt: resetsAt ?? now,
             resetLabel: resetLabel,
             severity: severity
+        )
+    }
+
+    private func billingWindow(
+        label: String,
+        percentRemaining: Double,
+        duration: TimeInterval
+    ) -> WidgetWindowSummary {
+        WidgetWindowSummary(
+            kind: .other(label),
+            label: label,
+            percentRemaining: percentRemaining,
+            resetsAt: now.addingTimeInterval(duration),
+            resetLabel: "Resets Oct 1",
+            severity: .healthy,
+            billingPeriodDuration: duration
         )
     }
 }

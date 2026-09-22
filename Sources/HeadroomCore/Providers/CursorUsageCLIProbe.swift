@@ -360,8 +360,14 @@ public struct CursorUsageCLIProbe: CursorUsageSource {
     }
 
     static func isUsagePanel(_ strippedText: String) -> Bool {
-        strippedText.localizedCaseInsensitiveContains("Monthly plan and on-demand usage")
-            && strippedText.localizedCaseInsensitiveContains("Included")
+        guard strippedText.localizedCaseInsensitiveContains("Monthly plan and on-demand usage") else {
+            return false
+        }
+        return strippedText.split(whereSeparator: \.isNewline).contains { line in
+            String(line).trimmingCharacters(in: .whitespaces).firstMatch(
+                of: /^(?:Included|Auto|API)\s+\d+(?:\.\d+)?%\s+used\b/.ignoresCase()
+            ) != nil
+        }
     }
 
     private static func terminateProcessGroup(_ pid: pid_t) {

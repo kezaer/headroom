@@ -58,6 +58,30 @@ struct WidgetWindowLabelTests {
         #expect(provider(windows: [billingWindow(label: "Quarterly", duration: 90 * 24 * 3600)]).periodNoun == nil)
     }
 
+    @Test func namedBillingPoolsChooseTheLowestRemainingValue() {
+        let cursorModels = billingWindow(label: "Cursor Models", percentRemaining: 69)
+        let otherModels = billingWindow(label: "Other Models", percentRemaining: 37)
+        let cursor = provider(id: "cursor", windows: [cursorModels, otherModels])
+
+        #expect(cursor.primarySubscriptionWindow?.label == "Other Models")
+        #expect(cursor.displaySubscriptionWindows.map(\.label) == ["Cursor Models", "Other Models"])
+    }
+
+    @Test func equalBillingPoolsChooseTheFirstSourceRow() {
+        let cursorModels = billingWindow(label: "Cursor Models", percentRemaining: 42)
+        let otherModels = billingWindow(label: "Other Models", percentRemaining: 42)
+
+        #expect(provider(id: "cursor", windows: [cursorModels, otherModels])
+            .primarySubscriptionWindow?.label == "Cursor Models")
+    }
+
+    @Test func weeklyStillWinsBeforeTighterBillingPools() {
+        let weekly = window(kind: .weekly, label: "Weekly")
+        let tighterBilling = billingWindow(label: "Other Models", percentRemaining: 3)
+
+        #expect(provider(windows: [tighterBilling, weekly]).primarySubscriptionWindow?.kind == .weekly)
+    }
+
     // MARK: - WCW7 small header
 
     @Test func oneWeeklyProviderCaptionsTheTileWeekly() {
@@ -150,10 +174,18 @@ struct WidgetWindowLabelTests {
     }
 
     private func billingWindow(label: String, duration: TimeInterval) -> WidgetWindowSummary {
+        billingWindow(label: label, percentRemaining: 62, duration: duration)
+    }
+
+    private func billingWindow(
+        label: String,
+        percentRemaining: Double,
+        duration: TimeInterval = 30 * 24 * 3600
+    ) -> WidgetWindowSummary {
         WidgetWindowSummary(
             kind: .other(label),
             label: label,
-            percentRemaining: 62,
+            percentRemaining: percentRemaining,
             resetsAt: now.addingTimeInterval(duration),
             resetLabel: "Renews soon",
             severity: .healthy,

@@ -17,7 +17,15 @@ private struct StubCursorSource: CursorUsageSource {
         ISO8601DateFormatter().date(from: "2026-08-01T12:00:00Z")!
     }
 
-    @Test func liveOfficialPanelFixtureDecodesMonthlyIncludedUsage() async throws {
+    private var namedPoolKinds: [WindowKind] {
+        let month: TimeInterval = 30 * 24 * 60 * 60
+        return [
+            .billingPeriod(label: "Cursor Models", duration: month),
+            .billingPeriod(label: "Other Models", duration: month),
+        ]
+    }
+
+    @Test func liveOfficialPanelFixtureDecodesBothNamedPools() async throws {
         let text = try fixture()
         let provider = CursorProvider(
             source: StubCursorSource(result: .panel(text)),
@@ -28,16 +36,14 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(snapshot.freshness == .live)
         #expect(snapshot.providerID == .cursor)
         #expect(snapshot.planLabel == "Pro+")
-        #expect(snapshot.windows.count == 1)
-        // Fixture is a real non-zero live capture (Included 1% used); pins that the parser
-        // reads the rendered percentage, not a hardcoded zero.
-        #expect(snapshot.windows.first?.utilization == 1)
-        #expect(snapshot.windows.first?.percentRemaining == 99)
-        #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Monthly", duration: 30 * 24 * 60 * 60))
-        #expect(snapshot.windows.first?.resetSchedule == .scheduled(
+        #expect(snapshot.windows.count == 2)
+        #expect(snapshot.windows.map(\.utilization) == [1, 3])
+        #expect(snapshot.windows.map(\.percentRemaining) == [99, 97])
+        #expect(snapshot.windows.map(\.kind) == namedPoolKinds)
+        #expect(snapshot.windows.allSatisfy { $0.resetSchedule == .scheduled(
             ISO8601DateFormatter().date(from: "2026-09-01T23:59:59Z")!
-        ))
-        #expect(snapshot.windows.first?.resetLabel == "Resets Sep 1")
+        ) })
+        #expect(snapshot.windows.allSatisfy { $0.resetLabel == "Resets Sep 1" })
     }
 
     @Test func includedPercentReadsAnArbitraryMidRangeValue() throws {
@@ -49,11 +55,167 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(parsed.includedPercentUsed == 73)
     }
 
+    @Test func namedPoolsUseTheirOwnArbitraryValuesInsteadOfIncluded() async throws {
+        let text = try fixture()
+            .replacingOccurrences(of: "Included        1% used", with: "Included        9% used")
+            .replacingOccurrences(of: "Auto          1% used", with: "Auto          37% used")
+            .replacingOccurrences(of: "API           3% used", with: "API           62% used")
+        let snapshot = await snapshot(for: text)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.map(\.utilization) == [37, 62])
+        #expect(snapshot.windows.map(\.kind) == namedPoolKinds)
+    }
+
+    @Test func lastCoherentCompletedRepaintWins() async throws {
+        let first = try fixture()
+            .replacingOccurrences(of: "Auto          1% used", with: "Auto          12% used")
+            .replacingOccurrences(of: "API           3% used", with: "API           24% used")
+        let second = try fixture()
+            .replacingOccurrences(of: "Auto          1% used", with: "Auto          31% used")
+            .replacingOccurrences(of: "API           3% used", with: "API           63% used")
+        let trailingIncomplete = """
+        Usage • Pro+ Resets Sep 1
+        Included 1% used
+        Auto 99% used
+        """
+        let snapshot = await snapshot(for: first + "\n" + second + "\n" + trailingIncomplete)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.map(\.utilization) == [31, 63])
+    }
+
+    @Test func namedPercentagesClampToTheSupportedRange() async throws {
+        let text = try fixture()
+            .replacingOccurrences(of: "Auto          1% used", with: "Auto          120% used")
+            .replacingOccurrences(of: "API           3% used", with: "API           101% used")
+
+        #expect(await snapshot(for: text).windows.map(\.utilization) == [100, 100])
+    }
+
+    @Test func rowsFromDifferentIncompleteRepaintsNeverFormASyntheticPair() async {
+        let text = """
+        Usage • Pro+ Resets Sep 1
+        Included 1% used
+        Auto 11% used
+        Usage • Pro+ Resets Sep 1
+        Included 1% used
+        API 22% used
+        """
+
+        #expect(await snapshot(for: text).freshness == .stale(.providerSetup(.cursorTransientCapture)))
+    }
+
+    @Test func completedIncludedOnlyPanelUsesCompatibilityFallback() async {
+        let snapshot = await snapshot(for: """
+        Usage • Pro Resets Sep 1
+        Monthly plan and on-demand usage
+        Category Current Usage
+        Included 42% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Included", duration: 30 * 24 * 60 * 60))
+        #expect(snapshot.windows.first?.utilization == 42)
+    }
+
+    @Test func truncatedIncludedOnlyPanelFailsStale() async {
+        let snapshot = await snapshot(for: """
+        Usage • Pro Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 42% used
+        """)
+
+        #expect(snapshot.freshness == .stale(.providerSetup(.cursorTransientCapture)))
+    }
+
+    @Test func completedOneNamedPoolPanelPublishesThatPool() async {
+        let snapshot = await snapshot(for: """
+        Usage • Start Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 17% used
+        Auto 29% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Cursor Models", duration: 30 * 24 * 60 * 60))
+        #expect(snapshot.windows.first?.utilization == 29)
+    }
+
+    @Test func completedNamedPoolsDoNotRequireIncluded() async {
+        let snapshot = await snapshot(for: """
+        Usage • Pro+ Resets Sep 1
+        Monthly plan and on-demand usage
+        Auto 12% used
+        API 47% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.map(\.kind) == namedPoolKinds)
+        #expect(snapshot.windows.map(\.utilization) == [12, 47])
+    }
+
+    @Test func completedAPIOnlyPanelPublishesOtherModels() async {
+        let snapshot = await snapshot(for: """
+        Usage • Start Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 17% used
+        API 41% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .live)
+        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.windows.first?.kind == .billingPeriod(label: "Other Models", duration: 30 * 24 * 60 * 60))
+        #expect(snapshot.windows.first?.utilization == 41)
+    }
+
+    @Test func truncatedOneNamedPoolPanelFailsStale() async {
+        let snapshot = await snapshot(for: """
+        Usage • Start Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 17% used
+        Auto 29% used
+        """)
+
+        #expect(snapshot.freshness == .stale(.providerSetup(.cursorTransientCapture)))
+    }
+
+    @Test func unknownOrRenamedSiblingRowFailsStaleInsteadOfFallingBack() async {
+        let snapshot = await snapshot(for: """
+        Usage • Pro+ Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 1% used
+        Premium Models 7% used
+        On-Demand Disabled
+        """)
+
+        #expect(snapshot.freshness == .stale(.providerSetup(.cursorTransientCapture)))
+    }
+
+    @Test func malformedNamedPercentageFailsStale() async throws {
+        let text = try fixture().replacingOccurrences(of: "API           3% used", with: "API           --% used")
+        #expect(await snapshot(for: text).freshness == .stale(.providerSetup(.cursorTransientCapture)))
+    }
+
     @Test func displayedResetDayDoesNotExpireAtMidnight() throws {
         let middayOnReset = try #require(ISO8601DateFormatter().date(from: "2026-09-01T12:00:00Z"))
         let parsed = try #require(CursorUsageParser.parse(try fixture(), now: middayOnReset))
 
         #expect(parsed.resetsAt == ISO8601DateFormatter().date(from: "2026-09-01T23:59:59Z"))
+        #expect(parsed.resetLabel == "Resets Sep 1")
+    }
+
+    @Test func resetDayRollsIntoTheNextYearAfterItHasPassed() throws {
+        let december = try #require(ISO8601DateFormatter().date(from: "2026-12-15T12:00:00Z"))
+        let parsed = try #require(CursorUsageParser.parse(try fixture(), now: december))
+
+        #expect(parsed.resetsAt == ISO8601DateFormatter().date(from: "2027-09-01T23:59:59Z"))
         #expect(parsed.resetLabel == "Resets Sep 1")
     }
 
@@ -74,6 +236,53 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(spend.amount == 12.5)
         #expect(spend.currency == "usd")
         #expect(spend.periodLabel == "Resets Sep 1")
+    }
+
+    @Test func onDemandRemainsLiveWhenSubscriptionRowsAreUnknown() async {
+        let text = """
+        Usage • Pro+ Resets Sep 1
+        Monthly plan and on-demand usage
+        Included 1% used
+        Renamed Pool 8% used
+        On-Demand $12.50 / $100.00
+        """
+        let subscription = await snapshot(for: text)
+        let spend = await CursorOnDemandSpendProvider(
+            source: StubCursorSource(result: .panel(text)),
+            now: { augustFirst2026 }
+        ).fetchSpend(period: .currentMonth)
+
+        #expect(subscription.freshness == .stale(.providerSetup(.cursorTransientCapture)))
+        #expect(spend.freshness == .live)
+        #expect(spend.amount == 12.5)
+        #expect(spend.currency == "usd")
+    }
+
+    @Test func unlimitedAndUnavailableOnDemandVariantsKeepTheirExistingMeaning() async throws {
+        let unlimited = try fixture().replacingOccurrences(
+            of: "On-Demand       Disabled",
+            with: "On-Demand       $12.50"
+        )
+        let unavailable = try fixture().replacingOccurrences(
+            of: "On-Demand       Disabled",
+            with: "On-Demand       Unavailable"
+        )
+
+        let unlimitedSpend = await CursorOnDemandSpendProvider(
+            source: StubCursorSource(result: .panel(unlimited)),
+            now: { augustFirst2026 }
+        ).fetchSpend(period: .currentMonth)
+        let unavailableSpend = await CursorOnDemandSpendProvider(
+            source: StubCursorSource(result: .panel(unavailable)),
+            now: { augustFirst2026 }
+        ).fetchSpend(period: .currentMonth)
+
+        #expect(unlimitedSpend.freshness == .live)
+        #expect(unlimitedSpend.amount == 12.5)
+        #expect(unlimitedSpend.currency == "usd")
+        #expect(unavailableSpend.freshness == .live)
+        #expect(unavailableSpend.amount == nil)
+        #expect(unavailableSpend.currency == nil)
     }
 
     @Test func disabledOnDemandProducesAnExplicitNonApplicableSnapshot() async throws {
@@ -138,6 +347,8 @@ private struct StubCursorSource: CursorUsageSource {
         #expect(!CursorUsageCLIProbe.isUsageAutocompleteSelected("→ /usages\n/context"))
 
         #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nIncluded 1% used"))
+        #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\n  Auto 1% used"))
+        #expect(CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nAPI 3% used"))
         #expect(!CursorUsageCLIProbe.isUsagePanel("Monthly plan and on-demand usage\nLoading…"))
         #expect(!CursorUsageCLIProbe.isUsagePanel("Included 1% used"))
     }
@@ -220,11 +431,19 @@ private struct StubCursorSource: CursorUsageSource {
 
         #expect(snapshot.freshness == .live)
         #expect(snapshot.planLabel == "Pro+")
-        #expect(snapshot.windows.first?.utilization == 1)
+        #expect(snapshot.windows.map(\.utilization) == [1, 3])
+        #expect(snapshot.windows.map(\.kind) == namedPoolKinds)
         // The probe trusts only its own empty workspace up front; current CLIs honour
         // the flag, so most users never see the trust handoff.
         let argv = try String(contentsOf: workspace.appendingPathComponent("argv"), encoding: .utf8)
         #expect(argv.contains("--trust"))
+    }
+
+    private func snapshot(for text: String) async -> UsageSnapshot {
+        await CursorProvider(
+            source: StubCursorSource(result: .panel(text)),
+            now: { augustFirst2026 }
+        ).fetchSnapshot()
     }
 
     private func fakeCursorAgent(named name: String) throws -> (URL, URL) {
