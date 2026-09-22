@@ -17,5 +17,5 @@ while read -k 1 character; do
   buffer+="$character"
   [[ "$buffer" == *$'\e[13u' ]] && break
 done
-print -n $'\r\nMonthly plan and on-demand usage\r\nUsage • Pro+ Resets Sep 1\r\nIncluded 1% used\r\nOn-Demand Disabled\r\n'
+print -n $'\r\nMonthly plan and on-demand usage\r\nUsage • Pro+ Resets Sep 1\r\nIncluded 1% used\r\n  Auto 1% used\r\n  API 3% used\r\nOn-Demand Disabled\r\n'
 sleep 1

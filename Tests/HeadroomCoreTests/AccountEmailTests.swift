@@ -671,7 +671,7 @@ struct CursorAccountEmailTests {
         let snapshot = await provider.fetchSnapshot()
 
         #expect(snapshot.freshness == .live)
-        #expect(snapshot.windows.count == 1)
+        #expect(snapshot.windows.count == 2)
         #expect(snapshot.planLabel == "Pro+")
         #expect(snapshot.accountEmail == nil)
     }

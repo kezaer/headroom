@@ -269,9 +269,20 @@ enum Entry {
                     semaphore.signal()
                     return
                 }
-                print("RESULT: live Cursor snapshot via official /usage panel")
-                print("  plan: \(parsed.planName)")
-                print("  • Monthly  \(Int(parsed.includedPercentUsed.rounded()))% used  reset-evidence=scheduled")
+                switch parsed.subscription {
+                case .namedPools(let pools):
+                    print("RESULT: live Cursor snapshot via official /usage panel")
+                    print("  plan: \(parsed.planName)")
+                    for pool in pools {
+                        print("  • \(pool.label)  \(Int(pool.percentUsed.rounded()))% used  reset-evidence=scheduled")
+                    }
+                case .includedFallback(let percentUsed):
+                    print("RESULT: live Cursor snapshot via official /usage panel")
+                    print("  plan: \(parsed.planName)")
+                    print("  • Included (compatibility fallback)  \(Int(percentUsed.rounded()))% used  reset-evidence=scheduled")
+                case .incomplete:
+                    print("RESULT: Cursor subscription table was incomplete")
+                }
                 print("  on-demand: \(parsed.onDemand.isEnabled ? "enabled" : "disabled")")
             case .loginRequired:
                 print("RESULT: login required")
