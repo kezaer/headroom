@@ -1543,6 +1543,48 @@ struct UsageStoreTests {
         #expect(store.appDisplaySnapshot(for: .codex).windows.count == 3)
     }
 
+    @Test func failedCodexPollKeepsLastKnownBankedResets() async {
+        let provider = MutableStubProvider(id: .codex, displayName: "Codex", snapshot: UsageSnapshot(
+            providerID: .codex,
+            windows: [UsageWindow(kind: .weekly, utilization: 40, resetsAt: .distantFuture)],
+            planLabel: "plus",
+            bankedResets: 2,
+            capturedAt: Date(),
+            freshness: .live
+        ))
+        let store = makeStore(providers: [provider])
+        await store.refreshAll()
+        provider.set(.stale(for: .codex, reason: .transient("blip")))
+        await store.refreshAll()
+        let after = store.snapshot(for: .codex)
+        #expect(after.bankedResets == 2)
+        if case .stale = after.freshness {} else { Issue.record("should be stale") }
+    }
+
+    @Test func hidingSparkCountersKeepsBankedResets() async {
+        let suite = "headroom.tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let preferences = Preferences(defaults: defaults)
+        preferences.showCodexSparkCountersInApp = false
+        let store = UsageStore(providers: [
+            StubProvider(id: .codex, displayName: "Codex", snapshot: UsageSnapshot(
+                providerID: .codex,
+                windows: [
+                    UsageWindow(kind: .weekly, utilization: 30, resetsAt: reset),
+                    UsageWindow(kind: .other("codex-spark 5h"), utilization: 40, resetsAt: reset),
+                ],
+                planLabel: "plus",
+                bankedResets: 2,
+                capturedAt: Date(),
+                freshness: .live
+            )),
+        ], preferences: preferences)
+        await store.refreshAll()
+        #expect(store.appDisplaySnapshot(for: .codex).bankedResets == 2)
+        #expect(store.appDisplaySnapshot(for: .codex).windows.map(\.kind) == [.weekly])
+    }
+
     @Test func menuBarWindowSourcePersistsPerProviderAndUpdatesPresentation() async {
         let preferences = freshPreferences()
         let store = UsageStore(providers: [
@@ -2198,6 +2240,155 @@ struct UsageStoreTests {
         #expect(record.events(for: added.key).isEmpty)
         #expect(record.events.isEmpty)
         #expect(!record.isLastKnownSignedIn(added.key))
+    }
+
+    @Test func claimBankedResetRevealHonorsLiveCurrentAccountsOnly() async {
+        let acknowledgements = BankedResetAcknowledgements(defaults: freshSignOutDefaults())
+        let provider = MutableStubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 2))
+        let store = UsageStore(providers: [provider], preferences: freshPreferences(), bankedResetAcknowledgements: acknowledgements)
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        let bare = UsageStore(providers: [provider], preferences: freshPreferences())
+        #expect(!bare.claimBankedResetReveal(for: key, currentCount: 2))
+
+        #expect(!store.claimBankedResetReveal(for: key, currentCount: 2))
+        await store.refreshAll()
+        #expect(store.claimBankedResetReveal(for: key, currentCount: 2))
+        #expect(acknowledgements.acknowledgedCount(for: key) == 2)
+        #expect(!store.claimBankedResetReveal(for: key, currentCount: 2))
+
+        provider.set(.stale(for: .codex, reason: .transient("blip")))
+        await store.refreshAll()
+        acknowledgements.purge(for: key)
+        #expect(acknowledgements.claimReveal(for: key, currentCount: 1))
+        #expect(!store.claimBankedResetReveal(for: key, currentCount: 2))
+        #expect(acknowledgements.acknowledgedCount(for: key) == 1)
+
+        provider.set(codexLive(count: 2))
+        await store.refreshAll()
+        store.removingAccounts.insert(key)
+        #expect(!store.claimBankedResetReveal(for: key, currentCount: 2))
+        #expect(acknowledgements.acknowledgedCount(for: key) == 1)
+        store.removingAccounts.remove(key)
+        acknowledgements.purge(for: key)
+        #expect(store.claimBankedResetReveal(for: key, currentCount: 2))
+    }
+
+    @Test func closedPopoverRedeemThenRegrantStillClaims() async {
+        let acknowledgements = BankedResetAcknowledgements(defaults: freshSignOutDefaults())
+        let provider = MutableStubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 2))
+        let store = UsageStore(providers: [provider], preferences: freshPreferences(), bankedResetAcknowledgements: acknowledgements)
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        #expect(acknowledgements.claimReveal(for: key, currentCount: 2))
+
+        provider.set(codexLive(count: 0))
+        await store.refreshAll()
+        #expect(acknowledgements.acknowledgedCount(for: key) == 0)
+
+        provider.set(codexLive(count: 1))
+        await store.refreshAll()
+        #expect(acknowledgements.acknowledgedCount(for: key) == 0)
+        #expect(acknowledgements.claimReveal(for: key, currentCount: 1))
+    }
+
+    @Test func stalePollDoesNotLowerBankedResetAcknowledgements() async {
+        let acknowledgements = BankedResetAcknowledgements(defaults: freshSignOutDefaults())
+        let provider = MutableStubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 2))
+        let store = UsageStore(providers: [provider], preferences: freshPreferences(), bankedResetAcknowledgements: acknowledgements)
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        #expect(acknowledgements.claimReveal(for: key, currentCount: 2))
+        provider.set(.stale(for: .codex, reason: .transient("blip")))
+        await store.refreshAll()
+        #expect(acknowledgements.acknowledgedCount(for: key) == 2)
+    }
+
+    @Test func rejectedGenerationDoesNotLowerBankedResetAcknowledgements() async {
+        let acknowledgements = BankedResetAcknowledgements(defaults: freshSignOutDefaults())
+        let store = UsageStore(
+            providers: [StubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 2))],
+            preferences: freshPreferences(),
+            bankedResetAcknowledgements: acknowledgements
+        )
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        await store.refreshAll()
+        let generation = store.schedulerAttachmentGeneration(for: key)
+        store.invalidateUsageForAccountReset(key)
+        #expect(acknowledgements.acknowledgedCount(for: key) == nil)
+        #expect(acknowledgements.claimReveal(for: key, currentCount: 2))
+        let accepted = store.schedulerMerge(
+            key: key,
+            result: UsageProviderFetchResult(snapshot: codexLive(count: 0)),
+            attachmentGeneration: generation
+        )
+        #expect(!accepted)
+        #expect(acknowledgements.acknowledgedCount(for: key) == 2)
+    }
+
+    @Test func handoffBoundaryLeavesBankedResetAcknowledgements() {
+        let acknowledgements = BankedResetAcknowledgements(defaults: freshSignOutDefaults())
+        let store = UsageStore(
+            providers: [StubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 2))],
+            preferences: freshPreferences(),
+            bankedResetAcknowledgements: acknowledgements
+        )
+        let key = AccountKey(providerID: .codex, accountID: .primary)
+        #expect(acknowledgements.claimReveal(for: key, currentCount: 2))
+        store.invalidateUsageForHandoffBoundary(key)
+        #expect(acknowledgements.acknowledgedCount(for: key) == 2)
+    }
+
+    @Test func removeAccountPurgesOnlyThatBankedResetAcknowledgement() async throws {
+        let defaults = freshSignOutDefaults()
+        let acknowledgements = BankedResetAcknowledgements(defaults: defaults)
+        let store = UsageStore(
+            providers: [StubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 1))],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: SignOutTestStorage(),
+            providerFactory: { account in
+                AccountMutableStubProvider(id: account.providerID, accountID: account.id, snapshot: self.codexLive(count: 2))
+            },
+            bankedResetAcknowledgements: acknowledgements
+        )
+        let builtIn = AccountKey(providerID: .codex, accountID: .primary)
+        #expect(acknowledgements.claimReveal(for: builtIn, currentCount: 1))
+        let added = try #require(store.addAccount(for: .codex))
+        #expect(acknowledgements.claimReveal(for: added.key, currentCount: 2))
+        #expect(await store.removeAccount(added.key) == .removed)
+        #expect(acknowledgements.acknowledgedCount(for: added.key) == nil)
+        #expect(acknowledgements.acknowledgedCount(for: builtIn) == 1)
+    }
+
+    @Test func stopTrackingPurgesTheBuiltInAcknowledgementSoResumeClaimsAgain() async {
+        let defaults = freshSignOutDefaults()
+        let acknowledgements = BankedResetAcknowledgements(defaults: defaults)
+        let store = UsageStore(
+            providers: [StubProvider(id: .codex, displayName: "Codex", snapshot: codexLive(count: 2))],
+            preferences: Preferences(defaults: defaults),
+            accountRegistry: AccountRegistry(defaults: defaults),
+            accountStorage: SignOutTestStorage(),
+            providerFactory: { account in
+                AccountMutableStubProvider(id: account.providerID, accountID: account.id, snapshot: self.codexLive(count: 2))
+            },
+            bankedResetAcknowledgements: acknowledgements
+        )
+        let builtIn = AccountKey(providerID: .codex, accountID: .primary)
+        #expect(acknowledgements.claimReveal(for: builtIn, currentCount: 2))
+        #expect(store.addAccount(for: .codex) != nil)
+        #expect(await store.stopTrackingBuiltInAccount(for: .codex) == .removed)
+        #expect(acknowledgements.acknowledgedCount(for: builtIn) == nil)
+        #expect(store.resumeTrackingBuiltInAccount(for: .codex) != nil)
+        #expect(acknowledgements.claimReveal(for: builtIn, currentCount: 2))
+    }
+
+    private func codexLive(count: Int?) -> UsageSnapshot {
+        UsageSnapshot(
+            providerID: .codex,
+            windows: [UsageWindow(kind: .weekly, utilization: 30, resetsAt: .distantFuture)],
+            planLabel: "plus",
+            bankedResets: count,
+            capturedAt: Date(),
+            freshness: .live
+        )
     }
 
     private func freshSignOutDefaults() -> UserDefaults {

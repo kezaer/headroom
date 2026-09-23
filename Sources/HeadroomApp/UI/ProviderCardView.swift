@@ -231,9 +231,13 @@ struct ProviderCardView: View {
     /// card — even on a synthetic account id — would otherwise clear the real Claude
     /// capability entry and make the popover re-announce it.
     var announcesAccessibilityEvents: Bool = true
+    var claimBankedResetReveal: ((AccountKey, Int?) -> Bool)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsConnectedChip = false
+    @State private var isRevealingBankedResets = false
+    @State private var bankedRevealCount: Int?
+    @State private var bankedRevealTask: Task<Void, Never>?
 
     private var isMultiAccount: Bool { entries.count > 1 }
     private var primaryEntry: ProviderAccountEntry? { entries.first }
@@ -287,10 +291,15 @@ struct ProviderCardView: View {
         )
         .onAppear {
             evaluateConnectedPayoff()
+            evaluateBankedResetReveal()
             announceSetupStateIfNeeded()
             announceCapabilityStateIfNeeded()
         }
-        .onChange(of: snapshot.freshness) { evaluateConnectedPayoff() }
+        .onChange(of: snapshot.freshness) {
+            evaluateConnectedPayoff()
+            evaluateBankedResetReveal()
+        }
+        .onChange(of: snapshot.bankedResets) { evaluateBankedResetReveal() }
         .onChange(of: SetupSessions.state(for: primaryAccount)) {
             announceSetupStateIfNeeded()
         }
@@ -616,8 +625,49 @@ struct ProviderCardView: View {
             isMenuBarAccount: isMultiAccount && entry.id == entries.first?.id,
             showsStopWaiting: showsStopWaiting,
             onRetry: { (onRetryAccount ?? { _ in onRetrySetup() })(entry.account) },
-            showsMark: showsMark
+            showsMark: showsMark,
+            claimBankedResetReveal: claimBankedResetReveal
         )
+    }
+
+    /// Single-account reveal. Multi-account cards leave this to each `AccountSectionView`
+    /// so two observers cannot acknowledge a credit with no capsule opening (KTD8).
+    private func evaluateBankedResetReveal() {
+        guard !isMultiAccount else { return }
+        guard case .live = snapshot.freshness else {
+            endBankedResetReveal()
+            return
+        }
+        let count = snapshot.bankedResets
+        if isRevealingBankedResets, bankedRevealCount != count {
+            endBankedResetReveal()
+        }
+        guard claimBankedResetReveal?(primaryAccount.key, count) == true else { return }
+        bankedRevealCount = count
+        withAnimation(HeadroomMotion.resolved(HeadroomMotion.valueSpring, .crossfade, reduceMotion: reduceMotion)) {
+            isRevealingBankedResets = true
+        }
+        bankedRevealTask?.cancel()
+        bankedRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, bankedRevealCount == count else { return }
+            withAnimation(HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion)) {
+                isRevealingBankedResets = false
+            }
+        }
+    }
+
+    /// A count drop or a non-live row must close an in-flight reveal. The hold task
+    /// only settles when the count still matches, so leaving it running would pin the
+    /// capsule open (KTD8).
+    private func endBankedResetReveal() {
+        bankedRevealTask?.cancel()
+        bankedRevealTask = nil
+        bankedRevealCount = nil
+        guard isRevealingBankedResets else { return }
+        withAnimation(HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion)) {
+            isRevealingBankedResets = false
+        }
     }
 
     /// The guided-setup payoff: when either provider goes live after its Terminal handoff,
@@ -707,7 +757,10 @@ struct ProviderCardView: View {
             isStale: entry.map { providerCardHasTransientStaleState($0.snapshot) } ?? false,
             email: entry?.snapshot.accountEmail,
             showsPersistentEmail: persistentEmail,
-            showsConnectedChip: showsConnectedChip
+            showsConnectedChip: showsConnectedChip,
+            bankedResets: entry?.snapshot.bankedResets,
+            isCritical: entry?.snapshot.hasLiveCriticalResettableWindow ?? false,
+            isRevealing: isRevealingBankedResets
         )
     }
 

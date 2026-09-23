@@ -189,6 +189,7 @@ enum Entry {
                 if let plan = snapshot.planLabel {
                     print("  plan: \(plan)")
                 }
+                print("  \(snapshot.codexBankedResetProbeLine)")
                 for window in snapshot.windows {
                     print("  • \(window.kind)  \(Int(window.utilization.rounded()))% used  \(ResetDiagnostic.line(for: window.resetSchedule, observedAt: window.observedAt ?? snapshot.capturedAt, now: Date()))  (remaining \(Int(window.percentRemaining.rounded()))%)")
                 }
@@ -702,6 +703,9 @@ enum AppComposition {
     /// unbundled `swift run Headroom` resolves `.standard` to a different domain than
     /// the app bundle, so the record is read from the built app's binary.
     static var signOutRecord: SignOutRecord { SignOutRecord(defaults: launchDefaults) }
+    static var bankedResetAcknowledgements: BankedResetAcknowledgements {
+        BankedResetAcknowledgements(defaults: launchDefaults)
+    }
 
     /// `arguments` is injected so the demo isolation can be tested from a process that was
     /// not itself launched with `--demo`.
@@ -759,6 +763,7 @@ enum AppComposition {
             providerFactory: { account in provider(for: account, credentials: credentials) },
             continuityCache: UsageContinuityCache(),
             signOutRecord: signOutRecord,
+            bankedResetAcknowledgements: bankedResetAcknowledgements,
             widgetExporter: widgetExporter(),
             phoneSyncExporter: phoneSyncExporter()
         )
@@ -870,7 +875,8 @@ enum AppComposition {
             accounts: fixture.accounts,
             accountRegistry: registry,
             providerFactory: factory,
-            continuityCache: continuityCache
+            continuityCache: continuityCache,
+            bankedResetAcknowledgements: BankedResetAcknowledgements(defaults: prefsDefaults)
         )
     }
 
