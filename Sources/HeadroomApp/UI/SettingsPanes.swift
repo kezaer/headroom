@@ -223,18 +223,17 @@ enum MenuBarPrioritySelection {
 
 struct MenuBarSettingsPane: View {
     let store: UsageStore
+    /// PS3: a switched-off provider's card links to Settings → Accounts, where its switch
+    /// lives. `SettingsView` owns the sidebar selection, so it hands the switch down.
+    var onOpenAccounts: () -> Void = {}
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private static let cardWidth: CGFloat = 100
-    /// The two provider lists share one pitch whether a row carries a picker, a button, or
-    /// read-only text, so the same provider sits at the same rhythm in both.
-    private static let rowHeight: CGFloat = 24
-    private static let rowSpacing: CGFloat = 4
-
+    private var isAuto: Bool { store.menuBarFillSource == .auto }
     private var selected: [ProviderID] { store.selectedMenuBarProviders }
-    private var available: [ProviderID] {
+    /// Every other registered provider, switched-off ones included (PS3: dimmed, not hidden).
+    private var notShown: [ProviderID] {
         store.registeredProviderOrder.filter { !selected.contains($0) }
     }
 
@@ -254,12 +253,10 @@ struct MenuBarSettingsPane: View {
                 ScrollView(.vertical) {
                     SettingsTile("Your Pills") {
                         arranger
-                        availablePills
-                        windowChoices
                         SettingsHelpText(text: "Uses each provider’s main account. Removing a pill keeps its account connected.")
-                        if store.menuBarFillSource != .auto {
+                        if !isAuto {
                             Button("Use one automatic summary pill instead…") {
-                                store.setMenuBarFillSource(.auto)
+                                animatingPills { store.setMenuBarFillSource(.auto) }
                             }
                             .buttonStyle(.link)
                             .font(.system(size: 11))
@@ -370,47 +367,52 @@ struct MenuBarSettingsPane: View {
                      fill: Double(value) / 100)
     }
 
-    @ViewBuilder private var arranger: some View {
-        if store.menuBarFillSource == .auto {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("One automatic summary pill")
-                    .font(.system(size: 13, weight: .medium))
-                SettingsHelpText(text: "Follows the provider closest to its limit. Add providers below to give each its own pill.")
-            }
-        } else if selected.isEmpty {
-            SettingsHelpText(text: "Your selected providers are switched off. Turn on tracking in Accounts, or add another provider below.")
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                SettingsHelpText(text: "Drag to arrange, or use the arrows. Order runs left to right.")
-                // SM3: unclipped when the row fits, so a lifted card can rise out of the well
-                // instead of being cut by a scroll view's bounds; it only scrolls when the
-                // window is too narrow for every card.
-                ViewThatFits(in: .horizontal) {
-                    pillRow
-                    ScrollView(.horizontal) {
-                        pillRow
-                    }
-                    .scrollIndicators(.automatic)
+    private var arranger: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
+                groupCaption("In your menu bar")
+                if isAuto {
+                    SettingsHelpText(text: "Drag a provider up to give it its own pill.")
+                } else {
+                    SettingsHelpText(text: "Drag to arrange. Click a card’s value to change what its pill shows.")
                 }
-                // The fitting row is only as wide as its cards; the well still spans the tile.
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // Horizontal scrollers have no useful ideal height in an AppKit host
-                // (#popover-scroll-height). Reserve the card's full editing surface.
-                .frame(height: 116)
-                .settingsPreviewWell(dark: colorScheme == .dark, verticalPadding: 9, cornerRadius: 20)
             }
+            MenuBarPillArranger(
+                shown: selected,
+                notShown: notShown,
+                canonicalOrder: store.registeredProviderOrder,
+                canDrag: { store.providerOrder.contains($0) },
+                menuBarMessage: menuBarMessage,
+                notShownCaption: "Not shown",
+                notShownHelp: isAuto
+                    ? "Each value sets what the summary follows for that provider."
+                    : "Drag one up, or press +.",
+                onCommit: commit,
+                card: { id, presentation in providerCard(id, presentation: presentation) }
+            )
+            // The arranger lifts a picked-up card past its own bounds, so nothing clips it.
+            .padding(1)
         }
     }
 
-    private var pillRow: some View {
-        MenuBarPillArranger(
-            ids: selected,
-            cardWidth: Self.cardWidth,
-            spacing: 8,
-            onMove: { id, target in store.moveMenuBarProvider(id, before: target) },
-            card: providerCard
-        )
-        .padding(1)
+    /// The menu bar well's own text when it holds no cards.
+    private var menuBarMessage: (title: String?, detail: String)? {
+        if isAuto {
+            return ("One automatic summary pill", "Follows whichever provider is closest to its limit.")
+        }
+        if selected.isEmpty {
+            return (nil, "Your pills’ providers are switched off. Drag one up from below, or turn one on in Accounts.")
+        }
+        return nil
+    }
+
+    private func commit(_ commit: PillShelfCommit) {
+        switch commit {
+        case .none: break
+        case .move(let id, let target): store.moveMenuBarProvider(id, before: target)
+        case .add(let id, let target): store.addMenuBarProvider(id, before: target)
+        case .remove(let id): store.removeMenuBarProvider(id)
+        }
     }
 
     /// SM3: every pill edit — arrows, remove, add — runs on the account list's reorder
@@ -419,54 +421,168 @@ struct MenuBarSettingsPane: View {
         withAnimation(HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion), change)
     }
 
-    private func providerCard(_ id: ProviderID) -> some View {
-        VStack(spacing: 8) {
+    /// `presentation` is the row whose form this card takes. It is the provider's row, except
+    /// that a dropped card takes its drop row's form as soon as it is let go (PS8).
+    @ViewBuilder private func providerCard(_ id: ProviderID, presentation: PillShelf) -> some View {
+        if store.providerOrder.contains(id) {
+            pillCard(id, inMenuBar: presentation == .menuBar)
+        } else {
+            offCard(id)
+        }
+    }
+
+    // MARK: Cards
+
+    /// PS6 (Kyle, 2026-09-24): one card for both rows, not a shelf card swapped for a pill
+    /// card. Swapping built a new view on every row change, so the card replaced itself
+    /// instead of changing. Now the pill and the name stay put and the row-specific parts come
+    /// and go around them: in the menu bar the grip, ×, value, and arrows; on the shelf just
+    /// +, in the × slot. The header row is on both, so the pill sits at the same height in
+    /// either form and never jumps. In the automatic summary the shelf card keeps its value,
+    /// because the summary still follows each provider's choice.
+    private func pillCard(_ id: ProviderID, inMenuBar: Bool) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 11, style: .continuous)
+        return VStack(spacing: 6) {
             HStack {
-                Image(systemName: "line.3.horizontal")
-                    .foregroundStyle(.secondary)
-                    .padding(4)
-                    .contentShape(Rectangle())
-                    .help("Drag to arrange \(name(id))")
-                    .accessibilityLabel("Drag \(name(id))")
-                Spacer(minLength: 4)
-                Button {
-                    animatingPills { store.removeMenuBarProvider(id) }
-                } label: {
-                    Image(systemName: "xmark")
+                if inMenuBar {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .frame(width: PillCardChipStyle.side, height: PillCardChipStyle.side)
+                        .contentShape(Rectangle())
+                        .help("Drag to arrange \(name(id))")
+                        .accessibilityLabel("Drag \(name(id))")
+                        .transition(cardPartTransition)
                 }
-                .pointerStyle(.default)
-                .disabled(selected.count == 1)
-                .help(selected.count == 1 ? "Keep one pill, or choose the automatic summary below" : "Remove \(name(id)) pill")
-                .accessibilityLabel("Remove \(name(id)) pill")
+                Spacer(minLength: 4)
+                if inMenuBar {
+                    Button {
+                        animatingPills { store.removeMenuBarProvider(id) }
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .disabled(selected.count == 1)
+                    .help(selected.count == 1 ? "Keep one pill, or choose the automatic summary below" : "Remove \(name(id)) pill")
+                    .accessibilityLabel("Remove \(name(id)) pill")
+                    .transition(cardPartTransition)
+                } else {
+                    Button {
+                        animatingPills { store.addMenuBarProvider(id) }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .help("Add \(name(id)) pill")
+                    .accessibilityLabel("Add \(name(id)) pill")
+                    .transition(cardPartTransition)
+                }
             }
-            .font(.system(size: 10))
-            MenuBarPreviewPill(meters: [store.providerMenuBarMeter(for: id)], showsPercentage: store.showMenuBarPercentage)
-                .frame(height: 25)
-            Text(name(id))
-                .font(.system(size: 11, weight: .medium))
-                .lineLimit(1)
-                .help(name(id))
-            HStack(spacing: 12) {
-                moveButton(id, offset: -1)
-                moveButton(id, offset: 1)
+            .frame(height: PillCardChipStyle.side)
+            cardPill(id)
+                .opacity(inMenuBar ? 1 : 0.75)
+            cardName(id, dimmed: !inMenuBar)
+            if inMenuBar || isAuto {
+                PillValueMenu(store: store, id: id, name: name(id))
+                    .transition(cardPartTransition)
+            }
+            if inMenuBar {
+                HStack(spacing: 10) {
+                    moveButton(id, offset: -1)
+                    moveButton(id, offset: 1)
+                }
+                .transition(cardPartTransition)
             }
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(PillCardChipStyle())
         .padding(8)
-        .frame(width: Self.cardWidth)
-        // SM3: a raised, opaque card rather than a hairline outline — something you can
-        // pick up reads as an object, and a lifted card must hide the neighbour it passes
-        // over instead of showing it through. The window-background underlay is what makes
-        // the dark tile's translucent fill opaque; it comes after `raisedTile` because a
-        // later `.background` draws behind an earlier one, so it sits under the gradient.
-        .raisedTile(cornerRadius: 11, surface: .opaque)
-        .background(
-            Color(nsColor: .windowBackgroundColor),
-            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            // Both surfaces are always there and trade opacity, so the card's material
+            // crossfades with the morph instead of being replaced.
+            ZStack {
+                // PS7: one opaque base under both, never faded. Two translucent layers
+                // crossing at 50% each let the well show through mid-morph — a flash.
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+                // SM3: a raised card rather than a hairline outline — something you can pick
+                // up reads as an object, and a lifted card must hide what it passes over.
+                Color.clear
+                    .raisedTile(cornerRadius: 11, surface: .opaque)
+                    .opacity(inMenuBar ? 1 : 0)
+                // PS1: the shelf's flatter card.
+                Color.clear
+                    .shelfCardSurface(dark: colorScheme == .dark)
+                    .opacity(inMenuBar ? 0 : 1)
+            }
+        }
+        .contentShape(shape)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(name(id)) menu bar pill")
+        .accessibilityLabel(inMenuBar ? "\(name(id)) menu bar pill" : "\(name(id)), not in the menu bar")
+    }
+
+    /// PS6: a card part arriving comes in on the morph, a beat behind the card's growth, out
+    /// of a 97% scale and a 2pt blur so it resolves rather than pops; one leaving fades out
+    /// quickly. Under Reduce Motion both are plain crossfades (S2A).
+    private var cardPartTransition: AnyTransition {
+        let arriving: AnyTransition = reduceMotion
+            ? .opacity
+            : .opacity
+                .combined(with: .scale(scale: 0.97))
+                .combined(with: .modifier(active: PartBlur(radius: 2), identity: PartBlur(radius: 0)))
+        return .asymmetric(
+            insertion: arriving.animation(HeadroomMotion.cardMorph.delay(0.05)),
+            removal: .opacity.animation(HeadroomMotion.quickSettle)
+        )
+    }
+
+    /// A provider that is switched off. It cannot be picked up; the whole card opens
+    /// Accounts, where its switch lives.
+    private func offCard(_ id: ProviderID) -> some View {
+        Button(action: onOpenAccounts) {
+            VStack(spacing: 6) {
+                cardPill(id)
+                    .opacity(0.35)
+                cardName(id, dimmed: true)
+                    .opacity(0.6)
+            }
+            // PS6: the same header-row allowance as `pillCard`, so an off card's pill sits at
+            // the height of its neighbours' and "Off ›" on their + and × line.
+            .padding(.top, 8 + PillCardChipStyle.side + 6)
+            .padding([.horizontal, .bottom], 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 2) {
+                    Text("Off")
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 7, weight: .semibold))
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .frame(height: PillCardChipStyle.side)
+                .padding(.horizontal, 4)
+                .padding([.top, .trailing], 8)
+            }
+            .shelfCardSurface(dark: colorScheme == .dark)
+            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("\(SettingsCopy.providerOffNotice). Turn it on in Accounts.")
+        .accessibilityLabel("\(name(id)) is off")
+        .accessibilityHint("Opens Accounts, where you can turn it on.")
+    }
+
+    private func cardPill(_ id: ProviderID) -> some View {
+        MenuBarPreviewPill(meters: [store.providerMenuBarMeter(for: id)], showsPercentage: store.showMenuBarPercentage)
+            .frame(height: 25)
+    }
+
+    private func cardName(_ id: ProviderID, dimmed: Bool = false) -> some View {
+        HStack(spacing: 5) {
+            ProviderLogoView(providerID: id, size: 11)
+            Text(name(id))
+                .lineLimit(1)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(dimmed ? .secondary : .primary)
+        .help(name(id))
     }
 
     private func moveButton(_ id: ProviderID, offset: Int) -> some View {
@@ -475,102 +591,10 @@ struct MenuBarSettingsPane: View {
             animatingPills { store.moveMenuBarProvider(id, by: offset) }
         } label: {
             Image(systemName: "arrow.\(direction)")
-                .font(.system(size: 11))
         }
-        .pointerStyle(.default)
         .disabled(offset < 0 ? selected.first == id : selected.last == id)
         .help("Move \(name(id)) \(direction)")
         .accessibilityLabel("Move \(name(id)) \(direction)")
-    }
-
-    @ViewBuilder private var availablePills: some View {
-        if available.isEmpty {
-            SettingsHelpText(text: "All \(selected.count) providers shown.")
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                groupCaption("Available pills")
-                VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                    ForEach(available, id: \.self) { id in
-                        HStack(spacing: 8) {
-                            ProviderLogoView(providerID: id, size: 15)
-                            Text(name(id))
-                            Spacer(minLength: 8)
-                            if store.providerOrder.contains(id) {
-                                Button("Add pill", systemImage: "plus") {
-                                    animatingPills { store.addMenuBarProvider(id) }
-                                }
-                                    .controlSize(.small)
-                                    .accessibilityLabel("Add \(name(id)) pill")
-                            } else {
-                                SettingsPillBadge(text: "Off")
-                                    .help(SettingsCopy.providerOffNotice)
-                            }
-                        }
-                        .frame(minHeight: Self.rowHeight)
-                    }
-                }
-                if available.contains(where: { !store.providerOrder.contains($0) }) {
-                    SettingsHelpText(text: "Turn on provider tracking in Accounts to add its pill.")
-                }
-            }
-        }
-    }
-
-    @ViewBuilder private var windowChoices: some View {
-        let ids = store.menuBarFillSource == .auto ? store.providerOrder : selected
-        if !ids.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                groupCaption("Usage shown in each pill")
-                VStack(alignment: .leading, spacing: Self.rowSpacing) {
-                    ForEach(ids, id: \.self) { id in
-                        HStack(spacing: 8) {
-                            ProviderLogoView(providerID: id, size: 15)
-                            Text(name(id))
-                            Spacer(minLength: 8)
-                            if store.hasSelectableMenuBarWindows(for: id) {
-                                Picker("\(name(id)) usage window", selection: Binding(
-                                    get: { store.menuBarWindowPickerSelection(for: id) },
-                                    set: { store.setMenuBarWindowChoice($0, for: id) }
-                                )) {
-                                    ForEach(store.menuBarWindowOptions(for: id)) { option in
-                                        Text(option.title).tag(option.choice)
-                                    }
-                                }
-                                .labelsHidden()
-                                .pickerStyle(.menu)
-                                .fixedSize()
-                            } else {
-                                Text(store.resolvedMenuBarWindowKind(for: id)?.displayName ?? "Waiting for usage")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(minHeight: Self.rowHeight)
-                        if let note = windowChoiceNote(for: id) {
-                            SettingsHelpText(text: note)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// The line under a provider's limit picker: which limit the pill is following when that
-    /// is not literally the choice, or the period a model row's short name leaves out.
-    private func windowChoiceNote(for id: ProviderID) -> String? {
-        guard store.hasSelectableMenuBarWindows(for: id),
-              let resolved = store.resolvedMenuBarWindowKind(for: id) else { return nil }
-        let choice = store.menuBarWindowPickerSelection(for: id)
-        if choice == .closest {
-            return "Following \(resolved.displayName), the lowest right now."
-        }
-        if !choice.matches(resolved) {
-            return "Showing \(resolved.displayName) while \(choice.title) isn’t reported."
-        }
-        if resolved.spokenName != resolved.displayName {
-            return "\(resolved.displayName) is a weekly limit."
-        }
-        return nil
     }
 
     private func name(_ id: ProviderID) -> String {
@@ -584,6 +608,17 @@ struct MenuBarSettingsPane: View {
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(.secondary)
     }
+}
+
+/// PS6: the blur half of `cardPartTransition`. Animatable, so the radius eases with the
+/// fade instead of popping to its end state.
+private struct PartBlur: ViewModifier, @preconcurrency Animatable {
+    var radius: CGFloat
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
+    }
+    func body(content: Content) -> some View { content.blur(radius: radius) }
 }
 
 // MARK: - Widgets & iPhone
