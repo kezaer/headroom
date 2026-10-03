@@ -38,7 +38,7 @@ public enum HeadroomWidgetType {
 
 /// WCF1: the one Dynamic Type multiplier the widget bodies share.
 ///
-/// `HeadroomWidgetUsageMeter`, `HeadroomWidgetAPISpendStrip` and `HeadroomWidgetStatusCard`
+/// `HeadroomWidgetAPISpendStrip` and `HeadroomWidgetStatusCard`
 /// each hold their own `@ScaledMetric(relativeTo: .body)` per ladder step, but the family
 /// bodies set the provider name, the small header, the footer stamp, the plan pill, the
 /// stale sentence and the attention glyph straight from `WidgetTypeScale` — so at the
@@ -58,22 +58,8 @@ public struct HeadroomWidgetTypeUnit: DynamicProperty {
     public var wrappedValue: Double { unit }
 }
 
-/// WCL4: the medium centre rule starts at the first meter label's *cap* top, not its line-box
-/// top. The inset is the font's ascent minus its cap height — what sits above the capitals in
-/// a SwiftUI line box.
-public enum HeadroomWidgetTypography {
-    public static func capTopInset(size: Double, weight: Font.Weight, mono: Bool = false) -> CGFloat {
-        HeadroomWidgetFontMetrics.capTopInset(size: CGFloat(size), weight: weight, mono: mono)
-    }
-}
-
 /// WCL6: the measured metrics behind the two modifiers below.
 public enum HeadroomWidgetFontMetrics {
-    public static func capTopInset(size: CGFloat, weight: Font.Weight, mono: Bool = false) -> CGFloat {
-        let font = ctFont(size: size, weight: weight, mono: mono)
-        return max(0, CTFontGetAscent(font) - CTFontGetCapHeight(font))
-    }
-
     /// Distance from the baseline up to the middle of the capitals — the half-height the
     /// eye reads as the type's middle, and what a mixed-size row should centre on.
     public static func capHeightCenter(size: CGFloat, weight: Font.Weight, mono: Bool = false) -> CGFloat {
@@ -131,6 +117,29 @@ public enum HeadroomWidgetFontMetrics {
         var rects = [CGRect](repeating: .zero, count: 1)
         CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphs, &rects, 1)
         return rects[0].origin.x
+    }
+
+    /// KTD7 (2026-10-02 widget-styles plan): the ink of the digit "0" at this face — how far
+    /// it rises above the baseline and how far its round bottom overshoots below it. Vessel
+    /// Hero sizes its vessel to exactly this span so the two shapes start and end on the same
+    /// lines. "0" is the measure because it is round at both ends, as the vessel is.
+    public static func digitInk(size: CGFloat, weight: Font.Weight, mono: Bool = true) -> (ascent: CGFloat, descent: CGFloat) {
+        let key = MetricKey(size: size, weight: weightValue(weight), mono: mono, character: "0")
+        let ascent = digitAscentCache.value(for: key) { digitBounds(size: size, weight: weight, mono: mono).maxY }
+        let descent = digitDescentCache.value(for: key) { max(0, -digitBounds(size: size, weight: weight, mono: mono).minY) }
+        return (ascent, descent)
+    }
+
+    private static func digitBounds(size: CGFloat, weight: Font.Weight, mono: Bool) -> CGRect {
+        let font = ctFont(size: size, weight: weight, mono: mono)
+        var units = Array("0".utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: 1)
+        guard CTFontGetGlyphsForCharacters(font, &units, &glyphs, 1) else {
+            return CGRect(x: 0, y: 0, width: 0, height: CTFontGetCapHeight(font))
+        }
+        var rects = [CGRect](repeating: .zero, count: 1)
+        CTFontGetBoundingRectsForGlyphs(font, .horizontal, &glyphs, &rects, 1)
+        return rects[0]
     }
 
     private static func ctFont(size: CGFloat, weight: Font.Weight, mono: Bool) -> CTFont {
@@ -198,6 +207,8 @@ public enum HeadroomWidgetFontMetrics {
     }
 
     private static let capCache = Cache()
+    private static let digitAscentCache = Cache()
+    private static let digitDescentCache = Cache()
     private static let bearingCache = Cache()
 }
 
