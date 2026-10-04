@@ -7,7 +7,8 @@ import HeadroomCore
 /// `--probe-grok` / `--probe-cursor` run the real provider capture once and print parsed
 /// windows; `--probe-spend <openai|anthropic|xai> [--key-file <path>]` verifies a key-based
 /// API-spend path; `--dump-phone-sync` decodes the iCloud KVS payload the Mac published for
-/// the iPhone. All run without launching the menu bar UI.
+/// the iPhone; `--bench-ui` measures the popover and Settings offscreen (`UIBenchHarness`).
+/// All run without launching the menu bar UI.
 @main
 enum Entry {
     static func main() {
@@ -46,6 +47,12 @@ enum Entry {
             let outDir = CommandLine.arguments.indices.contains(index + 1)
                 ? CommandLine.arguments[index + 1] : "popover-shots"
             MainActor.assumeIsolated { PopoverRenderHarness.run(outputDirectory: outDir) }
+            return
+        }
+        if CommandLine.arguments.contains("--bench-ui") {
+            // Offscreen perf bench: timings, frame-by-frame probes, and (with -DHEADROOM_BENCH)
+            // view-body counts for the popover and Settings.
+            MainActor.assumeIsolated { UIBenchHarness.run() }
             return
         }
         // `--demo <scenario>` (demo mode, Jul 2026): reject an unrecognized scenario before the
@@ -484,6 +491,8 @@ struct HeadroomApp: App {
         }
     }
 
+    // ML1: `--bench-ui scene` measures `BenchSceneStandIn` (UIBenchHarness.swift), not this body.
+    // Mirror a change to what this body reads or builds into the stand-in before measuring it.
     var body: some Scene {
         MenuBarExtra {
             PopoverView(store: store) {
@@ -1177,6 +1186,7 @@ enum AppComposition {
         arguments.contains("--demo")
             || arguments.contains("--render-popover")
             || arguments.contains("--render-widgets")
+            || arguments.contains("--bench-ui")
             || usesNoOpWidgetExporter(environment: environment)
             || !bundle.supportsUserNotifications
     }
