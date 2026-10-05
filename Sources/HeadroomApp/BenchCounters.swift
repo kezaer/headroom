@@ -1,5 +1,8 @@
 import Foundation
 import HeadroomCore
+#if SWIFT_PACKAGE
+import HeadroomSharedUI
+#endif
 
 #if HEADROOM_BENCH
 /// View-body counter for the `--bench-ui` diagnostic. Compiled in only with
@@ -10,7 +13,17 @@ import HeadroomCore
 @MainActor
 enum BenchCounters {
     static let isCompiledIn = true
-    static var enabled = false
+    static var enabled = false {
+        // Shared-module views (MeterGauge) count through this sink.
+        didSet {
+            if enabled {
+                let forward: @MainActor (String) -> Void = { name in BenchCounters.hit(name) }
+                SharedBenchCounters.sink = forward
+            } else {
+                SharedBenchCounters.sink = nil
+            }
+        }
+    }
     /// When on, `sequence` keeps body names and `mark` notes in order, for frame-by-frame reads.
     static var recordSequence = false
     private(set) static var counts: [String: Int] = [:]

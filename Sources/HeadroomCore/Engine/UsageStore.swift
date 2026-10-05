@@ -44,21 +44,6 @@ public struct MenuBarSummary: Sendable, Equatable {
     }
 }
 
-/// W4 (Oct 2026, design/refresh-stamp-merge-round4.html): a user-requested refresh in
-/// progress, which the popover footer turns into a one-line receipt.
-public struct RefreshProgress: Sendable, Equatable {
-    public let total: Int
-    public let completed: Int
-    /// The account that finished most recently; nil until the first one does.
-    public let lastLanded: AccountKey?
-
-    public init(total: Int, completed: Int, lastLanded: AccountKey?) {
-        self.total = total
-        self.completed = completed
-        self.lastLanded = lastLanded
-    }
-}
-
 /// One compact status unit for the menu bar. Automatic mode renders one summary;
 /// an explicit provider selection renders one meter per provider.
 public struct MenuBarMeter: Sendable, Equatable {
@@ -121,8 +106,8 @@ public final class UsageStore {
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
-    /// G1A: popover-only account-title ink, mirrored the same way `meterStyle` is — the
-    /// menu bar, widgets, and phone projections deliberately carry no title ink.
+    /// G1A: account-title ink, mirrored the same way `meterStyle` is. The menu bar and
+    /// widgets carry no title ink; the phone's display block does (iPhone parity KTD11).
     public private(set) var accountTitleInk: AccountTitleInk
     public private(set) var meterStyle: MeterStyle
     public private(set) var menuBarFillSource: MenuBarFillSource
@@ -162,6 +147,19 @@ public final class UsageStore {
     public private(set) var userRefreshRun: UserRefreshRun?
     public private(set) var fullRefreshInFlight = false
     @ObservationIgnored private var fullRefreshOperationDepth = 0
+    /// KTD14.4 (iPhone parity U6): the one in-flight full refresh. Any second caller — the
+    /// popover, the launch refresh, a phone's check-now request — awaits it instead of
+    /// starting another probe round.
+    @ObservationIgnored private var fullRefreshTask: Task<Void, Never>?
+    /// When the in-flight full refresh started; nil while none runs.
+    public private(set) var fullRefreshStartedAt: Date?
+    /// KTD14.4: check-now's cooldown runs from the last completed full refresh, whatever
+    /// started it.
+    public private(set) var lastFullRefreshCompletedAt: Date?
+    /// KTD14.3 / Decision 2: the Mac's recent check-now answers, echoed in every manifest.
+    @ObservationIgnored var checkNowAnsweredRequests: [CompanionAnsweredRequest] = []
+    /// U6: the check-now receipt follows the scheduler's user-progress callback.
+    @ObservationIgnored var checkNowProgressObserver: (@MainActor () -> Void)?
     public private(set) var lastProbeEndTimes: [AccountKey: Date] = [:]
     public private(set) var apiSpendInFlightProviders: Set<ProviderID> = []
     @ObservationIgnored private var spendFetchDepths: [ProviderID: Int] = [:]
@@ -207,12 +205,17 @@ public final class UsageStore {
     /// KTD1: use-it-up reminders and the banked-reset notice. Optional so tests, the demo
     /// store, and the render harness compose without it.
     let notificationCoordinator: NotificationCoordinator?
-    private let now: @Sendable () -> Date
+    let now: @Sendable () -> Date
     /// Builds the concrete provider for a newly added account. Lives in the composition
     /// root (R13) and is injected so the store never names concrete provider types.
     let providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)?
     let widgetExporter: (any WidgetSnapshotExporting)?
-    let phoneSyncExporter: (any WidgetSnapshotExporting)?
+    /// KTD8 (iPhone parity plan): the coalesced v3 + v4 publisher. The store hands it a
+    /// fresh capture on every change that reaches the phone; it decides when to write.
+    let phoneSyncExporter: (any CompanionPhoneSyncing)?
+    /// Test seam for the per-account setup-session overlay (KTD10). Nil reads the
+    /// attached coordinator.
+    @ObservationIgnored var companionSessionLookup: (@MainActor (AccountKey) -> CompanionSessionInput?)?
     private(set) var engine: PollingEngine?
     private var isStarting = false
     @ObservationIgnored var removingAccounts: Set<AccountKey> = []
@@ -243,7 +246,7 @@ public final class UsageStore {
         notificationCoordinator: NotificationCoordinator? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         widgetExporter: (any WidgetSnapshotExporting)? = nil,
-        phoneSyncExporter: (any WidgetSnapshotExporting)? = nil
+        phoneSyncExporter: (any CompanionPhoneSyncing)? = nil
     ) {
         self.providers = providers
         self.apiSpendProviders = apiSpendProviders
@@ -316,6 +319,8 @@ public final class UsageStore {
         self.enabledSurfaces = Set(UsageSurface.allCases.filter { preferences.isSurfaceEnabled($0) })
         scheduler.host = self
         for provider in providers { scheduler.register(provider) }
+        // KTD8: heartbeats and forced republishes capture fresh state on the main actor.
+        phoneSyncExporter?.bind { [weak self] in self?.companionCapture() }
     }
 
     private static func restoredSnapshot(
@@ -481,6 +486,8 @@ public final class UsageStore {
     public func reschedulePolling() {
         refreshPollCadences()
         engine?.reschedule()
+        // R17: the chosen interval travels in the manifest and sets the phone's dim rule.
+        exportPhoneSyncSnapshot()
     }
 
     public func setShowMenuBarPercentage(_ enabled: Bool) {
@@ -491,18 +498,22 @@ public final class UsageStore {
     public func setUsagePercentageMode(_ mode: UsagePercentageMode) {
         preferences.usagePercentageMode = mode
         usagePercentageMode = mode
+        // KTD11: display choices reach the phone's display block, never Mac widgets.
+        exportPhoneSyncSnapshot()
     }
 
     public func setAccountTitleInk(_ ink: AccountTitleInk) {
         guard accountTitleInk != ink else { return }
         preferences.accountTitleInk = ink
         accountTitleInk = ink
+        exportPhoneSyncSnapshot()
     }
 
     public func setMeterStyle(_ style: MeterStyle) {
         guard meterStyle != style else { return }
         preferences.meterStyle = style
         meterStyle = style
+        exportPhoneSyncSnapshot()
     }
 
     public func setMenuBarFillSource(_ source: MenuBarFillSource) {
@@ -645,6 +656,7 @@ public final class UsageStore {
     public func setShowCodexSparkCountersInApp(_ enabled: Bool) {
         preferences.showCodexSparkCountersInApp = enabled
         showCodexSparkCountersInApp = enabled
+        exportPhoneSyncSnapshot()
     }
 
     public func setShowCodexSparkCountersInWidgets(_ enabled: Bool) {
@@ -658,12 +670,15 @@ public final class UsageStore {
         guard useItUpRemindersEnabled != enabled else { return }
         preferences.useItUpRemindersEnabled = enabled
         useItUpRemindersEnabled = enabled
+        // KTD19: the manifest's reminder summary mirrors the Notifications pane.
+        exportPhoneSyncSnapshot()
     }
 
     public func setBankedResetNotificationsEnabled(_ enabled: Bool) {
         guard bankedResetNotificationsEnabled != enabled else { return }
         preferences.bankedResetNotificationsEnabled = enabled
         bankedResetNotificationsEnabled = enabled
+        exportPhoneSyncSnapshot()
     }
 
     /// Persists the list in the given order, clamped. R6: sorting belongs to a committed
@@ -673,6 +688,7 @@ public final class UsageStore {
         guard reminderRules != clamped else { return }
         preferences.reminderRules = clamped
         reminderRules = clamped
+        exportPhoneSyncSnapshot()
     }
 
     /// R4/R6: a committed row edit clamps, replaces the row with the same ID, and resorts.
@@ -700,6 +716,7 @@ public final class UsageStore {
         guard reminderScope != scope else { return }
         preferences.reminderScope = scope
         reminderScope = scope
+        exportPhoneSyncSnapshot()
     }
 
     /// R8: whether "Reset to defaults" should show.
@@ -726,7 +743,7 @@ public final class UsageStore {
               let id = ids.first,
               let resolved = menuBarWindow(for: id)
         else { return nil }
-        return usagePercentageMode.fraction(for: resolved.window)
+        return UsageMeterReading(window: resolved.window).fraction(for: usagePercentageMode)
     }
 
     /// Render-ready menu bar meters. Explicit selection gives each chosen provider its
@@ -757,10 +774,11 @@ public final class UsageStore {
     /// W4: how the footer receipt names an account — the provider alone while it has one
     /// account (labels are hidden then), "Claude Work" once it has several.
     public func refreshReceiptTitle(for key: AccountKey) -> String {
-        let name = displayNames[key.providerID] ?? key.providerID.raw
         let accounts = accounts(for: key.providerID)
-        guard accounts.count > 1, let account = accounts.first(where: { $0.key == key }) else { return name }
-        return "\(name) \(account.label)"
+        return RefreshReceiptPresentation.title(
+            providerName: displayNames[key.providerID] ?? key.providerID.raw,
+            accountTitle: accounts.first(where: { $0.key == key })?.label,
+            providerAccountCount: accounts.count)
     }
 
     public var widgetsEnabled: Bool { preferences.widgetsEnabled }
@@ -809,7 +827,33 @@ public final class UsageStore {
     /// KTD2: a user asked for everything. Every enabled account is due now, bypasses the
     /// duty-cycle gate, and the call returns once the lanes it started have drained — the
     /// contract the store tests and the launch refresh rely on.
+    ///
+    /// KTD14.4: one full refresh at a time. A second caller while one runs awaits that same
+    /// refresh, so five triggers in a row (or a phone joining the launch refresh) run one
+    /// probe round.
     public func refreshAll(origin: UserRefreshOrigin = .fullRefresh) async {
+        guard origin == .fullRefresh else {
+            await performRefreshAll(origin: origin)
+            return
+        }
+        if let fullRefreshTask {
+            await fullRefreshTask.value
+            return
+        }
+        fullRefreshStartedAt = now()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performRefreshAll(origin: .fullRefresh)
+            // Cleared inside the task, so every waiter resumes to a settled store.
+            self.fullRefreshTask = nil
+            self.fullRefreshStartedAt = nil
+            self.lastFullRefreshCompletedAt = self.now()
+        }
+        fullRefreshTask = task
+        await task.value
+    }
+
+    private func performRefreshAll(origin: UserRefreshOrigin) async {
         if origin != .setupCheck { visibleRefreshOperationDepth += 1 }
         defer {
             if origin != .setupCheck {
@@ -1181,13 +1225,20 @@ public final class UsageStore {
         widgetExporter.export(widgetSnapshot(widgetsEnabled: preferences.widgetsEnabled, generatedAt: generatedAt))
     }
 
-    func exportPhoneSyncSnapshot(generatedAt: Date = .now) {
+    /// KTD8 (iPhone parity plan): marks the phone path dirty with a fresh capture. The
+    /// publisher coalesces, so calling this on every merge never means a write per merge.
+    func exportPhoneSyncSnapshot() {
         guard let phoneSyncExporter else { return }
-        phoneSyncExporter.export(widgetSnapshot(widgetsEnabled: preferences.syncToIPhoneEnabled, generatedAt: generatedAt))
+        phoneSyncExporter.submit(companionCapture())
     }
 
-    /// Widgets mirror each provider's *primary* account — the widget schema and the
-    /// iPhone mirror stay single-account (a glanceable tile can't rank five logins).
+    /// KTD8: pending phone writes flush on system sleep and app quit.
+    public func flushPhoneSync() async {
+        await phoneSyncExporter?.flushNow()
+    }
+
+    /// Mac widgets mirror each provider's *primary* account — a glanceable tile can't rank
+    /// five logins. The phone's v4 payload carries every account (`companionCapture`).
     private func widgetSnapshot(widgetsEnabled: Bool, generatedAt: Date) -> WidgetSnapshotEnvelope {
         let primarySnapshots = Dictionary(uniqueKeysWithValues: providerOrder.map { ($0, snapshot(for: $0)) })
         return WidgetSnapshotProjector.project(
@@ -1204,7 +1255,7 @@ public final class UsageStore {
         )
     }
 
-    private func resolvedWidgetProviderSelection() -> [ProviderID] {
+    func resolvedWidgetProviderSelection() -> [ProviderID] {
         switch widgetPrioritySource.filtered(to: providerOrder) {
         case .auto:
             return Array(providerOrder.prefix(2))
@@ -1239,15 +1290,15 @@ public final class UsageStore {
         let needsAttention = providerOrder.contains { providerNeedsAttention($0) }
         let best = menuBarBestWindow()
         guard let best else { return MenuBarSummary.neutral.withAttention(needsAttention) }
-        let pct = usagePercentageMode.roundedPercentage(for: best.window)
+        let reading = UsageMeterReading(window: best.window)
         let name = displayNames[best.id] ?? best.id.raw
         return MenuBarSummary(
-            text: "\(pct)%",
+            text: menuBarText(reading),
             providerID: best.id,
             detail: "\(name) \(best.menuBarTerm)",
             isNeutral: false,
             percentageMode: usagePercentageMode,
-            severity: best.window.severity,
+            severity: reading.severity ?? best.window.severity,
             needsAttention: needsAttention
         )
     }
@@ -1283,23 +1334,30 @@ public final class UsageStore {
             )
         }
 
-        let pct = usagePercentageMode.roundedPercentage(for: resolved.window)
+        let reading = UsageMeterReading(window: resolved.window)
         let name = displayNames[id] ?? id.raw
         return MenuBarMeter(
             summary: MenuBarSummary(
-                text: "\(pct)%",
+                text: menuBarText(reading),
                 providerID: id,
                 detail: "\(name) \(resolved.menuBarTerm)",
                 isNeutral: false,
                 percentageMode: usagePercentageMode,
-                severity: resolved.window.severity,
+                severity: reading.severity ?? resolved.window.severity,
                 needsAttention: needsAttention
             ),
-            fill: usagePercentageMode.fraction(for: resolved.window),
+            fill: reading.fraction(for: usagePercentageMode),
             awaitingFirstReading: snapshot(for: id).freshness == .pending,
             isLiveReading: snapshot(for: id).freshness == .live,
             sourceAccountKey: primaryKey(for: id)
         )
+    }
+
+    /// KTD6.2: the popover row's own reading prints, inks and fills the menu bar, so every
+    /// Mac surface shows one integer and one severity for a window. A non-finite source has
+    /// no figure, as in the row.
+    private func menuBarText(_ reading: UsageMeterReading) -> String {
+        reading.roundedPercentage(for: usagePercentageMode).map { "\($0)%" } ?? "—"
     }
 
     private func providerNeedsAttention(_ id: ProviderID) -> Bool {
@@ -1392,11 +1450,12 @@ extension UsageStore: AccountProbeSchedulerHost {
         let accepted = mergeResult(
             key: key, result: result, notifiesSetup: notifiesSetup, attachmentGeneration: attachmentGeneration
         )
-        // KTD9 / R19: compact surfaces mirror the primary, so its merge exports at once
-        // instead of waiting for every extra in the lane. A full refresh exports once at
-        // its end instead.
-        if accepted, fullRefreshDepth == 0, primaryKey(for: key.providerID) == key {
-            exportWidgetSnapshot()
+        // KTD9 / R19: Mac widgets mirror the primary, so its merge exports at once instead
+        // of waiting for every extra in the lane. iPhone parity KTD8 amends AE7: an extra's
+        // merge now marks the phone path dirty too, but never reloads Mac WidgetKit
+        // timelines. A full refresh exports once at its end instead.
+        if accepted, fullRefreshDepth == 0 {
+            if primaryKey(for: key.providerID) == key { exportWidgetSnapshot() }
             exportPhoneSyncSnapshot()
         }
         return accepted
@@ -1441,5 +1500,6 @@ extension UsageStore: AccountProbeSchedulerHost {
             completed: completed,
             lastLanded: landed ?? refreshProgress?.lastLanded
         )
+        checkNowProgressObserver?()
     }
 }
