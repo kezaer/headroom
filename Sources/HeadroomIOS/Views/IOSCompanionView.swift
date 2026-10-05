@@ -279,7 +279,7 @@ struct IOSCompanionView: View {
         sessionDemoEnabled = result == .unavailable
         demoWidgetUnavailable = result == .unavailable
         if result == .changed {
-            WidgetCenter.shared.reloadTimelines(ofKind: HeadroomIOSWidgetConfiguration.kind)
+            WidgetCenter.shared.reloadAllTimelines()
         }
         Task { await refresh() }
     }
@@ -290,7 +290,7 @@ struct IOSCompanionView: View {
         demoWidgetUnavailable = false
         let result = demoModeStore.setEnabled(false)
         if result == .changed {
-            WidgetCenter.shared.reloadTimelines(ofKind: HeadroomIOSWidgetConfiguration.kind)
+            WidgetCenter.shared.reloadAllTimelines()
         }
         Task { await refresh() }
     }

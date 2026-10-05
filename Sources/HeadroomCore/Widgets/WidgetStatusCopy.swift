@@ -57,6 +57,17 @@ public enum WidgetStatusState: Sendable, Equatable, CaseIterable {
         }
     }
 
+    /// R9 (2026-10-04 Lock Screen plan): one word in the circle's caption slot.
+    public var lockScreenWord: String {
+        switch self {
+        case .macSetupNeeded, .iosSetupNeeded: "Setup"
+        case .macPending, .iosWaitingForMac: "Waiting"
+        case .macDisabled, .iosDisabled: "Off"
+        case .iosCorrupt: "Unreadable"
+        case .macIncompatibleSchema, .iosIncompatibleSchema: "Update"
+        }
+    }
+
     /// WCW4: the fallback vessel mark, 0…1. KTD15's waiting states use `loadingPlaceholder`
     /// instead; other states keep the neutral mark without implying a usage value.
     public var vesselFill: Double {

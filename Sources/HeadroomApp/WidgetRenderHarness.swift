@@ -15,7 +15,8 @@ import SwiftUI
 /// narrows each tile as a stand-in for xxLarge labels; the device check remains the gate.
 ///
 /// Filters: `--widget-style <id>`, `--widget-fixture <name>`, `--widget-geometry mac|ios61|ios67`,
-/// `--widget-quick` (Claude + Codex only, both appearances, macOS and 6.1″).
+/// `--widget-quick` (Claude + Codex only, both appearances, macOS and 6.1″),
+/// `--widget-family lock|home` (Lock Screen bodies only, or the unchanged home sweep).
 @MainActor
 enum WidgetRenderHarness {
     struct Geometry {
@@ -68,7 +69,8 @@ enum WidgetRenderHarness {
         try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
         let jobs = buildJobs()
-        guard !jobs.isEmpty else {
+        let lockJobs = buildLockJobs()
+        guard !jobs.isEmpty || !lockJobs.isEmpty else {
             print("✗ No tiles to render for these filters")
             exit(2)
         }
@@ -91,11 +93,21 @@ enum WidgetRenderHarness {
                 overflows += problems.map { "\(job.fileName): \($0)" }
             }
         }
-        writeContactSheet(rendered, overflows: overflows + stress, to: outDir.appendingPathComponent("index.html"))
+        var lockRendered: [(LockJob, String)] = []
+        for job in lockJobs {
+            let (image, problems) = renderLock(job)
+            if let image, write(image, to: outDir.appendingPathComponent(job.fileName)) {
+                lockRendered.append((job, job.fileName))
+            } else {
+                overflows.append("\(job.fileName): render failed")
+            }
+            overflows += problems.map { "\(job.fileName): \($0)" }
+        }
+        writeContactSheet(rendered, lockRendered: lockRendered, overflows: overflows + stress, to: outDir.appendingPathComponent("index.html"))
         let report = overflows.isEmpty ? "No overflow.\n" : overflows.joined(separator: "\n") + "\n"
         try? report.write(to: outDir.appendingPathComponent("overflow.txt"), atomically: true, encoding: .utf8)
         try? (stress.joined(separator: "\n") + "\n").write(to: outDir.appendingPathComponent("overflow-shrunk.txt"), atomically: true, encoding: .utf8)
-        print("Rendered \(rendered.count) tiles to \(outDir.path)")
+        print("Rendered \(rendered.count) home tiles and \(lockRendered.count) Lock Screen tiles to \(outDir.path)")
         print(overflows.isEmpty ? "✓ No overflow" : "✗ \(overflows.count) overflow finding(s) — see overflow.txt")
         if !stress.isEmpty { print("△ \(stress.count) finding(s) in the shrunk xxLarge stand-in — see overflow-shrunk.txt") }
         exit(overflows.isEmpty ? 0 : 1)
@@ -109,6 +121,11 @@ enum WidgetRenderHarness {
     }
 
     static func buildJobs() -> [Job] {
+        if let family = argument("--widget-family"), !["lock", "home"].contains(family) {
+            print("Unknown family \(family). Families: lock, home")
+            exit(2)
+        }
+        if argument("--widget-family") == "lock" { return [] }
         let quick = CommandLine.arguments.contains("--widget-quick")
         // A mistyped filter must fail loudly: an unknown id silently became the default style
         // (or no geometry at all) and the sweep passed green on work it never rendered.
@@ -331,7 +348,7 @@ enum WidgetRenderHarness {
 
     // MARK: Contact sheet
 
-    private static func writeContactSheet(_ rendered: [(Job, String)], overflows: [String], to url: URL) {
+    private static func writeContactSheet(_ rendered: [(Job, String)], lockRendered: [(LockJob, String)], overflows: [String], to url: URL) {
         var html = """
         <!doctype html><meta charset="utf-8"><title>Widget styles — render sweep</title>
         <style>body{background:#0b0d11;color:#ddd;font:13px -apple-system,system-ui;margin:24px}
@@ -355,6 +372,255 @@ enum WidgetRenderHarness {
                 html += "</div>"
             }
         }
+        for family in LockScreenWidgetFamily.allCases {
+            let items = lockRendered.filter { $0.0.family == family }
+            guard !items.isEmpty else { continue }
+            html += "<h2>Lock Screen \(family.rawValue)</h2>"
+            let sections = Dictionary(grouping: items, by: { "\($0.0.style.rawValue) · \($0.0.geometry.name) · \($0.0.mode.rawValue)" })
+            for section in sections.keys.sorted() {
+                html += "<h3>\(section)</h3><div class=row>"
+                for (job, file) in sections[section]!.sorted(by: { $0.0.fileName < $1.0.fileName }) {
+                    html += "<figure style=\"margin:0\"><img src=\"\(file)\" style=\"zoom:0.5\"><figcaption>\(job.source.name) · \(job.providerChoice.rawValue)</figcaption></figure>"
+                }
+                html += "</div>"
+            }
+        }
         try? html.write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+
+// U7 (2026-10-04 Lock Screen plan): the real Lock Screen bodies, every style × size ×
+// provider choice × fixture × geometry, normal and Always On, plus privacy, status and demo passes.
+private extension WidgetRenderHarness {
+    struct LockGeometry {
+        let name: String
+        let sizes: [LockScreenWidgetFamily: CGSize]
+    }
+
+    static var lockGeometries: [LockGeometry] {
+        // KTD12: published smallest, 6.1-inch and Pro Max accessory content bounds.
+        [
+            LockGeometry(name: "iosSE", sizes: [.circle: CGSize(width: 68, height: 68), .rectangle: CGSize(width: 153, height: 68), .inline: CGSize(width: 225, height: 26)]),
+            LockGeometry(name: "ios61", sizes: [.circle: CGSize(width: 72, height: 72), .rectangle: CGSize(width: 160, height: 72), .inline: CGSize(width: 234, height: 26)]),
+            LockGeometry(name: "ios67", sizes: [.circle: CGSize(width: 76, height: 76), .rectangle: CGSize(width: 172, height: 76), .inline: CGSize(width: 257, height: 26)]),
+        ]
+    }
+
+    enum LockMode: String, CaseIterable {
+        case normal, alwaysOn, privacy
+
+        var redaction: RedactionReasons { self == .privacy ? .privacy : [] }
+    }
+
+    /// The source a job renders: a Lock Screen fixture, demo data, or a status state.
+    enum LockSource: Equatable {
+        case fixture(String)
+        case demo
+        case status(String)
+
+        var name: String {
+            switch self {
+            case .fixture(let name): name
+            case .demo: "demo"
+            case .status(let name): "status_\(name)"
+            }
+        }
+
+        func state(now: Date) -> IOSWidgetSnapshotState? {
+            switch self {
+            case .fixture(let name):
+                DemoScreenshotData.lockScreenFixture(name, now: now).map(IOSWidgetSnapshotState.content)
+            case .demo:
+                // KTD10: Lock Screen demo always reads the four-provider envelope.
+                .demo(DemoScreenshotData.envelope(for: "fourProviders"))
+            case .status(let name):
+                switch name {
+                case "disabled": .disabled
+                case "setupNeeded": .setupNeeded
+                case "waitingForMac": .waitingForMac
+                case "corrupt": .corrupt
+                case "incompatibleSchema": .incompatibleSchema
+                default: nil
+                }
+            }
+        }
+
+        static let statusNames = ["disabled", "setupNeeded", "waitingForMac", "corrupt", "incompatibleSchema"]
+    }
+
+    struct LockJob {
+        let style: WidgetLayoutStyle
+        let family: LockScreenWidgetFamily
+        let source: LockSource
+        let providerChoice: LockScreenProviderChoice
+        let geometry: LockGeometry
+        let mode: LockMode
+
+        var fileName: String {
+            ["lock", family.rawValue, style.rawValue, source.name, providerChoice.rawValue, geometry.name, mode.rawValue]
+                .joined(separator: "-") + ".png"
+        }
+    }
+
+    static func buildLockJobs() -> [LockJob] {
+        if argument("--widget-family") == "home" { return [] }
+        if let style = argument("--widget-style"), WidgetLayoutStyle(rawValue: style) == nil {
+            print("Unknown style \(style)")
+            exit(2)
+        }
+        let knownSources = DemoScreenshotData.lockScreenFixtureNames + ["demo"] + LockSource.statusNames.map { "status_\($0)" }
+        if let fixture = argument("--widget-fixture"), !knownSources.contains(fixture) {
+            print("Unknown Lock Screen fixture \(fixture). Fixtures: \(knownSources.joined(separator: ", "))")
+            exit(2)
+        }
+        // Home-only geometry filters add no Lock Screen jobs; lock-only sweeps fail loudly.
+        let geometries = argument("--widget-geometry").map { requested in
+            lockGeometries.filter { $0.name == requested }
+        } ?? lockGeometries
+        if geometries.isEmpty {
+            if argument("--widget-family") == "lock" {
+                print("Unknown Lock Screen geometry. Geometries: \(lockGeometries.map(\.name).joined(separator: ", "))")
+                exit(2)
+            }
+            return []
+        }
+        let quick = CommandLine.arguments.contains("--widget-quick")
+        var sources: [LockSource] = (quick ? ["claudeCodex", "thirdProviderTightest", "staleUnavailable", "grokCursor"]
+                                     : DemoScreenshotData.lockScreenFixtureNames).map(LockSource.fixture)
+        sources += [.demo] + LockSource.statusNames.map(LockSource.status)
+        if let filter = argument("--widget-fixture") { sources = sources.filter { $0.name == filter } }
+        let styles = argument("--widget-style").flatMap(WidgetLayoutStyle.init(rawValue:)).map { [$0] } ?? WidgetLayoutStyle.allCases
+        // R16: privacy runs on two fixtures; normal and Always On run everywhere.
+        let privacySources: [LockSource] = [.fixture("tightClaudeCursor"), .demo]
+        var jobs: [LockJob] = []
+        for geometry in geometries {
+            for family in LockScreenWidgetFamily.allCases {
+                for style in styles {
+                    for source in sources {
+                        // A status form ignores the provider choice; render it once per style.
+                        let choices: [LockScreenProviderChoice] = if case .status = source { [.automatic] } else {
+                            quick ? [.automatic, .cursor] : LockScreenProviderChoice.allCases
+                        }
+                        for choice in choices {
+                            for mode in LockMode.allCases where mode != .privacy || privacySources.contains(source) {
+                                jobs.append(LockJob(style: style, family: family, source: source,
+                                                    providerChoice: choice, geometry: geometry, mode: mode))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return jobs
+    }
+
+    static func renderLock(_ job: LockJob) -> (CGImage?, [String]) {
+        guard let size = job.geometry.sizes[job.family], let state = job.source.state(now: now)
+        else { return (nil, ["missing Lock Screen fixture or geometry"]) }
+        let recipe = LockScreenWidgetRecipe(style: job.style, family: job.family,
+                                           providerChoice: job.providerChoice, state: state, now: now)
+        let collector = ProbeCollector()
+        let tile = lockBody(recipe)
+            .frame(width: size.width, height: size.height)
+            // KTD5: vibrant rendering lightens the wallpaper by each gray's lightness;
+            // plus-lighter is the design doc's stand-in for that material mapping.
+            .compositingGroup()
+            .blendMode(.plusLighter)
+            .background { lockWallpaper(size: size) }
+            .overlayPreferenceValue(HeadroomWidgetProbeKey.self) { anchors in
+                GeometryReader { geometry in
+                    let box = CGRect(origin: .zero, size: geometry.size)
+                    let _ = anchors.forEach { anchor in
+                        let bounds = geometry[anchor]
+                        if bounds.width > 0, bounds.height > 0,
+                           !box.contains(bounds.integral.insetBy(dx: 1, dy: 1)) {
+                            collector.add("element \(Int(bounds.minX)),\(Int(bounds.minY)) \(Int(bounds.width))×\(Int(bounds.height)) outside Lock Screen content box")
+                        }
+                    }
+                    Color.clear
+                }
+            }
+            .environment(\.colorScheme, .dark)
+            .environment(\.headroomWidgetProbesEnabled, true)
+            .environment(\.isLuminanceReduced, job.mode == .alwaysOn)
+            .redacted(reason: job.mode.redaction)
+            // KTD12: export padding is outside the probed accessory content box.
+            .padding(12)
+            .background(Color(white: 0.08))
+        let renderer = ImageRenderer(content: tile)
+        renderer.scale = 2
+        return (renderer.cgImage, collector.problems)
+    }
+
+    /// KTD6/KTD7: the Mac has no asset catalog or `AccessoryWidgetBackground`, so marks are
+    /// `ProviderLogoView` silhouettes and the backdrop is a same-weight translucent fill.
+    static let lockArt = HeadroomWidgetLockScreenArt(
+        // KTD7: the brand-mark primitive masks this original Mac image into one ink.
+        mark: { id, size in AnyView(ProviderLogoView(providerID: ProviderID(id), size: size)) },
+        accessoryBackground: { AnyView(Color(white: 0.15)) }
+    )
+
+    @ViewBuilder
+    static func lockBody(_ recipe: LockScreenWidgetRecipe) -> some View {
+        let body = HeadroomWidgetLockScreenBody(recipe: recipe, art: lockArt) { image in
+            // KTD9: the iOS stepped assets, drawn here from the same Core geometry.
+            switch image {
+            case .warning:
+                Image(systemName: "exclamationmark.circle")
+            case .vessel(let level):
+                HeadroomWidgetLockScreenVessel(
+                    fraction: Double(level) / Double(LockScreenInlineVesselArt.levels.upperBound),
+                    geometry: LockScreenInlineVesselArt.geometry)
+            }
+        }
+        if recipe.family == .inline {
+            // The system styles inline text; this stands in for its 17 pt semibold line.
+            body.font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color(white: LockScreenWidgetTokens.fullInk))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            body
+        }
+    }
+
+    static func lockWallpaper(size: CGSize) -> some View {
+        // KTD8/U4: opaque alternating diagonal bands make a real numeral cut-out observable.
+        Canvas { context, canvas in
+            context.fill(Path(CGRect(origin: .zero, size: canvas)), with: .color(Color(white: 0.12)))
+            let band: CGFloat = 8 // Diagnostic pattern crosses every digit, including at 17 pt.
+            for offset in stride(from: -canvas.height, through: canvas.width, by: band * 2) {
+                var stripe = Path()
+                stripe.move(to: CGPoint(x: offset, y: 0))
+                stripe.addLine(to: CGPoint(x: offset + band, y: 0))
+                stripe.addLine(to: CGPoint(x: offset + band + canvas.height, y: canvas.height))
+                stripe.addLine(to: CGPoint(x: offset + canvas.height, y: canvas.height))
+                stripe.closeSubpath()
+                context.fill(stripe, with: .color(Color(white: 0.38)))
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+
+/// KTD9: `--generate-lock-screen-vessels <LockScreenAssets.xcassets>` writes the eleven inline
+/// template imagesets from Core geometry, so the asset art cannot drift from the vessel.
+enum LockScreenVesselAssetGenerator {
+    static func run(assetCatalog: String) {
+        let catalog = URL(fileURLWithPath: (assetCatalog as NSString).expandingTildeInPath, isDirectory: true)
+        let manager = FileManager.default
+        do {
+            for level in LockScreenInlineVesselArt.levels {
+                let set = catalog.appendingPathComponent(LockScreenInlineVesselArt.assetName(level: level) + ".imageset", isDirectory: true)
+                try manager.createDirectory(at: set, withIntermediateDirectories: true)
+                try LockScreenInlineVesselArt.svg(level: level)
+                    .write(to: set.appendingPathComponent("vessel.svg"), atomically: true, encoding: .utf8)
+                try LockScreenInlineVesselArt.imagesetContents
+                    .write(to: set.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8)
+            }
+            print("Wrote \(LockScreenInlineVesselArt.levels.count) vessel imagesets to \(catalog.path)")
+        } catch {
+            print("✗ Could not write the vessel imagesets")
+            exit(1)
+        }
     }
 }
