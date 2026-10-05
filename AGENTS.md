@@ -68,6 +68,18 @@ drains each CLI lane one probe at a time (most overdue first) and fetches the HT
 due accounts concurrently → `UsageStore` merges with continuity → menu bar label + popover
 bind to the `@Observable` store.
 
+**Loading language (Oct 2026).** `UserRefreshRun` retains per-account origins and outcomes;
+`VisibleRefreshWork` drives the footer through subscription and spend work without treating
+setup verification as a user refresh. `ReprintRecipe` derives wipe, ghost, fresh print and
+end hold from that record on every frame. `SetupMotion` chooses slosh for app work and the
+approved drip for a user wait; successful Settings removal uses the row's drain transition.
+Shared vessel views own paused `LoadingTimeline` clocks and accept `loadingDate` for captures;
+the native menu label keeps its bounded clock exception described below. iPhone and widget
+waiting placeholders use uniform ghosts, with outlines in monochrome rendering; schema stays 3.
+`--demo loading` uses controlled fixture sources, inert account storage and a typed setup
+coordinator. All native demos keep setup, account management, credentials, duplicate detection
+and launch-at-login isolated from the user's CLI files and system services.
+
 The popover meter style is one global `MeterStyle`, persisted as three independent
 UserDefaults-backed preferences (format, shape, fill) and mirrored by `UsageStore`. It affects
 only the macOS popover: widget, phone, and menu-bar projections intentionally carry no style.
@@ -147,7 +159,8 @@ swift test                         # unit suite (fast, all mocked — no CLI/net
 # --deps-only unpacks the Sparkle XCFramework the project references (package resolution alone doesn't); the pinned derived data avoids a cached "no XCFramework found" build description.
 swift run Headroom --probe-claude  # diagnostic: prints live parsed /usage windows
 swift run Headroom --render-widgets <dir> [--widget-style <id>] [--widget-fixture <name>] [--widget-quick]  # headless widget-style renders + overflow sweep
-swift run Headroom --demo [multi-2|multi-3|multi-5|multi-20|multi-mixed|spend-states|spend-retained|banked-resets]  # live app with fixture data (screenshots, multi-account preview; multi-20 is the tested envelope)
+swift run Headroom --render-popover <dir> --loading-only  # pinned, offscreen loading checkpoints; native acceptance remains separate
+swift run Headroom --demo [loading|multi-2|multi-3|multi-5|multi-20|multi-mixed|spend-states|spend-retained|banked-resets]  # fixture data; loading exercises delayed probes/spend and inert setup; multi-20 is the tested envelope
 swift build -c release -Xswiftc -DHEADROOM_BENCH && .build/release/Headroom --bench-ui <popover|scroll|settings|switch|counts|scene|all> [--scenario single|multi3|multi5|multi20] [--pane <pane>] [--runs n] [--json <path>]  # offscreen perf bench: main-thread CPU, frame-by-frame probes, body counts
 # Release builds only. Without -DHEADROOM_BENCH the body counters and the Settings pane seam compile to nothing: timings still run, counts and pane switches don't. Scripts/bench-trace-summary.py slices a Time Profiler trace by its signposts.
 ./Scripts/build-app.sh             # → Headroom.app (LSUIElement), then: open Headroom.app
@@ -379,11 +392,18 @@ in Terminal and never owns the browser callback, token refresh, or auth-file wri
   so iOS and the widgets adapt natively. Accent/text-accent/optical-scale values are
   first-pass identity (Phase 2 owns visual density). The four-provider demo is
   `--demo multi-4` (popover) / the `fourProviders` `DemoScreenshotData` variant (iOS widget).
-- **The menu bar's only motion is the slosh (Oct 2026).** A pill's liquid surface travels
+- **The menu bar sloshes and prints its first live reading (Oct 2026).** A pill's liquid surface travels
   while its provider's main account is being probed, timer polls included
   (`UsageStore.menuBarUpdatingProviders` → `MenuBarSlosh` → `VesselGlyph` wave frames). The
   level never moves and the numeral still hard-cuts (M10A); a pill finishes its wave before
-  going flat, and Reduce Motion keeps it flat. The popover footer's stamp turns into a
+  going flat. A pending main shows a 3×6 halftone ghost; its first live reading prints in
+  four frames at 10fps, while stale results and main-account switches never print (KTD13).
+  Reduce Motion keeps the wave flat and blends ghost to solid uniformly. Settings previews
+  use the same ghost image path with motion disabled. Keep this label one rasterized Image:
+  nesting `LoadingTimeline` in `MenuBarExtra` reproduced an endless status-button update loop
+  during App test bootstrap. `MenuBarSlosh` owns its small bounded clock instead, deriving
+  frames from Core's wall clock and stopping after the wave/print deadline (KTD17 exception).
+  The popover footer's stamp turns into a
   per-account receipt during a user refresh (`refreshProgress`, `RefreshReceipt`). Both come
   from the scheduler's probe and user-progress callbacks; see
   `design/refresh-stamp-merge-round3.html` (S2) and `…-round4.html` (W4).
