@@ -110,39 +110,70 @@ detach_dmg_mount() {
   hdiutil detach "${DMG_MOUNT_DIR}" -force >/dev/null 2>&1 || true
 }
 
-create_drag_install_dmg() {
-  rm -f "${DMG_RW_PATH}" "${DMG_PATH}"
-  rm -rf "${DMG_MOUNT_DIR}"
-  mkdir -p "${DMG_MOUNT_DIR}"
+# Icon positions in the 680x440 install window; they sit either side of the background's arrow.
+DMG_APP_POSITION="196,176"
+DMG_APPLICATIONS_POSITION="484,176"
+# Dot-files are parked past the window so someone showing hidden files (⌘⇧.) still sees
+# only the two icons (a friend's 1.5 install window listed all three).
+DMG_HIDDEN_ITEMS=(".background" ".VolumeIcon.icns")
+DMG_HIDDEN_POSITION="1200,1200"
 
-  echo "→ staging installer window background"
-  if [[ ! -f "${DMG_BACKGROUND_1X}" || ! -f "${DMG_BACKGROUND_2X}" ]]; then
-    echo "Missing DMG background: run Assets/Release/make-dmg-background.sh" >&2
-    exit 66
+stage_dmg_volume_icon() {
+  # The volume icon doubles as the window's title-bar proxy icon.
+  if [[ -f "${APP}/Contents/Resources/AppIcon.icns" ]] && command -v SetFile >/dev/null 2>&1; then
+    if cp "${APP}/Contents/Resources/AppIcon.icns" "${DMG_MOUNT_DIR}/.VolumeIcon.icns" \
+        && SetFile -a C "${DMG_MOUNT_DIR}" \
+        && SetFile -a V "${DMG_MOUNT_DIR}/.VolumeIcon.icns"; then
+      echo "  ✓ volume icon staged (title-bar proxy icon)"
+    else
+      echo "  ! volume icon staging failed — DMG will show the generic disk icon" >&2
+    fi
+  else
+    echo "  ! AppIcon.icns or SetFile unavailable — skipping volume icon" >&2
   fi
-  mkdir -p "${STAGING_DIR}/.background"
-  # One HiDPI TIFF holding @1x + @2x so Retina Finder renders it crisp.
-  tiffutil -cathidpicheck "${DMG_BACKGROUND_1X}" "${DMG_BACKGROUND_2X}" \
-    -out "${STAGING_DIR}/.background/background.tiff" >/dev/null
+}
 
-  echo "→ creating writable installer image"
-  hdiutil create \
-    -volname "Headroom Installer" \
-    -srcfolder "${STAGING_DIR}" \
-    -fs HFS+ \
-    -format UDRW \
-    -ov \
-    "${DMG_RW_PATH}" >/dev/null
+# Reads the .DS_Store Finder saved and checks every icon position.
+verify_dmg_layout() {
+  local volume="$1"
+  if [[ ! -f "${volume}/.DS_Store" ]]; then
+    echo "  ✗ DMG layout: Finder saved no .DS_Store" >&2
+    return 1
+  fi
+  local hidden=() item
+  for item in "${DMG_HIDDEN_ITEMS[@]}"; do
+    if [[ -e "${volume}/${item}" ]]; then
+      hidden+=("${item}")
+    fi
+  done
+  python3 Scripts/dmg-layout-check.py "${volume}/.DS_Store" \
+    "Headroom.app=${DMG_APP_POSITION}" \
+    "Applications=${DMG_APPLICATIONS_POSITION}" \
+    --offscreen ${hidden[@]+"${hidden[@]}"}
+}
 
-  echo "→ styling DMG install window"
-  hdiutil attach "${DMG_RW_PATH}" \
-    -mountpoint "${DMG_MOUNT_DIR}" \
-    -readwrite \
-    -noverify \
-    -nobrowse >/dev/null
-  trap detach_dmg_mount RETURN
+style_dmg_window() {
+  osascript - "$(cd "${DMG_MOUNT_DIR}" && pwd)" "${DMG_APP_POSITION}" "${DMG_APPLICATIONS_POSITION}" \
+    "${DMG_HIDDEN_POSITION}" "${DMG_HIDDEN_ITEMS[@]}" <<'APPLESCRIPT'
+on xy(pair)
+  set AppleScript's text item delimiters to ","
+  set parts to text items of pair
+  set AppleScript's text item delimiters to ""
+  return {(item 1 of parts) as integer, (item 2 of parts) as integer}
+end xy
 
-  osascript - "$(cd "${DMG_MOUNT_DIR}" && pwd)" <<'APPLESCRIPT'
+on placeIcons(dmgFolder, argv)
+  tell application "Finder"
+    set position of item "Headroom.app" of dmgFolder to my xy(item 2 of argv)
+    set position of item "Applications" of dmgFolder to my xy(item 3 of argv)
+    repeat with i from 5 to count of argv
+      try
+        set position of item (item i of argv) of dmgFolder to my xy(item 4 of argv)
+      end try
+    end repeat
+  end tell
+end placeIcons
+
 on run argv
   set mountPath to item 1 of argv
   tell application "Finder"
@@ -168,13 +199,11 @@ on run argv
     set label position of viewOptions to bottom
 
     -- A custom Finder background is always treated as light appearance, so labels draw
-    -- black even in Dark Mode. The dark background paints a gold chip under each label
-    -- (dmg-background.html) so the black names stay legible and read as branding.
+    -- black even in Dark Mode and all but vanish on the dark ground. That is deliberate
+    -- (dmg-background.html): the icons, arrow and instruction carry the window.
     set background picture of viewOptions to (POSIX file (mountPath & "/.background/background.tiff") as alias)
-
-    set position of item "Headroom.app" of dmgFolder to {196, 176}
-    set position of item "Applications" of dmgFolder to {484, 176}
   end tell
+  placeIcons(dmgFolder, argv)
 
   -- Tahoe Finder ignores the toolbar/statusbar AppleScript properties for DMG windows
   -- and instead shows a tab bar + path bar + status bar. Their View-menu toggles are the
@@ -198,36 +227,94 @@ on run argv
   tell application "Finder"
     -- Re-assert the frame after the chrome collapse so the saved content area is 680x440.
     set bounds of dmgWindow to {180, 120, 860, 588}
-    -- Hiding the tab/path/status bars shifts saved icon positions down by the bars' height
-    -- (1.5 build 35 saved y=221, putting the icons 45pt below the background's arrow), so
-    -- place the icons again on the final frame.
-    set position of item "Headroom.app" of dmgFolder to {196, 176}
-    set position of item "Applications" of dmgFolder to {484, 176}
+  end tell
+  -- Hiding the tab/path/status bars shifts saved icon positions down by the bars' height
+  -- (1.5 build 35 saved y=221, putting the icons 45pt below the background's arrow), so
+  -- place the icons again on the final frame.
+  placeIcons(dmgFolder, argv)
+  tell application "Finder"
     update dmgFolder without registering applications
     delay 1
     close dmgWindow
   end tell
 end run
 APPLESCRIPT
+}
 
-  # Give the mounted volume the Headroom app icon — it doubles as the window's title-bar
-  # proxy icon. This must run AFTER the Finder styling pass: Finder's background/update
-  # writes were observed clobbering a pre-staged .VolumeIcon.icns (file gone after
-  # detach), while staging it last survives remounts.
-  if [[ -f "${APP}/Contents/Resources/AppIcon.icns" ]] && command -v SetFile >/dev/null 2>&1; then
-    if cp "${APP}/Contents/Resources/AppIcon.icns" "${DMG_MOUNT_DIR}/.VolumeIcon.icns" \
-        && SetFile -a C "${DMG_MOUNT_DIR}" \
-        && SetFile -a V "${DMG_MOUNT_DIR}/.VolumeIcon.icns"; then
-      echo "  ✓ volume icon staged (title-bar proxy icon)"
-    else
-      echo "  ! volume icon staging failed — DMG will show the generic disk icon" >&2
-    fi
-  else
-    echo "  ! AppIcon.icns or SetFile unavailable — skipping volume icon" >&2
+create_drag_install_dmg() {
+  rm -f "${DMG_RW_PATH}" "${DMG_PATH}"
+  # A fresh mount path every run: Finder caches a path's contents, so a remount at a path it
+  # has seen can list the new volume as empty and refuse every icon position (-10006).
+  DMG_MOUNT_DIR="$(mktemp -d "${WORK_DIR}/dmg-mount.XXXXXX")"
+
+  echo "→ staging installer window background"
+  if [[ ! -f "${DMG_BACKGROUND_1X}" || ! -f "${DMG_BACKGROUND_2X}" ]]; then
+    echo "Missing DMG background: run Assets/Release/make-dmg-background.sh" >&2
+    exit 66
   fi
+  mkdir -p "${STAGING_DIR}/.background"
+  # One HiDPI TIFF holding @1x + @2x so Retina Finder renders it crisp.
+  tiffutil -cathidpicheck "${DMG_BACKGROUND_1X}" "${DMG_BACKGROUND_2X}" \
+    -out "${STAGING_DIR}/.background/background.tiff" >/dev/null
 
+  # Finder addresses the volume by name, so any other "Headroom Installer" it knows (an open
+  # earlier DMG, or a ghost left by a forced eject) captures the styling pass: Finder lists
+  # the new volume as empty and refuses every position. Style under a unique name, then rename.
+  local styling_volume_name="Headroom Installer ${RANDOM}${RANDOM}"
+  echo "→ creating writable installer image"
+  hdiutil create \
+    -volname "${styling_volume_name}" \
+    -srcfolder "${STAGING_DIR}" \
+    -fs HFS+ \
+    -format UDRW \
+    -ov \
+    "${DMG_RW_PATH}" >/dev/null
+
+  echo "→ styling DMG install window"
+  hdiutil attach "${DMG_RW_PATH}" \
+    -mountpoint "${DMG_MOUNT_DIR}" \
+    -readwrite \
+    -noverify \
+    -nobrowse >/dev/null
+  trap detach_dmg_mount RETURN
+
+  # Staged before styling so Finder can park it off-window. Finder's background/update writes
+  # were once seen deleting a pre-staged icon, so it is checked again after styling.
+  stage_dmg_volume_icon
+
+  # Finder's saved layout is intermittent: 1.5 build 41 shipped with Finder's default icon
+  # positions although this pass saves the right ones on most runs. Read the .DS_Store back
+  # and retry rather than publish a broken install window.
+  local attempt
+  for attempt in 1 2 3; do
+    if ! style_dmg_window; then
+      echo "  ! Finder styling pass failed (attempt ${attempt})" >&2
+    fi
+    sleep 2
+    if verify_dmg_layout "${DMG_MOUNT_DIR}"; then
+      echo "  ✓ install window layout saved"
+      break
+    fi
+    if [[ "${attempt}" == 3 ]]; then
+      echo "DMG install window layout did not persist after ${attempt} attempts" >&2
+      exit 70
+    fi
+    echo "  ! install window layout not saved (attempt ${attempt}); styling again" >&2
+  done
+
+  if [[ ! -f "${DMG_MOUNT_DIR}/.VolumeIcon.icns" ]]; then
+    echo "  ! Finder styling removed the volume icon; staging it again" >&2
+    stage_dmg_volume_icon
+  fi
+  # A read-only image needs no fseventsd log, and a user showing hidden files would see it.
+  rm -rf "${DMG_MOUNT_DIR}/.fseventsd"
+  chflags hidden "${DMG_MOUNT_DIR}/.background"
+
+  diskutil rename "${DMG_MOUNT_DIR}" "Headroom Installer" >/dev/null
+
+  # A plain detach lets the volume flush; force only if it refuses.
   sync
-  detach_dmg_mount
+  hdiutil detach "${DMG_MOUNT_DIR}" >/dev/null 2>&1 || detach_dmg_mount
   trap - RETURN
 
   echo "→ compressing installer image"
@@ -236,6 +323,20 @@ APPLESCRIPT
     -imagekey zlib-level=9 \
     -o "${DMG_PATH}" >/dev/null
   rm -f "${DMG_RW_PATH}"
+
+  # The compressed image is what ships, so check the layout it actually carries.
+  local verify_mount
+  verify_mount="$(mktemp -d "${WORK_DIR}/dmg-verify.XXXXXX")"
+  hdiutil attach "${DMG_PATH}" -mountpoint "${verify_mount}" -readonly -nobrowse -noverify >/dev/null
+  local verified=0
+  verify_dmg_layout "${verify_mount}" && verified=1
+  hdiutil detach "${verify_mount}" >/dev/null 2>&1 || hdiutil detach "${verify_mount}" -force >/dev/null 2>&1 || true
+  rmdir "${verify_mount}" "${DMG_MOUNT_DIR}" 2>/dev/null || true
+  if [[ "${verified}" != 1 ]]; then
+    echo "Compressed DMG lost the install window layout" >&2
+    exit 70
+  fi
+  echo "  ✓ compressed DMG carries the install window layout"
 }
 
 set_plist_string() {
@@ -472,7 +573,7 @@ select_developer_id_signing_sha() {
   headroom_newest_identity_sha "${HEADROOM_DEVELOPER_ID_APPLICATION:-Developer ID Application:}"
 }
 
-for tool in security codesign curl ditto hdiutil xcrun plutil tiffutil; do
+for tool in security codesign curl ditto hdiutil xcrun plutil tiffutil python3; do
   require_tool "${tool}"
 done
 require_tool xcodegen
@@ -547,7 +648,7 @@ RELEASE_NOTES_NAME="$(headroom_sparkle_release_notes_filename "${VERSION}" "${BU
 RELEASE_NOTES_URL="${HEADROOM_SPARKLE_DOWNLOAD_URL_PREFIX}${RELEASE_NOTES_NAME}"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}"
 DMG_RW_PATH="${WORK_DIR}/Headroom-${VERSION}-${BUILD}-rw.dmg"
-DMG_MOUNT_DIR="${WORK_DIR}/dmg-mount"
+DMG_MOUNT_DIR="" # set per run by create_drag_install_dmg
 STAGING_DIR="${WORK_DIR}/dmg-root"
 
 mkdir -p "${WORK_DIR}" "${STAGING_DIR}" "${DIST_DIR}"
