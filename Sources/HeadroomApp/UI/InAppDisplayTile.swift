@@ -24,6 +24,7 @@ struct InAppDisplayTile: View {
     let meterStyle: MeterStyle
     @Binding var usagePercentageMode: UsagePercentageMode
     @Binding var accountTitleInk: AccountTitleInk
+    @Binding var accountLayout: AccountLayout
     @Binding var showCodexSparkCountersInApp: Bool
 
     @Environment(\.colorScheme) private var colorScheme
@@ -55,6 +56,8 @@ struct InAppDisplayTile: View {
                     }
                 }
             }
+            // The swatches and VoiceOver's picker both write the binding; this one write reaches the store.
+            .onChange(of: usagePercentageMode) { _, newValue in store.setUsagePercentageMode(newValue) }
 
             swatchRow(
                 "Account names",
@@ -71,6 +74,32 @@ struct InAppDisplayTile: View {
                         Text(ink.label).tag(ink)
                     }
                 }
+            }
+            // The swatches and VoiceOver's picker both write the binding; this one write reaches the store.
+            .onChange(of: accountTitleInk) { _, newValue in store.setAccountTitleInk(newValue) }
+
+            // Popover account layout plan (R1, HD-2): a third swatch row beside the other two
+            // reading choices. Both layouts add a second column only when one would scroll.
+            swatchRow(
+                "Account layout",
+                selection: accountLayout,
+                help: "Compact shows each account on one line. Either layout adds a second column when your accounts would otherwise scroll."
+            ) {
+                ForEach(AccountLayout.allCases) { layout in
+                    accountLayoutSwatch(layout)
+                }
+            }
+            .accessibilityRepresentation {
+                Picker("Account layout", selection: $accountLayout) {
+                    ForEach(AccountLayout.allCases) { layout in
+                        Text(layout.label).tag(layout)
+                    }
+                }
+            }
+            // The VoiceOver picker writes only the binding; the swatch's action is what
+            // reaches the store, so persist from the binding too (equal values are ignored).
+            .onChange(of: accountLayout) { _, newValue in
+                store.setAccountLayout(newValue)
             }
 
             Toggle("Show Codex Spark counters in app", isOn: $showCodexSparkCountersInApp)
@@ -122,7 +151,6 @@ struct InAppDisplayTile: View {
             accessibilityLabel: "\(mode.label) percentages",
             action: {
                 usagePercentageMode = mode
-                store.setUsagePercentageMode(mode)
             }
         ) {
             HStack(spacing: 8) {
@@ -164,7 +192,6 @@ struct InAppDisplayTile: View {
             accessibilityLabel: "\(ink.label) account names",
             action: {
                 accountTitleInk = ink
-                store.setAccountTitleInk(ink)
             }
         ) {
             VStack(alignment: .leading, spacing: 3) {
@@ -180,6 +207,73 @@ struct InAppDisplayTile: View {
         Text(id.displayName)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(ProviderStyle.accountTitleInk(for: id, ink: ink, scheme: colorScheme))
+    }
+
+    // MARK: - Account layout
+
+    /// Standard previews an account section — a name over two meter lines; Compact previews
+    /// three accounts on a line each. Both draw the user's own meter as its Micro twin, the
+    /// way the Percentages swatch does.
+    private func accountLayoutSwatch(_ layout: AccountLayout) -> some View {
+        swatch(
+            label: layout.label,
+            isSelected: accountLayout == layout,
+            accessibilityLabel: "\(layout.label) account layout",
+            action: {
+                accountLayout = layout
+                store.setAccountLayout(layout)
+            }
+        ) {
+            Group {
+                switch layout {
+                case .standard:
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Personal")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(ProviderStyle.accountTitleInk(for: .claude, ink: accountTitleInk, scheme: colorScheme))
+                        layoutMeterLine(label: "5-hour", fraction: 0.72)
+                        layoutMeterLine(label: "Weekly", fraction: 0.38)
+                    }
+                case .compact:
+                    VStack(alignment: .leading, spacing: 2) {
+                        layoutCompactLine("Personal", 0.72, 0.38)
+                        layoutCompactLine("Work", 0.29, 0.61)
+                        layoutCompactLine("Studio", 0.88, 0.59)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+        }
+    }
+
+    private var swatchMicroStyle: MeterStyle {
+        CompactAccountRowRecipe.microTwin(of: meterStyle)
+    }
+
+    private func layoutMeterLine(label: String, fraction: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 7.5, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            MeterGauge(style: swatchMicroStyle, fraction: fraction, severity: .healthy, freshness: .live, scale: 0.6)
+            Text("\(Int((fraction * 100).rounded()))%")
+                .font(.system(size: 8, weight: .semibold).monospacedDigit())
+        }
+    }
+
+    private func layoutCompactLine(_ name: String, _ first: Double, _ second: Double) -> some View {
+        HStack(spacing: 4) {
+            Text(name)
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(ProviderStyle.accountTitleInk(for: .claude, ink: accountTitleInk, scheme: colorScheme))
+            Spacer(minLength: 4)
+            ForEach([first, second], id: \.self) { fraction in
+                MeterGauge(style: swatchMicroStyle, fraction: fraction, severity: .healthy, freshness: .live, scale: 0.5)
+                Text("\(Int((fraction * 100).rounded()))")
+                    .font(.system(size: 7.5, weight: .semibold).monospacedDigit())
+            }
+        }
     }
 
     // MARK: - Shared swatch shell

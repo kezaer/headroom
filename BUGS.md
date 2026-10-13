@@ -995,6 +995,26 @@ Plan: `docs/plans/2026-10-04-1138-feat-lock-screen-widgets-plan.md`; QA record
   sidebar's identity mark renders without whatever that filter adds. Flatten the filter into the
   paths or ship a pre-rendered PDF/PNG for the sidebar.
 
+## Popover account layout follow-ups (2026-10-12)
+
+From `docs/plans/2026-10-10-0836-feat-popover-account-layout-plan.md`.
+
+- **The first open after launch draws one column, then two.** The column plan is made as the
+  popover closes (the view survives reopening, U1 spike), but the very first open after launch
+  has no plan yet, so it lays out one column, measures, and re-renders at two. At multi-20 that
+  pass costs about +100ms main-thread CPU and ~290 extra bodies, once per launch; `--bench-ui
+  popover` builds a fresh view per open, so every one of its warm opens pays it. A fix would
+  persist the last plan (column count and split, keyed by the item IDs) and seed the model with
+  it on launch.
+- **Hosted App tests quit while the installed Headroom is running.** `HeadroomApp.main`'s
+  single-instance guard runs before the XCTest host is recognised, so `xcodebuild test` for
+  `HeadroomAppTests` exits at launch ("Headroom is already running … Quit it first") whenever
+  `/Applications/Headroom.app` is open. Exempt the XCTest host (`XCTestConfigurationFilePath`,
+  as `AppComposition.usesNoOpWidgetExporter` does).
+- **Compact rows have no per-account loading pill.** The Standard identity row's pill would
+  cost the row's width; the footer's refresh receipt carries progress instead (Kyle,
+  2026-10-13). Banked resets moved into the row's tooltip.
+
 ## Popover & Settings snappiness residuals (2026-10-03 perf audit)
 
 The audit's fixes 1–6 land in #157 (feather animation scope, scroll chrome out of `PopoverView`'s

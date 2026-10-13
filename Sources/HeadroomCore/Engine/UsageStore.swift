@@ -109,6 +109,8 @@ public final class UsageStore {
     /// G1A: account-title ink, mirrored the same way `meterStyle` is. The menu bar and
     /// widgets carry no title ink; the phone's display block does (iPhone parity KTD11).
     public private(set) var accountTitleInk: AccountTitleInk
+    /// Popover account layout, mirrored like `accountTitleInk` but Mac-only (KTD8).
+    public private(set) var accountLayout: AccountLayout
     public private(set) var meterStyle: MeterStyle
     public private(set) var menuBarFillSource: MenuBarFillSource
     private var savedMenuBarProviderOrder: [ProviderID]
@@ -294,6 +296,7 @@ public final class UsageStore {
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
         self.usagePercentageMode = preferences.usagePercentageMode
         self.accountTitleInk = preferences.accountTitleInk
+        self.accountLayout = preferences.accountLayout
         self.meterStyle = preferences.meterStyle
         let registeredProviderIDs = providers.map(\.id).uniqued()
         self.composedProviderOrder = registeredProviderIDs
@@ -496,6 +499,8 @@ public final class UsageStore {
     }
 
     public func setUsagePercentageMode(_ mode: UsagePercentageMode) {
+        // Settings loads its binding from the store, which echoes back through `onChange`.
+        guard usagePercentageMode != mode else { return }
         preferences.usagePercentageMode = mode
         usagePercentageMode = mode
         // KTD11: display choices reach the phone's display block, never Mac widgets.
@@ -507,6 +512,13 @@ public final class UsageStore {
         preferences.accountTitleInk = ink
         accountTitleInk = ink
         exportPhoneSyncSnapshot()
+    }
+
+    /// KTD8: no `exportPhoneSyncSnapshot()` — the phone has no popover to lay out.
+    public func setAccountLayout(_ layout: AccountLayout) {
+        guard accountLayout != layout else { return }
+        preferences.accountLayout = layout
+        accountLayout = layout
     }
 
     public func setMeterStyle(_ style: MeterStyle) {

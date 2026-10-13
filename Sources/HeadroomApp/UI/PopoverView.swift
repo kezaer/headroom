@@ -43,6 +43,9 @@ struct PopoverView: View {
     /// (`maxHeight` only sets a ceiling, never a floor). Measuring the stack and pinning an
     /// explicit height is what keeps the window honest; the cap still applies above it.
     @State private var cardsHeight: CGFloat = 0
+    /// KTD3 / KTD10: the one- or two-column plan. Heights reach it outside observation; the
+    /// body reads only the resolved plan.
+    @State private var columns = PopoverPlanModel(cap: Double(PopoverCardMetrics.cardsHeightCap))
     /// R2M12: second-resolution "now" for the waiting clock, driven only while a handoff is
     /// open. The popover's own `TimelineView` ticks per minute, which is right for "Updated
     /// N min ago" and useless for "Waiting 45s".
@@ -71,6 +74,25 @@ struct PopoverView: View {
             let cardListIdentity = store.providerOrder.flatMap { id in
                 (accountsByVisibleProvider[id] ?? []).map(\.key)
             }
+            let entriesByProvider = store.providerOrder.reduce(
+                into: [ProviderID: [ProviderAccountEntry]]()
+            ) { entries, id in
+                entries[id] = (accountsByVisibleProvider[id] ?? []).map { account in
+                    ProviderAccountEntry(account: account, snapshot: store.appDisplaySnapshot(for: account.key))
+                }
+            }
+            // R5: accounts in provider order, then Make Main order, then the spend card.
+            let columnSlots = store.providerOrder.flatMap { id in
+                ProviderCardView.columnSlots(
+                    providerID: id,
+                    entries: entriesByProvider[id] ?? [],
+                    capabilityStatus: store.providerCapabilities[id],
+                    accountLayout: store.accountLayout,
+                    showsCodexSparkCounters: store.showCodexSparkCountersInApp
+                )
+            } + (store.apiSpendProviderOrder.isEmpty ? [] : [PopoverColumnSlot.spend])
+            let columnPlan = columns.drawnPlan(for: columnSlots)
+            let fragments = PopoverCardFragment.fragments(slots: columnSlots, plan: columnPlan)
             // NB1 (2026-09-25 motion audit): what can change a card's height — each account's
             // freshness, its setup session, and its meter rows, the values the card's own
             // scopes key on. Those scopes reach only the card, so it grew on `valueSpring`
@@ -78,14 +100,14 @@ struct PopoverView: View {
             // a gap.
             let cardLayoutSignature = PopoverCardLayoutSignature(
                 freshness: store.providerOrder.flatMap { id in
-                    (accountsByVisibleProvider[id] ?? []).map { store.appDisplaySnapshot(for: $0.key).freshness }
+                    (entriesByProvider[id] ?? []).map(\.snapshot.freshness)
                 },
                 sessions: store.providerOrder.flatMap { id in
                     (accountsByVisibleProvider[id] ?? []).map { providerCardSessionKey(SetupSessions.state(for: $0)) }
                 },
                 // A live poll can add or age out a meter row with freshness unchanged.
                 rows: store.providerOrder.flatMap { id in
-                    (accountsByVisibleProvider[id] ?? []).map { store.appDisplaySnapshot(for: $0.key).windows.map(\.kind) }
+                    (entriesByProvider[id] ?? []).map { $0.snapshot.windows.map(\.kind) }
                 }
             )
             VStack(spacing: tuning.values.cardGap) {
@@ -98,70 +120,34 @@ struct PopoverView: View {
                 // height; below the cap the height tracks the measured stack, so the
                 // common case is untouched. Header and footer stay pinned.
                 ScrollView(.vertical) {
-                    VStack(spacing: tuning.values.cardGap) {
-                        ForEach(Array(store.providerOrder.enumerated()), id: \.element) { _, id in
-                            // M5A follow-up: the popover dissolves old recipe → new recipe
-                            // instead of hard-cutting. The `.id` sits on the card and the
-                            // ZStack around it is what makes that safe here: an id swap
-                            // keeps both copies alive for the fade, and in the bare
-                            // `VStack` they would stack and briefly double the card's
-                            // height — which the measured `cardsHeight` below samples. A
-                            // ZStack overlaps them instead, so the list only ever holds
-                            // the taller of the two. The specimen's hidden-twin variant is
-                            // deliberately not copied: a second live `ProviderCardView`
-                            // here would announce, claim arrivals, and read the store
-                            // twice per provider.
-                            ZStack(alignment: .topLeading) {
-                                ProviderCardView(
-                                    providerID: id,
-                                    displayName: store.displayNames[id] ?? id.raw,
-                                    entries: store.accounts(for: id).map { account in
-                                        ProviderAccountEntry(
-                                            account: account,
-                                            snapshot: store.appDisplaySnapshot(for: account.key)
-                                        )
-                                    },
-                                    capabilityStatus: store.providerCapabilities[id],
-                                    percentageMode: store.usagePercentageMode,
-                                    meterStyle: store.meterStyle,
-                                    anyProviderMultiAccount: anyProviderMultiAccount,
-                                    now: now,
-                                    onRetrySetup: {
-                                        if let account = store.primaryAccount(for: id) { store.refreshAccountNow(account.key) }
-                                    },
-                                    onRetryProvider: { store.refreshProviderNow(id) },
-                                    onRetryAccount: { store.refreshAccountNow($0.key) },
-                                    claimBankedResetReveal: { store.claimBankedResetReveal(for: $0, currentCount: $1) },
-                                    loadingForAccount: { key in
-                                        // R6/R10: evaluated by glyph children, not this large body.
-                                        AccountLoadingState.resolve(key: key, checking: store.accountActionCheckingKeys,
-                                            probing: store.probingAccounts, ends: store.lastProbeEndTimes,
-                                            fullRefresh: store.fullRefreshInFlight)
-                                    }
-                                )
-                                .id(meterRecipeKey)
-                                .transition(.opacity)
+                    PopoverColumnsLayout(columnCount: columnPlan.columnCount, metrics: columnMetrics) {
+                        ForEach(Array(fragments.enumerated()), id: \.element.id) { index, fragment in
+                            Group {
+                                if let id = fragment.providerID {
+                                    cardFragment(
+                                        fragment,
+                                        providerID: id,
+                                        entries: entriesByProvider[id] ?? [],
+                                        anyProviderMultiAccount: anyProviderMultiAccount,
+                                        now: now
+                                    )
+                                } else {
+                                    APISpendSectionView(store: store, now: now, onOpenSettings: openSettingsDismissingPopover)
+                                        // The planner counts content inside the card's 13pt padding.
+                                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { [columns] in
+                                            columns.record(max($0 - 2 * tuning.values.cardPadding, 0), for: PopoverColumnSlot.spendID)
+                                        }
+                                        // S5A: the spend tile is a sibling card, so it arrives and
+                                        // leaves the same way the provider cards above it do.
+                                        .transition(.settingsReveal)
+                                }
                             }
-                            // S2A: the swap is opacity only, so Reduce Motion keeps the
-                            // 200ms dissolve rather than hard-cutting the meter.
-                            .animation(
-                                HeadroomMotion.resolved(
-                                    HeadroomMotion.settle,
-                                    .crossfade,
-                                    reduceMotion: reduceMotion
-                                ),
-                                value: meterRecipeKey
-                            )
-                            // M7A: a card that arrives rises 4pt out of a slight blur, one
-                            // that leaves only fades — the Settings list's vocabulary, so
-                            // both surfaces describe the same account change the same way.
-                            .transition(.settingsReveal)
+                            .layoutValue(key: PopoverColumn.self, value: fragment.column)
+                            // VoiceOver reads down the first column, then the second (R5).
+                            .accessibilitySortPriority(Double(fragments.count - index))
                         }
-                        APISpendSectionView(store: store, now: now, onOpenSettings: openSettingsDismissingPopover)
-                            // S5A: the spend tile is a sibling card, so it arrives and
-                            // leaves the same way the provider cards above it do.
-                            .transition(.settingsReveal)
                     }
+                    .accessibilityElement(children: .contain)
                     // M7A: the popover had no reorder animation at all, so a Make Main
                     // promotion teleported its card to the top. The stack's own layout change
                     // rides this scope. The measured `cardsHeight` below reports the final
@@ -215,7 +201,7 @@ struct PopoverView: View {
                 // Applied outside the mask so the indicator never feathers at the ends,
                 // and outside the feather animations so its position tracks the scroll 1:1.
                 .overlay(alignment: .topTrailing) { PopoverScrollIndicator(model: scroll) }
-                .frame(height: forcedCardsHeight ?? min(cardsHeight, 640))
+                .frame(height: forcedCardsHeight ?? min(cardsHeight, PopoverCardMetrics.cardsHeightCap))
                 footer(now: now)
             }
             // M9C (Sep 2026): no entrance motion at all, not even on the first open. Kyle
@@ -224,7 +210,21 @@ struct PopoverView: View {
             // 19pt inset / 20pt tile gap / 384pt overall — tuned in the onboarding HTML
             // mockup (Jul 2026); roomier than the original concentric 12pt scheme.
             .padding(tuning.values.shellMargin)
-            .frame(width: tuning.values.shellWidth)
+            // KTD4 / KTD5: pinned from the stored plan, never animated (R7).
+            .frame(width: shellWidth(columns: columnPlan.columnCount))
+            .onChange(of: columnSlots, initial: true) { columns.update(slots: columnSlots) }
+            // KTD2: a layout change replans from the new layout's heights. It is made in
+            // Settings, so the popover is closed and nothing animates (KTD5).
+            .onChange(of: store.accountLayout, initial: true) { columns.setLayout(store.accountLayout) }
+            // U1 spike: `MenuBarExtra` grows its window with the content but never shrinks it.
+            .onChange(of: columnPlan.columnCount) { fitPopoverWindow(columns: columnPlan.columnCount) }
+            // U1 spike: the popover's view state outlives a close, and a width chosen on open
+            // shows the old one for a pass. So the next open's plan is made here, from the
+            // heights just drawn, and the hidden window takes its width before it reappears.
+            .onDisappear {
+                columns.popoverDidClose()
+                fitPopoverWindow(columns: columns.drawnPlan(for: columnSlots).columnCount)
+            }
             // One clean system surface: Liquid Glass on Tahoe, native material on Sequoia.
             // Both paths own their full background so no redundant material muddies the host.
             .modifier(PopoverSurfaceModifier(
@@ -240,6 +240,103 @@ struct PopoverView: View {
             // one place it enters the view tree (the Settings specimen sets its own).
             .environment(\.accountTitleInk, store.accountTitleInk)
             .environment(\.headroomTuning, tuning.values)
+        }
+    }
+
+    /// One provider card, or one piece of it, in its column (KTD6).
+    private func cardFragment(
+        _ fragment: PopoverCardFragment,
+        providerID id: ProviderID,
+        entries: [ProviderAccountEntry],
+        anyProviderMultiAccount: Bool,
+        now: Date
+    ) -> some View {
+        // M5A follow-up: the popover dissolves old recipe → new recipe instead of
+        // hard-cutting. The `.id` sits on the card and the ZStack around it is what makes
+        // that safe here: an id swap keeps both copies alive for the fade, and stacked they
+        // would briefly double the card's height — which the measured `cardsHeight` samples.
+        // A ZStack overlaps them instead, so the list only ever holds the taller of the two.
+        // The specimen's hidden-twin variant is deliberately not copied: a second live
+        // `ProviderCardView` here would announce, claim arrivals, and read the store twice
+        // per provider.
+        ZStack(alignment: .topLeading) {
+            ProviderCardView(
+                providerID: id,
+                displayName: store.displayNames[id] ?? id.raw,
+                entries: entries,
+                capabilityStatus: store.providerCapabilities[id],
+                percentageMode: store.usagePercentageMode,
+                meterStyle: store.meterStyle,
+                anyProviderMultiAccount: anyProviderMultiAccount,
+                now: now,
+                onRetrySetup: {
+                    if let account = store.primaryAccount(for: id) { store.refreshAccountNow(account.key) }
+                },
+                onRetryProvider: { store.refreshProviderNow(id) },
+                onRetryAccount: { store.refreshAccountNow($0.key) },
+                claimBankedResetReveal: { store.claimBankedResetReveal(for: $0, currentCount: $1) },
+                loadingForAccount: { key in
+                    // R6/R10: evaluated by glyph children, not this large body.
+                    AccountLoadingState.resolve(key: key, checking: store.accountActionCheckingKeys,
+                        probing: store.probingAccounts, ends: store.lastProbeEndTimes,
+                        fullRefresh: store.fullRefreshInFlight)
+                },
+                fragment: fragment.accountRange,
+                // `Layout.placeSubviews` is nonisolated but SwiftUI runs layout on the main thread.
+                onMeasureColumnItem: { [columns] id, height in
+                    MainActor.assumeIsolated { columns.record(height, for: id) }
+                },
+                accountLayout: store.accountLayout,
+                showsCodexSparkCounters: store.showCodexSparkCountersInApp
+            )
+            .id(meterRecipeKey)
+            .transition(.opacity)
+        }
+        // S2A: the swap is opacity only, so Reduce Motion keeps the
+        // 200ms dissolve rather than hard-cutting the meter.
+        .animation(
+            HeadroomMotion.resolved(
+                HeadroomMotion.settle,
+                .crossfade,
+                reduceMotion: reduceMotion
+            ),
+            value: meterRecipeKey
+        )
+        // M7A: a card that arrives rises 4pt out of a slight blur, one
+        // that leaves only fades — the Settings list's vocabulary, so
+        // both surfaces describe the same account change the same way.
+        .transition(.settingsReveal)
+    }
+
+    /// KTD4 / R7: one card width, or exactly two plus the gap (384 / 750 at the shipped
+    /// values). Read from `tuning` so the DialKit shell dials still drive it; the plan's own
+    /// height model stays on `AccountColumnsMetrics.popover`.
+    private func shellWidth(columns: Int) -> CGFloat {
+        let values = tuning.values
+        let card = values.shellWidth - 2 * values.shellMargin
+        return values.shellWidth + CGFloat(max(columns, 1) - 1) * (card + values.cardGap)
+    }
+
+    /// The column layout's card width and gap, from the same tuning values as the shell.
+    private var columnMetrics: AccountColumnsMetrics {
+        let values = tuning.values
+        var metrics = AccountColumnsMetrics.popover
+        metrics.columnWidth = values.shellWidth - 2 * values.shellMargin
+        metrics.cardGap = values.cardGap
+        return metrics
+    }
+
+    /// U1 spike: a wider plan grows the `MenuBarExtra` window on its own; a narrower one has
+    /// to be fitted, or the content sits centred in the old width with stray shadow edges.
+    /// The left edge stays on the status item.
+    private func fitPopoverWindow(columns count: Int) {
+        let width = shellWidth(columns: count)
+        DispatchQueue.main.async {
+            guard let window = popoverWindow, window.frame.width > width + 0.5 else { return }
+            var frame = window.frame
+            frame.size.width = width
+            window.setFrame(frame, display: window.isVisible)
+            window.invalidateShadow()
         }
     }
 
@@ -783,7 +880,18 @@ enum PopoverHeaderStatusResolver {
 enum PopoverCardMetrics {
     static let shellWidth: CGFloat = 384
     static let shellMargin: CGFloat = 19
-    static let cardWidth: CGFloat = shellWidth - 2 * shellMargin
+    /// One source with the column planner, so the cards it measures and the widths it plans
+    /// can't drift apart.
+    static let cardWidth = CGFloat(AccountColumnsMetrics.popover.columnWidth)
+    static let cardPadding = CGFloat(AccountColumnsMetrics.popover.cardPadding)
+    static let accountGap = CGFloat(AccountColumnsMetrics.popover.accountGap)
+    /// The card stack scrolls past this height; with two columns it caps the taller one (R8).
+    static let cardsHeightCap: CGFloat = 640
+
+    /// KTD4 / R7: one card width (384 overall) or exactly two plus the 20pt gap (750).
+    static func shellWidth(columns: Int) -> CGFloat {
+        CGFloat(AccountColumnsMetrics.popover.gridWidth(columns: columns)) + 2 * shellMargin
+    }
 }
 
 /// L2A geometry. The gutter offset is measured from the scroll viewport's trailing edge,

@@ -53,7 +53,7 @@ struct APISpendSectionView: View {
                 actionRow(models)
             }
             // Padding matches the provider cards above, so sibling tiles share one
-            // padding and radius.
+            // padding and radius; the column planner models the same pad.
             .padding(tuning.cardPadding)
             .raisedTile(cornerRadius: tuning.cardCornerRadius)
         }

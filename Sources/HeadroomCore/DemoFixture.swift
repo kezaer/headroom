@@ -343,6 +343,9 @@ extension DemoFixture {
         case multiTwo = "multi-2"
         case multiThree = "multi-3"
         case multiFive = "multi-5"
+        /// Popover account layout plan: the reported case, 7 Claude + 1 Codex, which needs a
+        /// second column (Standard) or the Compact rows to fit without scrolling.
+        case multiSeven = "multi-7"
         /// R15 (2026-09-19 polling plan): the tested envelope — 20 Claude, 20 Codex, 20 Grok,
         /// 1 Cursor. Claude and Grok rows simulate a 4-second probe: 20 × 4 s spends the
         /// 2-minute interval's 120 s budget partway through the second pass, so the measured
@@ -490,6 +493,15 @@ extension DemoFixture {
         }
     }
 
+    /// The `multi-20` envelope without its simulated 4s probes, so one refresh lands every row
+    /// at once: what the bench and the render harness measure and capture.
+    public static func settledEnvelopePairs() -> [(account: ProviderAccount, provider: any UsageProvider)] {
+        generatedAccounts(provider: .claude, count: 20)
+            + generatedAccounts(provider: .codex, count: 20)
+            + generatedAccounts(provider: .grok, count: 20)
+            + [builtInProviderPair(provider: .cursor, snapshot: cursorSnapshot)]
+    }
+
     /// A single built-in account posed from a ready-made snapshot — used for the
     /// billing-period providers (Grok/Cursor) whose window shape doesn't fit `demoAccount`'s
     /// fixed 5h/weekly pair.
@@ -568,6 +580,17 @@ extension DemoFixture {
                 demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
                 demoAccount(provider: .codex, id: "codex-work", label: "Work", plan: "Pro", fiveHour: 54, weekly: 79),
                 demoAccount(provider: .codex, id: "codex-studio", label: "Studio", plan: "Plus", fiveHour: 22, weekly: 48),
+            ]
+        case .multiSeven:
+            pairs = [
+                demoAccount(provider: .claude, id: "personal", label: "Personal", plan: "Max", fiveHour: 28, weekly: 62, builtIn: true),
+                demoAccount(provider: .claude, id: "work", label: "Work", plan: "Pro", fiveHour: 71, weekly: 88),
+                demoAccount(provider: .claude, id: "studio", label: "Studio", plan: "Max", fiveHour: 12, weekly: 41),
+                demoAccount(provider: .claude, id: "agency", label: "Agency", plan: "Team", fiveHour: 47, weekly: 55),
+                demoAccount(provider: .claude, id: "lab", label: "Lab", plan: "Pro", fiveHour: 93, weekly: 97),
+                demoAccount(provider: .claude, id: "client", label: "Client", plan: "Max", fiveHour: 64, weekly: 30),
+                demoAccount(provider: .claude, id: "side", label: "Side", plan: "Pro", fiveHour: 85, weekly: 72),
+                demoAccount(provider: .codex, id: "codex-main", label: "Personal", plan: "Prolite", fiveHour: 9, weekly: 36, builtIn: true),
             ]
         case .envelope:
             pairs = generatedAccounts(provider: .claude, count: 20, probeDuration: 4)

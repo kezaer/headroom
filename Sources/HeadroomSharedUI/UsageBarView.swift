@@ -105,6 +105,11 @@ public struct UsageBarView: View {
     /// KTD3: type, spacing, the numeral column and the gauge all multiply by this, so the
     /// row reserves its larger layout rather than being scaled after layout. The Mac passes 1.
     public var scale: CGFloat = 1
+    /// Popover account layout (R11, KTD7): set, a Micro row draws as one Compact cell — this
+    /// short window label, the gauge and the numeral — with no countdown, suffix term or
+    /// tooltip of its own. The Compact row owns those (R13), so this cell stays out of the
+    /// accessibility tree.
+    public var compactLabel: String? = nil
 
     public init(
         reading: UsageMeterReading,
@@ -113,7 +118,8 @@ public struct UsageBarView: View {
         meterStyle: MeterStyle,
         dimmed: Bool = false,
         arrivalKey: AccountKey? = nil,
-        scale: CGFloat = 1
+        scale: CGFloat = 1,
+        compactLabel: String? = nil
     ) {
         self.reading = reading
         self.percentageMode = percentageMode
@@ -122,6 +128,7 @@ public struct UsageBarView: View {
         self.dimmed = dimmed
         self.arrivalKey = arrivalKey
         self.scale = scale
+        self.compactLabel = compactLabel
     }
 
     /// The Mac's form: the reading is normalized from the actual provider window.
@@ -132,7 +139,8 @@ public struct UsageBarView: View {
         meterStyle: MeterStyle,
         dimmed: Bool = false,
         arrivalKey: AccountKey? = nil,
-        scale: CGFloat = 1
+        scale: CGFloat = 1,
+        compactLabel: String? = nil
     ) {
         self.init(
             reading: UsageMeterReading(window: window),
@@ -141,7 +149,8 @@ public struct UsageBarView: View {
             meterStyle: meterStyle,
             dimmed: dimmed,
             arrivalKey: arrivalKey,
-            scale: scale
+            scale: scale,
+            compactLabel: compactLabel
         )
     }
 
@@ -211,8 +220,8 @@ public struct UsageBarView: View {
     /// M4A leans on it too: the roll from "0%" happens inside a frame that never resizes.
     /// KTD2: measured with CoreText (`HeadroomWidgetFontMetrics.textWidth`), which reports
     /// exactly what `NSString.size(withAttributes:)` did for the same face.
-    private var percentColumnWidth: CGFloat {
-        ceil(HeadroomWidgetFontMetrics.textWidth("100%", size: percentSize, weight: percentWeight, mono: true))
+    private func percentColumnWidth(size: CGFloat, weight: Font.Weight) -> CGFloat {
+        ceil(HeadroomWidgetFontMetrics.textWidth("100%", size: size, weight: weight, mono: true))
     }
 
     // MARK: - What the window says
@@ -402,15 +411,20 @@ public struct UsageBarView: View {
             case .full:
                 fullRow
             case .micro:
-                // M3A′: Micro has no room for the state label — a rendered "· Last known …"
-                // pushes the gauge and numeral out of the card — so the state travels in the
-                // tooltip and the accessibility value instead of a line of its own.
-                microRow.help(microHelp)
+                if let compactLabel {
+                    compactCell(compactLabel)
+                } else {
+                    // M3A′: Micro has no room for the state label — a rendered "· Last known …"
+                    // pushes the gauge and numeral out of the card — so the state travels in
+                    // the tooltip and the accessibility value instead of a line of its own.
+                    microRow.help(microHelp)
+                }
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(spokenLabel) usage")
         .accessibilityValue(accessibilityValue)
+        .accessibilityHidden(compactLabel != nil)
         // M9A: a staged arrival waits one beat so the count-up starts after the popover has
         // finished opening, not behind it. `.task` is cancelled on close, so a popover shut
         // inside that beat never claims the arrival — it simply draws in on the next open.
@@ -484,6 +498,34 @@ public struct UsageBarView: View {
         }
     }
 
+    /// The Compact cell (R11): label, gauge and numeral on the row's one optical axis, each
+    /// at a fixed width so cells line up row to row. Sizes are the options doc's proposal
+    /// (HC-D: numeral 15) pending live review.
+    private func compactCell(_ label: String) -> some View {
+        HStack(alignment: .center, spacing: compactGap) {
+            // An empty label draws none: the Compact card's header names the column instead.
+            if !label.isEmpty {
+                Text(label)
+                    .font(.system(size: MeterSuffixColumn.size * scale))
+                    .foregroundStyle(ProviderStyle.tertiaryText(scheme: scheme))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .widgetCapHeightCentered(size: MeterSuffixColumn.size * scale, weight: .regular)
+            }
+            gauge
+            Text(percentText)
+                .font(.system(size: compactPercentSize, weight: .semibold).monospacedDigit())
+                .foregroundStyle(numeralInk)
+                .contentTransition(numeralTransition)
+                .frame(minWidth: percentColumnWidth(size: compactPercentSize, weight: .semibold), alignment: .trailing)
+                .widgetCapHeightCentered(size: compactPercentSize, weight: .semibold)
+        }
+        .fixedSize()
+    }
+
+    private var compactGap: CGFloat { 4 * scale }
+    private var compactPercentSize: CGFloat { 15 * scale }
+
     /// Micro's label + countdown. `truncatesLabel` decides whether the pair pins to its ideal
     /// width (the label never truncates) or yields to the proposed width — where the label is
     /// the sole flexible element, so it truncates while the countdown stays whole. `short`
@@ -555,7 +597,7 @@ public struct UsageBarView: View {
                 .font(.system(size: percentSize, weight: percentWeight).monospacedDigit())
                 .foregroundStyle(numeralInk)
                 .contentTransition(numeralTransition)
-                .frame(minWidth: percentColumnWidth, alignment: .trailing)
+                .frame(minWidth: percentColumnWidth(size: percentSize, weight: percentWeight), alignment: .trailing)
                 .widgetCapHeightCentered(size: percentSize, weight: percentWeight)
             // R2B2: an `.unavailable` row has no term to print, but it keeps the column —
             // otherwise its "—" and gauge slide right of the live rows stacked above it.

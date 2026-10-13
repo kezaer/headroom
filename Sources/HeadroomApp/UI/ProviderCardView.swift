@@ -281,6 +281,18 @@ struct ProviderCardView: View {
     var announcesAccessibilityEvents: Bool = true
     var claimBankedResetReveal: ((AccountKey, Int?) -> Bool)? = nil
     var loadingForAccount: (AccountKey) -> AccountLoadingState = { _ in .init() }
+    /// KTD6: the slice of this card's drawn accounts a popover column shows; nil is the whole
+    /// card. Every whole-provider decision (row titles, emails, the menu-bar marker, Stop
+    /// Waiting) still reads the full `entries`.
+    var fragment: Range<Int>? = nil
+    /// KTD3: reports each column item's content height to the popover's plan, keyed like
+    /// `columnSlots`. Nil outside the popover.
+    var onMeasureColumnItem: (@Sendable (String, CGFloat) -> Void)? = nil
+    /// R11 / R15: Compact draws each account as one line unless its state needs the Standard
+    /// section's actions. The capability-recovery card stays Standard.
+    var accountLayout: AccountLayout = .standard
+    /// The in-app Spark switch, so a Compact row never shows a window Standard hides.
+    var showsCodexSparkCounters: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsConnectedChip = false
@@ -306,21 +318,35 @@ struct ProviderCardView: View {
     }
     var body: some View {
         let _ = BenchCounters.hit("ProviderCardView")
+        let presentation = capabilityPresentation
         Group {
-            if let presentation = capabilityRecoveryPresentation(
-                   state: capabilityStatus?.state,
-                   hasActiveSetupSession: hasActiveSetupSession,
-                   hasRetainedReading: entries.contains { !$0.snapshot.windows.isEmpty }
-               ) {
+            if let presentation {
                 capabilityBody(presentation)
             } else if isMultiAccount {
                 multiAccountBody
+            } else if let recipe = singleAccountCompactRecipe {
+                let columns = recipe.shownWindows.map(\.window.kind)
+                VStack(alignment: .leading, spacing: 0) {
+                    CompactCardHeader(providerName: displayName, columns: columns, percentageMode: percentageMode)
+                    compactRow(
+                        for: primaryEntry,
+                        recipe: recipe,
+                        isMenuBarAccount: false,
+                        providerAccounts: entries.map(\.account),
+                        columns: columns
+                    )
+                }
             } else {
                 singleAccountBody
             }
         }
+        .columnItemHeight(
+            Self.wholeCardSlotID(providerID),
+            report: Self.splitsByAccount(entries: entries, presentation: presentation) ? nil : onMeasureColumnItem
+        )
         // 13pt pad / 9pt rhythm — one step above the large widget's 10/9 to account
-        // for the popover's larger type (walked down from 20/14 → 16/11 → here).
+        // for the popover's larger type (walked down from 20/14 → 16/11 → here). The
+        // column planner models the same pad (`AccountColumnsMetrics`, via `tuning`).
         .padding(tuning.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .raisedTile(cornerRadius: tuning.cardCornerRadius)
@@ -358,13 +384,106 @@ struct ProviderCardView: View {
         }
     }
 
+    private var capabilityPresentation: CapabilityRecoveryPresentation? {
+        Self.capabilityPresentation(providerID: providerID, entries: entries, capabilityStatus: capabilityStatus)
+    }
+
+    /// KTD6: the first fragment is the card's header and owns its announcements, so a split
+    /// card speaks once.
+    private var isFirstFragment: Bool { (fragment?.lowerBound ?? 0) == 0 }
+
+    private func inFragment(_ drawn: [ProviderAccountEntry]) -> ArraySlice<ProviderAccountEntry> {
+        guard let fragment else { return drawn[...] }
+        let lower = min(fragment.lowerBound, drawn.count), upper = min(fragment.upperBound, drawn.count)
+        return drawn[lower..<upper]
+    }
+
+    // MARK: - Popover columns (KTD1, KTD6)
+
+    /// How this card enters the popover's column flow. A multi-account card offers one item per
+    /// drawn account so the popover can split it; anything else is one whole-card item. A
+    /// capability-recovery card's header is folded into its first account (R9).
+    static func columnSlots(
+        providerID: ProviderID,
+        entries: [ProviderAccountEntry],
+        capabilityStatus: ProviderCapabilityStatus?,
+        accountLayout: AccountLayout = .standard,
+        showsCodexSparkCounters: Bool = false
+    ) -> [PopoverColumnSlot] {
+        let presentation = capabilityPresentation(providerID: providerID, entries: entries, capabilityStatus: capabilityStatus)
+        guard splitsByAccount(entries: entries, presentation: presentation) else {
+            return [PopoverColumnSlot(id: wholeCardSlotID(providerID), providerID: providerID)]
+        }
+        // Each piece of a split Compact card repeats its column header.
+        let compactHeader = accountLayout == .compact && presentation == nil
+            && compactColumns(entries: entries, showsCodexSparkCounters: showsCodexSparkCounters) != nil
+        return drawnAccounts(entries: entries, presentation: presentation).enumerated().map { index, entry in
+            PopoverColumnSlot(
+                id: entry.account.key.description,
+                providerID: providerID,
+                headerID: index == 0 && presentation != nil ? capabilityHeaderID(providerID) : nil,
+                fragmentHeader: compactHeader ? Double(CompactCardHeader.height) : 0
+            )
+        }
+    }
+
+    /// The windows a multi-account Compact card's header names, in column order: the columns
+    /// of the account showing the most, so a weekly-only account sits under "wk" beside its
+    /// neighbours. Nil when no account draws a Compact row, so the card has no header.
+    static func compactColumns(entries: [ProviderAccountEntry], showsCodexSparkCounters: Bool) -> [WindowKind]? {
+        let recipes = entries.map { entry in
+            CompactAccountRowRecipe(
+                snapshot: entry.snapshot,
+                meterStyle: .default,
+                percentageMode: .remaining,
+                now: Date(),
+                requiresStandardSection: compactRowNeedsStandardSection(entry.account),
+                showsCodexSparkCounters: showsCodexSparkCounters
+            )
+        }.filter { !$0.fallsBackToStandard }
+        guard !recipes.isEmpty else { return nil }
+        let widest = recipes.max { $0.shownWindows.count < $1.shownWindows.count }
+        return widest?.shownWindows.map(\.window.kind) ?? []
+    }
+
+    private static func capabilityPresentation(
+        providerID: ProviderID,
+        entries: [ProviderAccountEntry],
+        capabilityStatus: ProviderCapabilityStatus?
+    ) -> CapabilityRecoveryPresentation? {
+        capabilityRecoveryPresentation(
+            state: capabilityStatus?.state,
+            hasActiveSetupSession: providerCardHasActiveSetupSession(entries: entries),
+            hasRetainedReading: entries.contains { !$0.snapshot.windows.isEmpty }
+        )
+    }
+
+    /// The account sections a multi-account body draws: the capability body leaves out
+    /// accounts still waiting on their first reading.
+    private static func drawnAccounts(
+        entries: [ProviderAccountEntry],
+        presentation: CapabilityRecoveryPresentation?
+    ) -> [ProviderAccountEntry] {
+        presentation == nil ? entries : entries.filter { $0.snapshot.freshness != .pending }
+    }
+
+    private static func splitsByAccount(
+        entries: [ProviderAccountEntry],
+        presentation: CapabilityRecoveryPresentation?
+    ) -> Bool {
+        entries.count > 1 && !drawnAccounts(entries: entries, presentation: presentation).isEmpty
+    }
+
+    private static func wholeCardSlotID(_ providerID: ProviderID) -> String { "card:\(providerID.raw)" }
+    private static func capabilityHeaderID(_ providerID: ProviderID) -> String { "header:\(providerID.raw)" }
+
     private func announceSetupStateIfNeeded() {
-        guard announcesAccessibilityEvents else { return }
+        guard announcesAccessibilityEvents, isFirstFragment else { return }
         SetupSessions.announceFailureIfNeeded(for: primaryAccount)
     }
 
     private func announceCapabilityStateIfNeeded() {
-        guard announcesAccessibilityEvents else { return }
+        guard announcesAccessibilityEvents, isFirstFragment else { return }
         SetupSessions.announceCapabilityIfNeeded(capabilityStatus?.state, for: providerID)
     }
 
@@ -378,48 +497,60 @@ struct ProviderCardView: View {
     private func capabilityBody(_ presentation: CapabilityRecoveryPresentation) -> some View {
         let providerAccounts = entries.map(\.account)
         return VStack(alignment: .leading, spacing: 26) {
-            VStack(alignment: .leading, spacing: 10) {
-                IdentityRow(
-                    providerID: providerID,
-                    title: displayName,
-                    planLabel: nil,
-                    isMenuBarAccount: false,
-                    isStale: false,
-                    email: nil,
-                    showsPersistentEmail: false,
-                    showsConnectedChip: false
-                )
-                ProviderCapabilityRecoveryView(
-                    presentation: presentation,
-                    stopWaitingAccount: activeSetupAccount,
-                    onPrimaryAction: {
-                        performRecovery(
-                            presentation.recovery.primaryAction,
-                            for: primaryAccount,
-                            onRetry: onRetryProvider ?? onRetrySetup
-                        )
-                    },
-                    onSecondaryAction: presentation.recovery.secondaryAction.map { action in
-                        {
-                            performRecovery(action, for: primaryAccount, onRetry: onRetryProvider ?? onRetrySetup)
+            if isFirstFragment {
+                VStack(alignment: .leading, spacing: 10) {
+                    IdentityRow(
+                        providerID: providerID,
+                        title: displayName,
+                        planLabel: nil,
+                        isMenuBarAccount: false,
+                        isStale: false,
+                        email: nil,
+                        showsPersistentEmail: false,
+                        showsConnectedChip: false
+                    )
+                    ProviderCapabilityRecoveryView(
+                        presentation: presentation,
+                        stopWaitingAccount: activeSetupAccount,
+                        onPrimaryAction: {
+                            performRecovery(
+                                presentation.recovery.primaryAction,
+                                for: primaryAccount,
+                                onRetry: onRetryProvider ?? onRetrySetup
+                            )
+                        },
+                        onSecondaryAction: presentation.recovery.secondaryAction.map { action in
+                            {
+                                performRecovery(action, for: primaryAccount, onRetry: onRetryProvider ?? onRetrySetup)
+                            }
                         }
-                    }
-                )
+                    )
+                }
+                // R9: a split card's header and notice ride its first fragment only.
+                .columnItemHeight(Self.capabilityHeaderID(providerID), report: isMultiAccount ? onMeasureColumnItem : nil)
             }
             if isMultiAccount {
                 // T1A: the same 26pt account gap as `multiAccountBody` — one grouping rhythm
                 // whether or not the capability notice is showing.
-                VStack(alignment: .leading, spacing: 26) {
-                    ForEach(entries.filter { $0.snapshot.freshness != .pending }) { entry in
+                // Compact: the plan models the 4pt row gap, so each Standard section carries
+                // the rest of the 26pt as its own measured inset, as in `multiAccountBody`.
+                ColumnItemsStack(
+                    spacing: isCompact ? CompactAccountRow.rowGap : PopoverCardMetrics.accountGap,
+                    report: onMeasureColumnItem
+                ) {
+                    ForEach(inFragment(Self.drawnAccounts(entries: entries, presentation: presentation))) { entry in
                         accountSection(
                             for: entry,
                             providerAccounts: providerAccounts,
                             showsStopWaiting: false,
                             // R2C22: the card already stamped the mark on its own header row
                             // above; a second copy per account row made "✳ Claude" and
-                            // "✳ Personal" read as two provider titles 7pt apart.
-                            showsMark: false
+                            // "✳ Personal" read as two provider titles 7pt apart. A fragment in
+                            // the second column has no header (R9), so its rows keep the mark.
+                            showsMark: !isFirstFragment
                         )
+                        .padding(.vertical, isCompact ? Self.compactFallbackInset : 0)
+                        .layoutValue(key: ColumnItemID.self, value: entry.account.key.description)
                     }
                 }
             } else if !snapshot.windows.isEmpty {
@@ -657,15 +788,99 @@ struct ProviderCardView: View {
         // its identity, so row mode has no separate provider header or account counter.
         // T1A widened it 22 → 26 to hold the grouping now the title sits at `.medium` and
         // the meter rows inside a section are 2pt tighter.
-        return VStack(alignment: .leading, spacing: tuning.accountGap) {
-            ForEach(entries) { entry in
-                accountSection(
-                    for: entry,
-                    providerAccounts: providerAccounts,
-                    showsStopWaiting: activeSetupAccount?.key == entry.account.key
-                )
+        let columns = isCompact
+            ? Self.compactColumns(entries: entries, showsCodexSparkCounters: showsCodexSparkCounters)
+            : nil
+        return VStack(alignment: .leading, spacing: 0) {
+            if let columns {
+                CompactCardHeader(providerName: displayName, columns: columns, percentageMode: percentageMode)
+            }
+            ColumnItemsStack(
+                spacing: isCompact ? CompactAccountRow.rowGap : tuning.accountGap,
+                report: onMeasureColumnItem
+            ) {
+                ForEach(inFragment(entries)) { entry in
+                    Group {
+                        if isCompact, let recipe = compactRecipe(for: entry) {
+                            compactRow(
+                                for: entry,
+                                recipe: recipe,
+                                isMenuBarAccount: entry.id == entries.first?.id,
+                                providerAccounts: providerAccounts,
+                                columns: columns ?? recipe.shownWindows.map(\.window.kind)
+                            )
+                        } else {
+                            accountSection(
+                                for: entry,
+                                providerAccounts: providerAccounts,
+                                showsStopWaiting: activeSetupAccount?.key == entry.account.key
+                            )
+                            // R15: a Standard section among Compact rows keeps the full 26pt
+                            // account gap from a neighbouring section, and 15pt from a row.
+                            .padding(.vertical, isCompact ? Self.compactFallbackInset : 0)
+                        }
+                    }
+                    .layoutValue(key: ColumnItemID.self, value: entry.account.key.description)
+                }
             }
         }
+    }
+
+    // MARK: - Compact (R11–R15)
+
+    private static let compactFallbackInset = (PopoverCardMetrics.accountGap - CompactAccountRow.rowGap) / 2
+
+    private var isCompact: Bool { accountLayout == .compact }
+
+    /// The row's recipe, or nil where the account keeps its Standard section (R15).
+    private func compactRecipe(for entry: ProviderAccountEntry) -> CompactAccountRowRecipe? {
+        let recipe = CompactAccountRowRecipe(
+            snapshot: entry.snapshot,
+            meterStyle: meterStyle,
+            percentageMode: percentageMode,
+            now: now,
+            requiresStandardSection: compactRowNeedsStandardSection(entry.account),
+            showsCodexSparkCounters: showsCodexSparkCounters
+        )
+        return recipe.fallsBackToStandard ? nil : recipe
+    }
+
+    /// The single-account card's own setup shells (Connect, Waiting, guided setup) are
+    /// actions the snapshot alone doesn't describe.
+    private var singleAccountCompactRecipe: CompactAccountRowRecipe? {
+        guard isCompact, let primaryEntry,
+              claudeSessionOwnedState == nil,
+              claudeGuidedSetupOutcome == nil,
+              snapshot.codexConnectionAction == nil
+        else { return nil }
+        return compactRecipe(for: primaryEntry)
+    }
+
+    private func compactRow(
+        for entry: ProviderAccountEntry?,
+        recipe: CompactAccountRowRecipe,
+        isMenuBarAccount: Bool,
+        providerAccounts: [ProviderAccount],
+        columns: [WindowKind]
+    ) -> some View {
+        let account = entry?.account ?? primaryAccount
+        // The single-account card titles itself the way `accountIdentityRow` does.
+        let titled = isMultiAccount || anyProviderMultiAccount
+        return CompactAccountRow(
+            providerID: providerID,
+            title: titled
+                ? rowTitle(for: account, in: providerAccounts, providerDisplayName: displayName)
+                : displayName,
+            email: entry?.snapshot.accountEmail,
+            showsPersistentEmail: titled && showsPersistentEmail(for: account, in: providerAccounts),
+            isMenuBarAccount: isMultiAccount && isMenuBarAccount,
+            recipe: recipe,
+            columns: columns,
+            bankedResets: entry?.snapshot.bankedResets,
+            percentageMode: percentageMode,
+            now: now,
+            arrivalKey: announcesAccessibilityEvents ? account.key : nil
+        )
     }
 
     private func accountSection(
@@ -1793,4 +2008,41 @@ private struct CommandRecoveryRow: View {
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(command, forType: .string)
     }
+}
+
+private extension View {
+    /// KTD3 / KTD10: reports a popover column item's height to the plan model, which keeps
+    /// heights out of observation. Always attached, so a card that starts or stops splitting
+    /// keeps its view identity; it reports only while someone listens.
+    func columnItemHeight(_ id: String, report: (@Sendable (String, CGFloat) -> Void)?) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.size.height } action: { report?(id, $0) }
+    }
+}
+
+/// R15: an account whose setup session or sign-in failure owns its row keeps the Standard
+/// section, which is where Stop Waiting, Try Again and the failure sentence live.
+@MainActor
+func compactRowNeedsStandardSection(_ account: ProviderAccount) -> Bool {
+    compactRowNeedsStandardSection(
+        state: SetupSessions.state(for: account),
+        offersStopWaiting: setupSessionOffersStopWaiting(for: account),
+        hasFailureMessage: SetupSessions.failureMessage(for: account) != nil
+    )
+}
+
+/// Pure over the session's inputs, so the fallback is provable without a coordinator.
+func compactRowNeedsStandardSection(
+    state: SetupSessionState,
+    offersStopWaiting: Bool,
+    hasFailureMessage: Bool
+) -> Bool {
+    // `.connected` is settled only by the Standard section's (or the single-account card's)
+    // Connected payoff. A Compact row runs none, so the session would stay `.connected` and
+    // the coordinator would refuse every later non-reset setup start. The section shows the
+    // brief payoff, settles the session, and the row returns to Compact.
+    state == .connected
+        || setupSessionOwnsSurface(for: state)
+        || offersStopWaiting
+        || setupHandoffRefusalMessage(for: state) != nil
+        || hasFailureMessage
 }
