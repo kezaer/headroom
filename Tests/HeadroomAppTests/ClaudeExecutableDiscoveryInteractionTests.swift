@@ -577,6 +577,74 @@ import HeadroomCore
         }
     }
 
+    /// A startup question opens the same interactive launch an approval does, and the reason
+    /// recorded when **Open Claude Code** was pressed lands in the prepared script (and from
+    /// there the durable record). A plain approval keeps no reason, and a sign-in never
+    /// borrows one left over from an earlier startup-question launch.
+    @MainActor @Test func aStartupQuestionStagesTheInteractiveLaunchWithItsReason() async throws {
+        let account = ProviderAccount.builtIn(for: .claude)
+        defer { SetupSessions.noteRequestedTrustReason(nil, for: account.key) }
+
+        for (requested, purpose, expectedKind, expectedReason) in [
+            (ClaudeInteractiveLaunchReason.startupQuestion, SetupHandoffPurpose.trust,
+             ClaudeSetupScriptKind.interactive, ClaudeInteractiveLaunchReason?.some(.startupQuestion)),
+            (nil, .trust, .interactive, nil),
+            (.startupQuestion, .setup, .signIn, nil),
+        ] {
+            let workspace = temporaryWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            SetupSessions.noteRequestedTrustReason(requested, for: account.key)
+
+            let staging = await stageClaudeHandoff(
+                for: account,
+                purpose: purpose,
+                workspace: workspace,
+                versions: ClaudeVersionReaderSpy("2.1.312 (Claude Code)")
+            )
+
+            #expect(staging.handoff?.claudeScriptKind == expectedKind)
+            #expect(staging.staged?.claudeInteractiveReason == expectedReason)
+            let script = try #require(staging.script)
+            #expect(script.contains("auth login") == (expectedKind == .signIn))
+            await staging.discard()
+        }
+    }
+
+    /// **Open Claude Code** routes to the approval's launch; only the reason it records sets
+    /// it apart. Try Again maps that reason back to the action that started it, so a timed-out
+    /// startup question restarts as one and a plain approval stays an approval.
+    @MainActor @Test func openClaudeCodeSharesTheTrustLaunchAndTryAgainKeepsItsReason() {
+        #expect(SetupSessions.recoveryRoute(for: .answerClaudeQuestion) == .workspaceTrust)
+        #expect(SetupSessions.trustLaunchReason(for: .answerClaudeQuestion) == .startupQuestion)
+        for action in [SetupRecoveryAction.openClaudeWorkspace, .openCursorWorkspace] {
+            #expect(SetupSessions.trustLaunchReason(for: action) == nil)
+        }
+        #expect(SetupSessions.workspaceTrustRecoveryAction(for: .startupQuestion) == .answerClaudeQuestion)
+        #expect(SetupSessions.workspaceTrustRecoveryAction(for: nil) == .openClaudeWorkspace)
+
+        let account = ProviderAccount(
+            id: AccountID("claude-startup-question"), providerID: .claude, label: "Work", isBuiltIn: false
+        )
+        defer { SetupSessions.noteRequestedTrustReason(nil, for: account.key) }
+        SetupSessions.noteRequestedTrustReason(.startupQuestion, for: account.key)
+        let route = SetupSessions.tryAgainRoute(hasActiveHandoff: false, purpose: .trust)
+        #expect(SetupSessions.tryAgainAction(for: route) == .startWorkspaceTrust)
+        let retried = SetupSessions.workspaceTrustRecoveryAction(
+            for: SetupSessions.requestedTrustReason(for: account.key)
+        )
+        #expect(retried == .answerClaudeQuestion)
+        #expect(SetupSessions.trustLaunchReason(for: retried) == .startupQuestion)
+
+        // The plain approval flow is unchanged: no reason, and Try Again reopens the workspace.
+        SetupSessions.noteRequestedTrustReason(
+            SetupSessions.trustLaunchReason(for: .openClaudeWorkspace), for: account.key
+        )
+        #expect(SetupSessions.requestedTrustReason(for: account.key) == nil)
+        #expect(SetupSessions.workspaceTrustRecoveryAction(
+            for: SetupSessions.requestedTrustReason(for: account.key)
+        ) == .openClaudeWorkspace)
+    }
+
     /// KTD5 of the 2026-08-12 plan: an unresolved executable still fails with the typed
     /// capability state and stages nothing, and the version gate never runs — there is no
     /// validated binary to ask.
@@ -741,6 +809,24 @@ import HeadroomCore
 
         #expect(signIn == "Sign-in wasn’t confirmed.")
         #expect(approval == "Approval wasn’t confirmed.")
+        // A startup question rides the approval's purpose but asked for something else.
+        let startupQuestion = SetupSessions.failureMessage(
+            for: .waitingTimedOut,
+            account: account,
+            purpose: .trust,
+            interactiveReason: .startupQuestion
+        )
+        #expect(startupQuestion == "Claude Code wasn’t ready yet.")
+        // The reason means nothing outside the `.trust` launch.
+        #expect(SetupSessions.failureMessage(
+            for: .waitingTimedOut, account: account, purpose: .setup, interactiveReason: .startupQuestion
+        ) == signIn)
+        for reason in [ClaudeInteractiveLaunchReason.versionUnreadable, .neverOnboardedExtraAccount] {
+            #expect(SetupSessions.failureMessage(
+                for: .waitingTimedOut, account: account, purpose: .trust, interactiveReason: reason
+            ) == approval)
+        }
+        #expect(!startupQuestion.contains("Check Now"))
         #expect(SetupSessions.failureMessage(for: .waitingTimedOut, account: account, purpose: .reset)
             == signIn)
         for message in [signIn, approval] {
@@ -813,5 +899,145 @@ private actor ClaudeVersionReaderSpy {
         executablePaths.append(executablePath)
         environments.append(environmentOverrides)
         return output
+    }
+}
+
+/// The startup-question reason through the real `SetupSessions` routing: Try Again, a refused
+/// second click and a relaunch after Terminal closed. Each drives a stand-in coordinator whose
+/// staging is inert, swapped in with `SetupSessions.withCoordinator`, so the live coordinator
+/// in this test host never stages a handoff and nothing opens Terminal.
+@MainActor
+@Suite struct ClaudeStartupQuestionSessionTests {
+    private func standInCoordinator() -> SetupSessionCoordinator {
+        SetupSessionCoordinator(
+            scheduler: StartupQuestionIgnoringScheduler(),
+            prepare: { _, _, _ in .failure(.stagingFailed) },
+            open: { _ in .success(()) },
+            accountExists: { _ in true },
+            requestRefresh: { _ in }
+        )
+    }
+
+    private func account(_ id: String) -> ProviderAccount {
+        ProviderAccount(id: AccountID(id), providerID: .claude, label: "Work", isBuiltIn: false)
+    }
+
+    private func cleanUp(_ account: ProviderAccount) {
+        SetupSessions.noteRequestedTrustReason(nil, for: account.key)
+        SetupSessions.noteHandoffInteractiveReason(nil, for: account.key)
+        SetupSessionActivity.shared.endWaiting(for: account.key)
+        SetupSessionActivity.shared.set(nil, for: account.key)
+    }
+
+    /// Try Again after a timed-out startup question restarts as one. A hard-coded
+    /// Open Claude Workspace here would clear the reason and fail this test.
+    @Test func tryAgainRestartsAStartupQuestionAsOne() {
+        let coordinator = standInCoordinator()
+        let question = account("claude-startup-try-again")
+        let approval = account("claude-approval-try-again")
+        defer { cleanUp(question); cleanUp(approval) }
+
+        SetupSessions.withCoordinator(coordinator) {
+            SetupSessions.noteRequestedTrustReason(.startupQuestion, for: question.key)
+            SetupSessions.tryAgain(for: question, route: .startNewHandoff(.trust), onRetry: {})
+            #expect(coordinator.state(for: question.key) == .preparing)
+            #expect(coordinator.sessionPurpose(for: question.key) == .trust)
+            #expect(SetupSessions.requestedTrustReason(for: question.key) == .startupQuestion)
+            #expect(SetupSessions.interactiveReason(for: question) == .startupQuestion)
+
+            // The plain approval is unchanged: no reason before or after.
+            SetupSessions.tryAgain(for: approval, route: .startNewHandoff(.trust), onRetry: {})
+            #expect(coordinator.state(for: approval.key) == .preparing)
+            #expect(SetupSessions.requestedTrustReason(for: approval.key) == nil)
+            #expect(SetupSessions.interactiveReason(for: approval) == nil)
+        }
+    }
+
+    /// A second click the coordinator refuses must not rewrite the running session's reason,
+    /// whether the session is still preparing or its Terminal is already open.
+    @Test func aRefusedSecondClickKeepsTheRunningReason() {
+        let coordinator = standInCoordinator()
+        let preparing = account("claude-startup-preparing")
+        let open = account("claude-startup-open")
+        defer { cleanUp(preparing); cleanUp(open) }
+
+        SetupSessions.withCoordinator(coordinator) {
+            SetupSessions.performRecovery(.answerClaudeQuestion, for: preparing, onRetry: {})
+            #expect(coordinator.state(for: preparing.key) == .preparing)
+            #expect(SetupSessions.requestedTrustReason(for: preparing.key) == .startupQuestion)
+            SetupSessions.performRecovery(.openClaudeWorkspace, for: preparing, onRetry: {})
+            #expect(coordinator.state(for: preparing.key) == .preparing)
+            #expect(SetupSessions.requestedTrustReason(for: preparing.key) == .startupQuestion)
+            #expect(SetupSessions.interactiveReason(for: preparing) == .startupQuestion)
+
+            coordinator.restoreActiveHandoff(open.key, purpose: .trust)
+            SetupSessions.noteHandoffInteractiveReason(.startupQuestion, for: open.key)
+            SetupSessions.noteRequestedTrustReason(.startupQuestion, for: open.key)
+            SetupSessions.performRecovery(.openClaudeWorkspace, for: open, onRetry: {})
+            #expect(coordinator.state(for: open.key) == .blockedByOpenHandoff)
+            #expect(SetupSessions.requestedTrustReason(for: open.key) == .startupQuestion)
+            #expect(SetupSessions.interactiveReason(for: open) == .startupQuestion)
+        }
+    }
+
+    /// A `.trust` handoff whose Terminal closed while Headroom was quit settles on relaunch
+    /// with the reason its record saved, so the verifying card keeps its own copy. A plain
+    /// approval settles with the approval's copy as before.
+    @Test func relaunchAfterTerminalClosedKeepsTheStartupQuestionCopy() throws {
+        for (id, reason, expectedPrompt) in [
+            ("claude-startup-relaunch", ClaudeInteractiveLaunchReason?.some(.startupQuestion),
+             SetupWaitingPrompt.startupQuestion),
+            ("claude-approval-relaunch", nil, .workspaceApproval),
+        ] {
+            let coordinator = standInCoordinator()
+            let account = account(id)
+            defer { cleanUp(account) }
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("headroom-startup-relaunch-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let marker = SetupCompletionMarker(
+                pendingPath: directory.appendingPathComponent("pending").path,
+                completedPath: directory.appendingPathComponent("complete").path
+            )
+            let generation = try AccountStorage.prepareSetupCompletionMarker(marker, purpose: .trust)
+            try AccountStorage.writeSetupHandoffRecord(
+                SetupHandoffRecord(
+                    waitingPolicy: .polled,
+                    terminalBundleIdentifier: "com.apple.Terminal",
+                    claudeInteractiveReason: reason
+                ),
+                marker: marker,
+                generation: generation
+            )
+            // The wrapper's own exit record, written while Headroom was not running.
+            try Data("complete:trust:\(generation):0\n".utf8)
+                .write(to: URL(fileURLWithPath: marker.completedPath + "." + generation))
+            #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
+
+            SetupSessions.settleFinishedHandoff(marker, for: account.key, coordinator: coordinator)
+
+            #expect(coordinator.state(for: account.key) == .verifying)
+            #expect(AccountStorage.setupHandoffRecord(marker: marker) == nil)
+            let phase = SetupSessions.withCoordinator(coordinator) {
+                SetupSessions.waitingPhase(for: account)
+            }
+            #expect(phase == .confirming(expectedPrompt, reportedFinished: true))
+            #expect(phase?.copy.title == (reason == nil ? "Confirming approval…" : "Confirming…"))
+        }
+    }
+}
+
+@MainActor
+private final class StartupQuestionIgnoringScheduler: SetupRetryScheduling {
+    private final class Cancellation: SetupRetryCancellation {
+        func cancel() {}
+    }
+
+    func schedule(
+        after _: Duration,
+        operation _: @escaping @MainActor @Sendable () -> Void
+    ) -> any SetupRetryCancellation {
+        Cancellation()
     }
 }
