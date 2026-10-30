@@ -15,6 +15,25 @@ official `claude` CLI's `/usage` panel instead.
   would fix old phones too, but changes the wire content and its digests; decide before the
   next phone release whether that is worth it.
 
+## macOS 15 popover header clipping: device check outstanding (2026-10-23)
+
+- The 1.5 report from macOS 15.0 ("the header 'Usage' is clipped", "other corners underneath")
+  got an OS-independent fix: `PopoverTopPinnedLayout` keeps the header at the window's top when
+  the window is shorter than the popover, and `PopoverWindowHeightFitter` fits the window height
+  before macOS 26. Both are proven only by offscreen hosting tests on macOS 26 (the fitter forced
+  on in DEBUG). Still unverified on a real macOS 15: that the `MenuBarExtra` window takes the
+  fitted frame and keeps it (it may reset the height after the fit), that the top edge stays under
+  the status item, whether the host reserves a top inset (brief H2), and whether the extra corners
+  remain after 1.5.1's chrome changes. The `popover-window` hierarchy log answers the last two.
+- **Widening from one column to two is unprotected on macOS 15.** The height fitter keeps the
+  window's current width, and `fitPopoverWindow(columns:)` only narrows; growing to 750pt relies
+  on `MenuBarExtra` widening the window itself, which is verified on 26 only. Device check: grow
+  past the cap (or turn horizontal expansion on) and confirm the window widens with its left edge
+  on the status item.
+- **Live check on 26:** add an account while the popover is open and watch for a scroll-indicator
+  flash. The card list can now give up height, so a frame where the window still has the old
+  height lays the list out short (the bench saw two extra indicator bodies on open).
+
 ## SwiftPM tuning import warning (2026-10-13)
 
 - `RaisedTile.swift:30` uses `HeadroomTuning` through its environment value without directly
