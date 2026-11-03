@@ -275,7 +275,8 @@ struct SettingsView: View {
                 },
                 onLaunchAtLoginChange: { newValue in
                     try? launchControl.setEnabled(newValue)
-                }
+                },
+                onSendFeedback: { await FeedbackMail.send(store: store, isInert: AppComposition.usesInertFeedback()) }
             )
         case .appearance:
             AppearanceSettingsPane(

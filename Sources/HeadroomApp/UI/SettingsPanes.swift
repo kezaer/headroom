@@ -63,6 +63,7 @@ struct GeneralSettingsPane: View {
     let cadenceSentence: String?
     let onIntervalChange: (Int) -> Void
     let onLaunchAtLoginChange: (Bool) -> Void
+    let onSendFeedback: () async -> FeedbackMail.Outcome
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -123,7 +124,7 @@ struct GeneralSettingsPane: View {
                 SoftwareUpdatesTile(softwareUpdates: softwareUpdates)
             }
 
-            AboutSettingsTile()
+            AboutSettingsTile(onSendFeedback: onSendFeedback)
         }
     }
 }
@@ -1140,6 +1141,11 @@ private struct MenuBarPreviewKey: Hashable {
 /// The combined General pane preserves About's copy and destinations without repeating
 /// the sidebar's large app mark. Uses the same tile and link rows as the other settings.
 private struct AboutSettingsTile: View {
+    let onSendFeedback: () async -> FeedbackMail.Outcome
+
+    /// The feedback row's trailing text while its email is being prepared or was copied.
+    @State private var feedbackStatus: String?
+
     var body: some View {
         SettingsTile("About Headroom", titleAccessory: {
             Spacer(minLength: 12)
@@ -1152,16 +1158,42 @@ private struct AboutSettingsTile: View {
             SettingsHelpText(text: AboutLinks.tagline)
 
             VStack(alignment: .leading, spacing: SettingsMetrics.withinGroup) {
-                SettingsGroupLabel("Made by \(AboutLinks.makerName)")
-                SettingsLinkList(links: AboutLinks.maker)
+                SettingsGroupLabel("Support")
+                VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // Feedback plan R1: reading CLI versions takes a second or two, so the
+                        // row says so; a webmail user gets the email on the clipboard instead.
+                        SettingsOutboundRow(
+                            title: "Send Feedback",
+                            destination: feedbackStatus ?? "Email",
+                            help: FeedbackEmail.address,
+                            accessibilityHint: "Opens an email in your mail app"
+                        ) {
+                            guard feedbackStatus == nil else { return }
+                            feedbackStatus = "Opening…"
+                            Task {
+                                let outcome = await onSendFeedback()
+                                feedbackStatus = outcome == .copied ? "Email copied" : nil
+                                guard outcome == .copied else { return }
+                                try? await Task.sleep(for: .seconds(4))
+                                feedbackStatus = nil
+                            }
+                        }
+                        // Webmail users have no mail app to open; the address is selectable so
+                        // they can copy it.
+                        SettingsHelpText(text: "Opens your default email app. Or email \(FeedbackEmail.address).")
+                            .textSelection(.enabled)
+                            .padding(.bottom, 8)
+                        Divider()
+                        SettingsLinkRow(link: AboutLinks.tipJar)
+                    }
+                    SettingsHelpText(text: AboutLinks.tipJarNote)
+                }
             }
 
             VStack(alignment: .leading, spacing: SettingsMetrics.withinGroup) {
-                SettingsGroupLabel("Support")
-                VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
-                    SettingsLinkList(links: [AboutLinks.tipJar])
-                    SettingsHelpText(text: AboutLinks.tipJarNote)
-                }
+                SettingsGroupLabel("Made by \(AboutLinks.makerName)")
+                SettingsLinkList(links: AboutLinks.maker)
             }
         }
     }
@@ -1187,18 +1219,38 @@ struct SettingsLinkList: View {
 private struct SettingsLinkRow: View {
     let link: AboutLink
 
+    var body: some View {
+        SettingsOutboundRow(
+            title: link.title,
+            destination: link.destination,
+            help: link.url.absoluteString,
+            accessibilityHint: "Opens in your browser"
+        ) {
+            NSWorkspace.shared.open(link.url)
+        }
+    }
+}
+
+/// The About rows' one look: title on the leading edge, destination and an outbound arrow on
+/// the trailing edge, brightening on hover. Every row leaves Headroom, for the browser or the
+/// user's mail app.
+private struct SettingsOutboundRow: View {
+    let title: String
+    let destination: String
+    let help: String
+    let accessibilityHint: String
+    let action: () -> Void
+
     @State private var isHovered = false
 
     var body: some View {
-        Button {
-            NSWorkspace.shared.open(link.url)
-        } label: {
+        Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(link.title)
+                Text(title)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 12)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(link.destination)
+                    Text(destination)
                     Image(systemName: "arrow.up.right")
                         .font(.system(size: 10, weight: .semibold))
                         .accessibilityHidden(true)
@@ -1211,10 +1263,10 @@ private struct SettingsLinkRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help(link.url.absoluteString)
+        .help(help)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(link.title), \(link.destination)")
-        .accessibilityHint("Opens in your browser")
+        .accessibilityLabel("\(title), \(destination)")
+        .accessibilityHint(accessibilityHint)
         .accessibilityAddTraits(.isLink)
     }
 }

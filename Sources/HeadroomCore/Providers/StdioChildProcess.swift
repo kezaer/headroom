@@ -95,6 +95,22 @@ struct StdioChildProcess {
         return true
     }
 
+    /// The leader's exit code once it exits within `seconds`; nil if it is still running or
+    /// was killed by a signal. `WNOWAIT` leaves the leader unreaped, so `terminate()` still
+    /// signals its group while the pid is held and can't be reused, then reaps it.
+    func exitCode(within seconds: TimeInterval) -> Int32? {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            var info = siginfo_t()
+            guard waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 else { return nil }
+            if info.si_pid == pid {
+                return info.si_code == CLD_EXITED ? info.si_status : nil
+            }
+            usleep(10_000)
+        } while Date() < deadline
+        return nil
+    }
+
     func terminate() {
         close(stdin)
         close(stdout)
