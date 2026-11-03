@@ -7,8 +7,8 @@ import WidgetKit
 import HeadroomCore
 
 /// Entry point. Supports hidden diagnostics: `--probe-claude` / `--probe-codex` /
-/// `--probe-grok` / `--probe-cursor` run the real provider capture once and print parsed
-/// windows; `--probe-spend <openai|anthropic|xai> [--key-file <path>]` verifies a key-based
+/// `--probe-grok` / `--probe-cursor` / `--probe-copilot` run the real provider capture once
+/// and print parsed windows; `--probe-spend <openai|anthropic|xai> [--key-file <path>]` verifies a key-based
 /// API-spend path; `--dump-phone-sync` decodes the iCloud KVS payload the Mac published for
 /// the iPhone; `--bench-ui` measures the popover and Settings offscreen (`UIBenchHarness`).
 /// All run without launching the menu bar UI.
@@ -29,6 +29,10 @@ enum Entry {
         }
         if CommandLine.arguments.contains("--probe-cursor") {
             runCursorProbe()
+            return
+        }
+        if CommandLine.arguments.contains("--probe-copilot") {
+            runCopilotProbe()
             return
         }
         if CommandLine.arguments.contains("--probe-spend") {
@@ -358,6 +362,61 @@ enum Entry {
                 print("RESULT: unrecognized Cursor Agent surface (no input sent)")
             case .transientCapture:
                 print("RESULT: Cursor usage capture failed")
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+    }
+
+    /// Parsed values only: never the login, a raw log line or a server reply. The status
+    /// source caches its reading, so the provider reuses the one spawn made here.
+    private static func runCopilotProbe() {
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let source = CopilotStatusSource()
+            let ledger = CopilotUsageLedger(
+                copilotHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".copilot", isDirectory: true)
+            )
+            let loginMemory = UserDefaultsCopilotLoginMemory()
+            switch await source.status() {
+            case .cliMissing:
+                print("RESULT: GitHub Copilot CLI not found")
+            case .signedOut:
+                print("RESULT: login required")
+            case .failure(let reason):
+                print("RESULT: Copilot status failed: \(reason.message)")
+            case .signedIn(let status):
+                let snapshot = await CopilotProvider(statusSource: source, ledger: ledger, loginMemory: loginMemory)
+                    .fetchSnapshot()
+                let now = Date()
+                let loginChangedAt = loginMemory.loginChangedAt(noting: status.login, at: now)
+                func credits(_ value: Double?) -> String {
+                    value.map { String(format: "%.1f credits", $0) } ?? "none"
+                }
+                if case .stale(let reason) = snapshot.freshness {
+                    print("RESULT: stale Copilot snapshot: \(reason.message)")
+                } else {
+                    print("RESULT: live Copilot snapshot, \(snapshot.windows.count) window(s)")
+                }
+                print("  ledger only (this month's usage records, no snapshot or server count): \(credits(await ledger.recordedCredits()))")
+                switch await CopilotProvider.reading(from: ledger, for: status, loginChangedAt: loginChangedAt, now: now) {
+                case .unreadable:
+                    print("  shown (logs, raised only by the server reading's lower bound): session logs unreadable")
+                case .reading(let reading):
+                    print("  shown (logs, raised only by the server reading's lower bound): \(credits(reading.usedCredits))")
+                    print("  newest evidence age: \(reading.newestEvidenceAt.map { "\(max(0, Int(now.timeIntervalSince($0)))) s" } ?? "none")")
+                }
+                print("  entitlement: \(status.isUnlimited ? "unlimited" : status.entitlement.map { String(format: "%.0f", $0) } ?? "none")")
+                for window in snapshot.windows {
+                    let freshness: String
+                    switch window.freshness {
+                    case .live: freshness = "live"
+                    case .stale(let observedAt): freshness = "stale (observed \(Int(now.timeIntervalSince(observedAt))) s ago)"
+                    case .unavailable: freshness = "unavailable"
+                    }
+                    print("  reset: \(window.resetSchedule.deadline.map { ISO8601DateFormatter().string(from: $0) } ?? "unresolved")  \(ResetDiagnostic.line(for: window.resetSchedule, observedAt: window.observedAt ?? snapshot.capturedAt, now: now))")
+                    print("  freshness: \(freshness)  \(window.freshness.isUnavailable ? "no percentage" : "\(Int(window.percentUsed.rounded()))% used")")
+                }
             }
             semaphore.signal()
         }
@@ -949,6 +1008,9 @@ enum AppComposition {
             SubscriptionProviderRegistration(id: .grok, accountCapacity: AccountRegistry.testedEnvelope, factory: makeGrokProvider),
             // Cursor has no config-home isolation, so it stays single-account (matches `CursorProvider.accountCapacity`).
             SubscriptionProviderRegistration(id: .cursor, accountCapacity: 1, factory: makeCursorProvider),
+            // A Headroom-owned COPILOT_HOME never receives the session logs the meter reads, so
+            // Copilot stays single-account (matches `CopilotProvider.accountCapacity`).
+            SubscriptionProviderRegistration(id: .copilot, accountCapacity: 1, factory: makeCopilotProvider),
         ]
     }
 
@@ -1294,6 +1356,27 @@ enum AppComposition {
     ) -> any UsageProvider {
         guard account.isBuiltIn else { return UnavailableAccountProvider(account: account) }
         return CursorProvider(source: cursorUsageSource, emailSource: CursorStatusEmailProbe())
+    }
+
+    /// One ledger for the launch: its per-file memo is what keeps polls from rereading
+    /// unchanged session logs (KTD10).
+    private static let copilotLedger = CopilotUsageLedger(
+        copilotHome: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".copilot", isDirectory: true)
+    )
+    private static let copilotStatusSource = CopilotStatusSource()
+
+    @MainActor
+    private static func makeCopilotProvider(
+        account: ProviderAccount,
+        credentials _: CredentialStore,
+        builtInClaudeWorkspace _: URL
+    ) -> any UsageProvider {
+        guard account.isBuiltIn else { return UnavailableAccountProvider(account: account) }
+        return CopilotProvider(
+            statusSource: copilotStatusSource,
+            ledger: copilotLedger,
+            loginMemory: UserDefaultsCopilotLoginMemory(defaults: launchDefaults)
+        )
     }
 
     private static func apiSpendProviders(credentials: CredentialStore) -> [any APISpendProvider] {

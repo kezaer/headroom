@@ -169,37 +169,6 @@ public struct GrokACPUsageSource: GrokUsageSource {
         environmentOverrides: [String: String],
         timeout: TimeInterval
     ) -> GrokUsageSourceResult {
-        var input = [Int32](repeating: -1, count: 2)
-        var output = [Int32](repeating: -1, count: 2)
-        guard pipe(&input) == 0 else { return .failure(.transient("Couldn’t start Grok usage probe")) }
-        guard pipe(&output) == 0 else {
-            close(input[0]); close(input[1])
-            return .failure(.transient("Couldn’t start Grok usage probe"))
-        }
-        guard fcntl(input[1], F_SETNOSIGPIPE, 1) != -1 else {
-            close(input[0]); close(input[1]); close(output[0]); close(output[1])
-            return .failure(.transient("Couldn’t start Grok usage probe"))
-        }
-        let devNull = open("/dev/null", O_WRONLY)
-
-        var actions = posix_spawn_file_actions_t(bitPattern: 0)
-        posix_spawn_file_actions_init(&actions)
-        if #available(macOS 26.0, *) {
-            posix_spawn_file_actions_addchdir(&actions, workingDirectory)
-        } else {
-            posix_spawn_file_actions_addchdir_np(&actions, workingDirectory)
-        }
-        posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO)
-        posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO)
-        if devNull >= 0 { posix_spawn_file_actions_adddup2(&actions, devNull, STDERR_FILENO) }
-        for fd in [input[0], input[1], output[0], output[1], devNull] where fd >= 0 {
-            posix_spawn_file_actions_addclose(&actions, fd)
-        }
-
-        var attributes = posix_spawnattr_t(bitPattern: 0)
-        posix_spawnattr_init(&attributes)
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
-
         let environment = environment(
             inherited: ProcessInfo.processInfo.environment,
             overrides: environmentOverrides,
@@ -207,29 +176,13 @@ public struct GrokACPUsageSource: GrokUsageSource {
                 fallback: "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
             )
         )
-        let environmentStrings = environment.map { "\($0.key)=\($0.value)" }
-        let arguments = [grokPath, "agent", "stdio"]
-        let cEnvironment = environmentStrings.map { strdup($0) } + [nil]
-        let cArguments = arguments.map { strdup($0) } + [nil]
-        defer {
-            cEnvironment.forEach { free($0) }
-            cArguments.forEach { free($0) }
-            posix_spawn_file_actions_destroy(&actions)
-            posix_spawnattr_destroy(&attributes)
-        }
-
-        var pid: pid_t = 0
-        let spawnStatus = posix_spawn(&pid, grokPath, &actions, &attributes, cArguments, cEnvironment)
-        close(input[0]); close(output[1])
-        if devNull >= 0 { close(devNull) }
-        guard spawnStatus == 0 else {
-            close(input[1]); close(output[0])
-            return .failure(.transient("Couldn’t start Grok usage probe"))
-        }
-        defer {
-            close(input[1]); close(output[0])
-            terminateProcessGroup(pid)
-        }
+        guard let process = StdioChildProcess.spawn(
+            path: grokPath,
+            arguments: [grokPath, "agent", "stdio"],
+            environment: environment,
+            workingDirectory: workingDirectory
+        ) else { return .failure(.transient("Couldn’t start Grok usage probe")) }
+        defer { process.terminate() }
 
         let deadline = Date().addingTimeInterval(timeout)
         var buffer = Data()
@@ -252,16 +205,16 @@ public struct GrokACPUsageSource: GrokUsageSource {
                 ],
             ],
         ]
-        guard writeJSONLine(initialize, to: input[1]),
-              let initializeResponse = readResponse(id: 1, from: output[0], buffer: &buffer, deadline: deadline),
+        guard writeJSONLine(initialize, to: process),
+              let initializeResponse = readResponse(id: 1, from: process, buffer: &buffer, deadline: deadline),
               initializeResponse["result"] != nil
         else { return .failure(.transient("Couldn’t initialize Grok usage probe")) }
 
         let billing: [String: Any] = [
             "jsonrpc": "2.0", "id": 2, "method": "x.ai/billing", "params": [:],
         ]
-        guard writeJSONLine(billing, to: input[1]),
-              let response = readResponse(id: 2, from: output[0], buffer: &buffer, deadline: deadline)
+        guard writeJSONLine(billing, to: process),
+              let response = readResponse(id: 2, from: process, buffer: &buffer, deadline: deadline)
         else { return .failure(.transient("Couldn’t read Grok usage")) }
 
         if let error = response["error"] as? [String: Any],
@@ -275,25 +228,15 @@ public struct GrokACPUsageSource: GrokUsageSource {
         return .payload(data, transport: .stdio)
     }
 
-    private static func writeJSONLine(_ object: [String: Any], to fd: Int32) -> Bool {
+    private static func writeJSONLine(_ object: [String: Any], to process: StdioChildProcess) -> Bool {
         guard var data = try? JSONSerialization.data(withJSONObject: object) else { return false }
         data.append(0x0A)
-        return data.withUnsafeBytes { rawBuffer in
-            guard var pointer = rawBuffer.baseAddress else { return false }
-            var remaining = rawBuffer.count
-            while remaining > 0 {
-                let written = Darwin.write(fd, pointer, remaining)
-                guard written > 0 else { return false }
-                remaining -= written
-                pointer = pointer.advanced(by: written)
-            }
-            return true
-        }
+        return process.write(data)
     }
 
     private static func readResponse(
         id: Int,
-        from fd: Int32,
+        from process: StdioChildProcess,
         buffer: inout Data,
         deadline: Date
     ) -> [String: Any]? {
@@ -305,40 +248,9 @@ public struct GrokACPUsageSource: GrokUsageSource {
                 else { continue }
                 if (object["id"] as? NSNumber)?.intValue == id { return object }
             }
-
-            let remainingMilliseconds = max(1, Int(deadline.timeIntervalSinceNow * 1_000))
-            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let pollResult = Darwin.poll(&descriptor, 1, Int32(min(remainingMilliseconds, 250)))
-            guard pollResult >= 0 else { return nil }
-            guard pollResult > 0 else { continue }
-            var chunk = [UInt8](repeating: 0, count: 8_192)
-            let count = Darwin.read(fd, &chunk, chunk.count)
-            guard count > 0 else { return nil }
-            buffer.append(contentsOf: chunk.prefix(count))
+            guard process.readOutput(into: &buffer, deadline: deadline) else { return nil }
         }
         return nil
-    }
-
-    private static func terminateProcessGroup(_ pid: pid_t) {
-        guard pid > 0 else { return }
-        var status: Int32 = 0
-        let initial = waitpid(pid, &status, WNOHANG)
-        if initial == pid || (initial == -1 && errno == ECHILD) { return }
-
-        kill(-pid, SIGTERM)
-        let deadline = Date().addingTimeInterval(0.5)
-        while Date() < deadline {
-            let result = waitpid(pid, &status, WNOHANG)
-            if result == pid || (result == -1 && errno == ECHILD) { return }
-            usleep(20_000)
-        }
-        kill(-pid, SIGKILL)
-        let killDeadline = Date().addingTimeInterval(0.5)
-        while Date() < killDeadline {
-            let result = waitpid(pid, &status, WNOHANG)
-            if result == pid || (result == -1 && errno == ECHILD) { return }
-            usleep(20_000)
-        }
     }
 
     static func environment(

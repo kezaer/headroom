@@ -57,6 +57,120 @@ struct AccountProbeSchedulerTests {
         #expect(order.keys.count == 2)
     }
 
+    // MARK: User-requested probe flag
+
+    @Test func setupCheckProbeCarriesTheUserRequestedFlag() async {
+        let recorder = UserRequestFlagRecorder()
+        let probe = flagRecordingProbe(recorder)
+        let store = UsageStore(providers: [probe], preferences: preferences(), accounts: [.builtIn(for: .claude)])
+
+        await store.refreshAccount(probe.accountKey, origin: .setupCheck)
+
+        #expect(recorder.values == [true])
+    }
+
+    @Test func fullRefreshProbeCarriesTheUserRequestedFlag() async {
+        let recorder = UserRequestFlagRecorder()
+        let probe = flagRecordingProbe(recorder)
+        let store = UsageStore(providers: [probe], preferences: preferences(), accounts: [.builtIn(for: .claude)])
+
+        await store.refreshAll()
+
+        #expect(recorder.values == [true])
+    }
+
+    @Test func timerProbeDoesNotCarryTheUserRequestedFlag() async {
+        let recorder = UserRequestFlagRecorder()
+        let probe = flagRecordingProbe(recorder)
+        let store = UsageStore(providers: [probe], preferences: preferences(), accounts: [.builtIn(for: .claude)])
+
+        store.dispatchDueNow()
+        await settle { probe.fetchCount == 1 }
+
+        #expect(recorder.values == [false])
+    }
+
+    @Test func popoverOpenProbeDoesNotCarryTheUserRequestedFlag() async {
+        let clock = MutableDateSource(t0)
+        let recorder = UserRequestFlagRecorder()
+        let probe = flagRecordingProbe(recorder, clock: clock)
+        let store = UsageStore(
+            providers: [probe], preferences: preferences(), accounts: [.builtIn(for: .claude)], now: clock.now
+        )
+        await store.refreshAll()
+
+        clock.set(t0.addingTimeInterval(5 * 60 + 1))
+        store.refreshOnPopoverOpen()
+        await settle { probe.fetchCount == 2 }
+
+        #expect(recorder.values == [true, false])
+    }
+
+    @Test func userRequestForOneAccountLeavesItsTimerSiblingUnflagged() async {
+        let order = ProbeOrder()
+        let lane = ProviderPollingLane.serial("claude-cli")
+        let extraID = AccountID("work")
+        let primaryFlags = UserRequestFlagRecorder()
+        let extraFlags = UserRequestFlagRecorder()
+        let primary = LaneProbe(
+            id: .claude, accountID: .primary, lane: lane, order: order,
+            onFetch: { primaryFlags.record(UserRequestedProbeContext.isUserRequested) },
+            result: { .init(snapshot: self.liveSnapshot(.claude)) }
+        )
+        let extra = LaneProbe(
+            id: .claude, accountID: extraID, lane: lane, order: order,
+            onFetch: { extraFlags.record(UserRequestedProbeContext.isUserRequested) },
+            result: { .init(snapshot: self.liveSnapshot(.claude)) }
+        )
+        primary.suspendNextFetch()
+        let store = UsageStore(
+            providers: [primary, extra],
+            preferences: preferences(),
+            accounts: [.builtIn(for: .claude), ProviderAccount(id: extraID, providerID: .claude, label: "Work")]
+        )
+
+        store.dispatchDueNow()
+        await primary.waitUntilStarted()
+        store.refreshAccountNow(extra.accountKey, origin: .setupCheck)
+        primary.release()
+        await settle { extra.fetchCount == 1 }
+
+        #expect(primaryFlags.values == [false])
+        #expect(extraFlags.values == [true])
+    }
+
+    @Test(arguments: [true, false])
+    func userRequestDuringATimerProbeGetsAFreshProbeOnlyFromACachingProvider(reusesCache: Bool) async {
+        let recorder = UserRequestFlagRecorder()
+        let probe = LaneProbe(
+            id: .claude, accountID: .primary, lane: .serial("claude-cli"), order: ProbeOrder(),
+            reusesCachedStatusOnTimerProbes: reusesCache,
+            onFetch: { recorder.record(UserRequestedProbeContext.isUserRequested) },
+            result: { .init(snapshot: self.liveSnapshot(.claude)) }
+        )
+        probe.suspendNextFetch()
+        let store = UsageStore(providers: [probe], preferences: preferences(), accounts: [.builtIn(for: .claude)])
+
+        store.dispatchDueNow()
+        await probe.waitUntilStarted()
+        store.refreshAccountNow(probe.accountKey, origin: .accountAction)
+        probe.release()
+        await settle { !store.isRefreshing }
+
+        #expect(recorder.values == (reusesCache ? [false, true] : [false]))
+    }
+
+    nonisolated private func flagRecordingProbe(
+        _ recorder: UserRequestFlagRecorder,
+        clock: MutableDateSource? = nil
+    ) -> LaneProbe {
+        LaneProbe(
+            id: .claude, accountID: .primary, lane: .serial("claude-cli"), order: ProbeOrder(),
+            onFetch: { recorder.record(UserRequestedProbeContext.isUserRequested) },
+            result: { .init(snapshot: self.liveSnapshot(.claude, at: clock?.now())) }
+        )
+    }
+
     @Test func priorityRequestIsServedRightAfterTheInFlightProbe() async {
         let order = ProbeOrder()
         let lane = ProviderPollingLane.serial("claude-cli")
@@ -636,6 +750,13 @@ final class LocatorGenerationRecorder: @unchecked Sendable {
     func record(_ generation: UUID?) { lock.withLock { recorded.append(generation) } }
 }
 
+final class UserRequestFlagRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Bool] = []
+    var values: [Bool] { lock.withLock { recorded } }
+    func record(_ flag: Bool) { lock.withLock { recorded.append(flag) } }
+}
+
 /// Provider double for scheduler tests: a fixed lane, a result closure, a shared start
 /// order, and a one-shot suspend gate the test releases.
 final class LaneProbe: UsageProvider, @unchecked Sendable {
@@ -644,6 +765,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
     let displayName: String
     let pollingLane: ProviderPollingLane
     let reportsProviderCapability: Bool
+    let reusesCachedStatusOnTimerProbes: Bool
     private let result: @Sendable () -> UsageProviderFetchResult
     private let onFetch: @Sendable () -> Void
     private let order: ProbeOrder
@@ -657,6 +779,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
         lane: ProviderPollingLane,
         order: ProbeOrder,
         reportsProviderCapability: Bool = false,
+        reusesCachedStatusOnTimerProbes: Bool = false,
         onFetch: @escaping @Sendable () -> Void = {},
         result: @escaping @Sendable () -> UsageProviderFetchResult
     ) {
@@ -666,6 +789,7 @@ final class LaneProbe: UsageProvider, @unchecked Sendable {
         self.pollingLane = lane
         self.order = order
         self.reportsProviderCapability = reportsProviderCapability
+        self.reusesCachedStatusOnTimerProbes = reusesCachedStatusOnTimerProbes
         self.onFetch = onFetch
         self.result = result
     }
