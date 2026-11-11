@@ -43,12 +43,17 @@ final class DefaultLoginRig {
     let acknowledgements: BankedResetAcknowledgements
     let continuity: UsageContinuityCache
     let records: DefaultLoginRecordStore
+    /// Default-login plan U7: a phone publisher double, when the test counts exports.
+    let phone: SpyPhoneSync?
+    /// Default-login plan U9: the Mac widget file each main-account merge writes.
+    let widgets = SpyWidgetExporter()
     private(set) var store: UsageStore!
     private(set) var coordinator: NotificationCoordinator!
 
     let key = AccountKey(providerID: .codex, accountID: .primary)
 
-    init(extraLabels: [String] = [], banked: Bool = false) {
+    init(extraLabels: [String] = [], banked: Bool = false, countsPhoneExports: Bool = false) {
+        phone = countsPhoneExports ? SpyPhoneSync() : nil
         let suite = "headroom.default-login.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
@@ -67,10 +72,13 @@ final class DefaultLoginRig {
         let preferences = Preferences(defaults: defaults)
         preferences.useItUpRemindersEnabled = true
         preferences.bankedResetNotificationsEnabled = banked
+        // U9: a counted phone path is a real one, so its captures carry the providers.
+        preferences.syncToIPhoneEnabled = countsPhoneExports
         launch()
     }
 
-    func launch(records usesRecords: Bool = true) {
+    /// `recordStore` swaps in another record store (a counting double) for this launch.
+    func launch(records usesRecords: Bool = true, recordStore: (any DefaultLoginRecordStoring)? = nil) {
         coordinator = NotificationCoordinator(poster: poster, useItUpLedger: ledger, bankedResetBaseline: baseline)
         store = UsageStore(
             providers: [primary] + extras,
@@ -79,10 +87,12 @@ final class DefaultLoginRig {
             accountStorage: RigAccountStorage(),
             providerFactory: { [primary] _ in primary },
             continuityCache: continuity,
-            defaultLoginRecords: usesRecords ? records : nil,
+            defaultLoginRecords: usesRecords ? (recordStore ?? records) : nil,
             bankedResetAcknowledgements: acknowledgements,
             notificationCoordinator: coordinator,
-            now: clock.now
+            now: clock.now,
+            widgetExporter: widgets,
+            phoneSyncExporter: phone
         )
     }
 

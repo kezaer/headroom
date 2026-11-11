@@ -8,6 +8,11 @@ extension UsageStore {
     /// Loads the records and runs the idempotent launch repair, before the first merge
     /// (KTD4, KTD6). `cached` is the raw continuity load, expired windows included.
     func prepareDefaultLogin(cached: [AccountKey: UsageSnapshot]) {
+        // The launch refresh exports the first capture; preparing the records does not.
+        deferringRememberedRowExport { loadDefaultLogin(cached: cached) }
+    }
+
+    private func loadDefaultLogin(cached: [AccountKey: UsageSnapshot]) {
         guard let defaultLoginRecordStore else { return }
         guard let data = defaultLoginRecordStore.read() else {
             defaultLoginState = DefaultLoginRecordsState()
@@ -48,7 +53,10 @@ extension UsageStore {
             guard let slot = state.slot(for: key) else { return true }
             return slot.binding == nil && slot.phase != .cleared
         }
+        // `defaultLoginState` already holds the repaired state, so the commit sees no
+        // change to publish; the rows are published here either way (a no-op if unchanged).
         if state != loaded { commitDefaultLogin(state) }
+        publishRememberedRows()
     }
 
     /// A saved reading is the bound account's when it carries that account's digest, or
@@ -98,7 +106,8 @@ extension UsageStore {
             // that account's row, so it counts in every phase that keeps a binding.
             otherReaders: Set(state.slots.compactMap { other in
                 other.key != key && other.key.providerID == key.providerID ? other.binding?.digest : nil
-            })
+            }),
+            registryLabels: accounts(for: key.providerID).map(\.label)
         )
         let before = state
         let effects = DefaultLoginTransition.apply(reading, for: key, context: context, to: &state)
@@ -159,10 +168,87 @@ extension UsageStore {
         commitDefaultLogin(state)
     }
 
+    /// U5: the label an added account takes when none is given. Nil leaves the choice to
+    /// the registry, which numbers past its own rows only; with remembered rows the count
+    /// runs across both, so the two never share a number.
+    func defaultLoginLabelForNewAccount(for providerID: ProviderID) -> String? {
+        guard let state = defaultLoginState,
+              state.remembered.contains(where: { $0.providerID == providerID })
+        else { return nil }
+        return DefaultLoginTransition.nextDefaultLabel(
+            for: providerID,
+            registryLabels: accounts(for: providerID).map(\.label),
+            remembered: state.remembered
+        )
+    }
+
+    /// R11: one record commit; the registry and the reminder stores are not touched.
+    func defaultLoginRenameRemembered(_ key: AccountKey, to label: String) -> Bool {
+        guard var state = defaultLoginState else { return false }
+        let before = state
+        guard DefaultLoginTransition.renameRemembered(key, to: label, in: &state) else { return false }
+        if state != before { commitDefaultLogin(state) }
+        return true
+    }
+
+    /// R11: one record commit, none when the row is already hidden.
+    func defaultLoginHideRemembered(_ key: AccountKey) -> Bool {
+        guard var state = defaultLoginState else { return false }
+        let before = state
+        guard DefaultLoginTransition.hideRemembered(key, in: &state) else { return false }
+        if state != before { commitDefaultLogin(state) }
+        return true
+    }
+
     private func commitDefaultLogin(_ state: DefaultLoginRecordsState) {
+        let previous = defaultLoginState
         defaultLoginState = state
+        // The rows depend only on the remembered list and the slots' bindings; the steady
+        // per-reading commit changes neither, so it skips the rebuild.
+        if previous?.remembered != state.remembered
+            || previous?.slots.map(\.binding) != state.slots.map(\.binding) {
+            publishRememberedRows()
+        }
         guard let data = DefaultLoginRecordsCodec.encode(state) else { return }
         defaultLoginRecordStore?.write(data)
+    }
+
+    /// Reassigns the observed rows only when they changed: most commits are the steady
+    /// capture-time update and must not invalidate views that list remembered rows. The
+    /// one place remembered rows appear, disappear, rename or hide (U7), so it re-ages
+    /// them and exports the phone capture once, unless its caller exports anyway.
+    private func publishRememberedRows() {
+        let rows = defaultLoginState.map(DefaultLoginTransition.rememberedRows(in:)) ?? [:]
+        guard rows != rememberedAccountRows else { return }
+        rememberedAccountRows = rows
+        ageRememberedSnapshots()
+        if rememberedRowExportDeferrals == 0 { exportPhoneSyncSnapshot() }
+    }
+
+    /// Runs `body` as a caller that exports the phone capture itself afterwards.
+    func deferringRememberedRowExport<T>(_ body: () -> T) -> T {
+        rememberedRowExportDeferrals += 1
+        defer { rememberedRowExportDeferrals -= 1 }
+        return body()
+    }
+
+    /// KTD10: the engine's wake is one of the three moments remembered rows age.
+    func engineDidWake() {
+        ageRememberedSnapshots()
+    }
+
+    /// Ages every visible remembered row's last reading as of now (U6 mode). Assigned only
+    /// when the result changed, so an unchanged age invalidates no view.
+    func ageRememberedSnapshots() {
+        let date = now()
+        var aged: [AccountKey: UsageSnapshot] = [:]
+        for rows in rememberedAccountRows.values {
+            for row in rows where !row.isHidden {
+                guard let stored = row.snapshot else { continue }
+                aged[row.key] = UsageContinuityPolicy.rememberedSnapshot(stored, at: date)
+            }
+        }
+        if aged != rememberedDisplaySnapshots { rememberedDisplaySnapshots = aged }
     }
 
     private func writeMirror(_ mirror: PendingMirror, for key: AccountKey) {
