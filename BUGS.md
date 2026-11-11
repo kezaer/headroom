@@ -4,6 +4,49 @@ Non-blocking items. The earlier OAuth/Keychain-token approach and its U9 spike a
 Anthropic prohibits and blocks third-party subscription-OAuth use, so Claude now reads the
 official `claude` CLI's `/usage` panel instead.
 
+## Follow the default login: open items (2026-11-10)
+
+Plan: `docs/plans/2026-11-10-1315-feat-follow-default-login-plan.md`. Phase 1 shipped for
+Codex, Grok, Cursor and Copilot.
+
+- **Claude is not wired (gate V1).** `.claude.json` must be captured before and after
+  `claude /login` to another account, a Claude Desktop sign-in, and a default-login switcher,
+  to show the account block changes whenever the Keychain credential does. Until then Claude
+  rows behave as before, and the Claude model-row entry under "Claude CLI probe" stays open.
+  The continuity policy already refuses to retain a model row across two identities, so
+  wiring the reader is what closes it.
+- **Phases 2 and 3 are not built.** A swapped-out Codex account is kept in the record store
+  with no row yet (U5, U7, U8, U9, U11), and the default login and a matching extra still show
+  as two rows (U10). U5 and U9 need PR #219 merged first.
+- **Gates V2 and V3 have no result.** V2: whether Codex `account_id` is shared by members of
+  one workspace (before U10). V3: one real rotation on a switcher setup.
+- **Unmeasured: how often a reading is refused.** The CLI can rewrite its account file while
+  Headroom reads it. `AccountProbeScheduler.identityRefusalTotals` counts refusals per account
+  in memory; no diagnostic prints it yet.
+- **A Grok `auth.json` Headroom cannot read keeps the row live under no account's name.**
+  Decided 2026-11-10 (Kyle), amending the plan's KTD2: a file unreadable on both sides of the
+  usage read counts as "no account named", and only a one-sided failure or a disagreement is
+  refused. A row that was bound to an account shows under "Main" until the file is readable.
+- **Every accepted reading with an identity rewrites `defaultLoginRecords.v1`.** The slot's
+  capture time must stay current for KTD6 attribution. Correct, cost unmeasured; measure at
+  `multi20` with remembered snapshots before Phase 2 adds rows that read this state.
+- **A reminder post in flight when its account leaves is counted as delivered.** Its
+  completion finds the row holding another account and writes nothing, so the parked state
+  takes the pending entry. If that post is then refused, the account misses one reminder for
+  that reset. The new account's alert for the same limit also waits for that post to return.
+- **Grok names the file's account, not the billed one.** Its ACP path reads its login
+  separately from `auth.json`. Remembered accounts for Grok wait for an identity check.
+- **Cursor and Copilot cannot bracket a reading.** A Cursor status read that misses is no
+  evidence either way, so one reading after a switch can sit under the old name. Copilot's
+  login comes from a status cache up to an hour old.
+- **The sign-out record logs a switcher's brief signed-out moment as a sign-out.** Diagnostics
+  only.
+- **No test for "an account change counts as two sessions" in `SessionReliabilityRecord`.** The
+  change ends the observation; the day counters are not asserted.
+- **Copilot keeps two identity records.** `CopilotLoginMemory` (log evidence cut-off) and the
+  slot record both key on the login from the same status read, so they agree on a change, but
+  they are two stores.
+
 ## Feedback by email follow-ups (2026-11-03)
 
 - **Live acceptance outstanding.** Send one report from a built, signed Mac app and one from
