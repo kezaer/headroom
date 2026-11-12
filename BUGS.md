@@ -6,21 +6,50 @@ official `claude` CLI's `/usage` panel instead.
 
 ## Follow the default login: open items (2026-11-10)
 
-Plan: `docs/plans/2026-11-10-1315-feat-follow-default-login-plan.md`. Phase 1 shipped for
-Codex, Grok, Cursor and Copilot. Phase 2 (remembered-account rows on the Mac and the phone) is
-built for Codex.
+Plan: `docs/plans/2026-11-10-1315-feat-follow-default-login-plan.md`. Phase 1 covers Claude,
+Codex, Grok, Cursor and Copilot. Phases 2 (remembered-account rows on the Mac and the phone) and
+3 (one row for the default login and a matching extra) cover Claude and Codex, the providers
+with a strong identity.
 
-- **Claude is not wired (gate V1).** `.claude.json` must be captured before and after
-  `claude /login` to another account, a Claude Desktop sign-in, and a default-login switcher,
-  to show the account block changes whenever the Keychain credential does. Until then Claude
-  rows behave as before, and the Claude model-row entry under "Claude CLI probe" stays open.
-  The continuity policy already refuses to retain a model row across two identities, so
-  wiring the reader is what closes it.
-- **Phase 3 is not built.** The default login and a matching extra still show as two rows
-  (U10).
-- **Gates V2 and V3 have no result.** V2: whether Codex `account_id` is shared by members of
-  one workspace (before U10). V3: one real rotation of the Phase 2 build on a switcher setup;
-  Phase 2 is not accepted until it has one.
+- **Claude is wired on one of gate V1's three cases (2026-11-11).** Identity is
+  `oauthAccount.accountUuid` plus `organizationUuid` from each row's own `.claude.json`, read
+  before and after every `/usage` capture; relabel, refusal, remembered rows and the one-row
+  merge now apply to Claude (`ClaudeIdentityTests`). Still assumed, not verified: that a Claude
+  Desktop sign-in and a default-login switcher rewrite the `oauthAccount` block whenever they
+  change the Keychain credential (see the V1 entry below). Third-party sources say a running
+  Claude Code session can rewrite the block from its own cached profile; a run on 2026-11-11
+  (CLI 2.1.322, one session, a few minutes) did not reproduce it: see the V1 record's "The
+  open-session case". Also unmeasured: how often the CLI's
+  own rewrite of `.claude.json` at launch makes the after-read meet a half-written file and
+  refuses a reading (`identityRefusalTotals` counts it; the plan's probe-trace line for it is
+  not added). Two choices made in the wiring: a file undecodable on both sides is refused, as
+  KTD2 is written, where Grok keeps that reading under no name; and an inherited
+  `CLAUDE_CODE_OAUTH_TOKEN` is detected by the variable's presence, so an empty value also
+  makes every Claude row Absent.
+- **Phase 3 (one row for the default login and a matching extra) is built for Claude and Codex**, the two
+  providers with a strong identity.
+- **A merged row dims when the added account's poll failed, even if the default login's own
+  reading is live (accepted, KTD11).** While merged, the row shows the added account's reading,
+  so a transient failure on that account dims the row. KTD11 keeps the merge through a transient
+  failure so the row does not split and rejoin on every blip.
+- **Gate V1 passed for `claude auth login`, with and without a session left running
+  (2026-11-11).** See `docs/qa/2026-11-11-default-login-gate-v1.md`. Not run: Claude Desktop signing in, and a
+  switcher that swaps the Keychain credential. A switcher that leaves `.claude.json` alone
+  would put readings under the wrong account; get a before-and-after `.claude.json` from a
+  ccswap setup before a release says it follows one.
+- **Review residuals, Phase 3 and Claude (2026-11-11).** Not fixed: an added account that changes
+  to another login while merged sets its reminder state aside under the old account, and the
+  hand-over at unmerge skips it, so the built-in can post one of those reminders again. A setup
+  that ends in `connected` with the popover closed holds the merge off until the popover next
+  plays the Connected chip. The Claude provider decodes `.claude.json` twice per probe; the cost
+  on a large file is unmeasured. The popover header builds the display projection per body
+  (popover open at 20 accounts measured 742 view bodies against a recorded 741; the extra body is not identified and `main` was not re-measured the same day). The Settings badge rule for a merged pair is
+  tested in Core only. The cross-model adversarial review timed out with no output, so that
+  lens did not run on this branch.
+- **Gate V2 was not run; the risk is accepted (Kyle, 2026-11-11).** The one-row merge trusts
+  that one Codex `account_id` is one account. Two teammates sharing an id would show as one
+  row. Kyle's two logins have different ids.
+- **Gate V3 has no result.** One real rotation on a switcher setup, before a public release.
 - **Phase 2 has no live or device look.** The remembered rows were checked in `--render-popover`
   renders (Standard and Compact, light and dark). The Settings row, the iPhone row and the Micro
   meter style's reset line are covered by tests and builds only.
@@ -487,10 +516,14 @@ that name. Still to do:
   fallback for CLIs ≥ 2.1.217; AGENTS.md currently forbids it, so it stays. A `--version`
   timeout is not retried and still sends the probe to the PTY.
 
-- **An external Claude CLI account switch can retain a model row from the prior login.**
-  The continuity merger retains missing model rows without comparing upstream identity.
-  Headroom's explicit reset clears continuity; an external login switch does not.
-  Follow up with identity-aware continuity and a regression fixture.
+- **Fixed for a switch the account file records (2026-11-11): an external Claude CLI account
+  switch could retain a model row from the prior login.** Claude readings now carry their
+  `.claude.json` identity, and the continuity merger retains a missing model row only from a
+  reading of the same identity. Fixtures cover the in-memory and the relaunch path
+  (`ClaudeDefaultLoginStoreTests`). Still open for a switch that changes the Keychain
+  credential without rewriting `.claude.json` (gate V1's unverified cases). With an inherited
+  `CLAUDE_CODE_OAUTH_TOKEN` every reading is Absent, so no model row is retained at all: a
+  partial capture drops it instead of keeping it stale.
 
 
 - **Resolved upstream on 2026-07-20: the per-model weekly row ("Weekly (Fable)") returned in
