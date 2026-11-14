@@ -202,6 +202,20 @@ enum SettingsCopy {
     /// retyped so VoiceOver and the tooltip stay one sentence.
     static let providerOffAccessibilityLabel =
         "Off — " + providerOffNotice.prefix(1).lowercased() + providerOffNotice.dropFirst()
+
+    /// KTD21 (OpenCode plan): one OpenCode home sees only the Console workspace its client has
+    /// active. Visible help under the OpenCode group in Settings › Accounts, and the planned
+    /// tooltip on the no-Go row; one constant so the two never drift.
+    static let opencodeWorkspaceScope = "OpenCode reports only the active Console workspace"
+
+    /// D7/AE7 (OpenCode plan): the built-in sign-in warning, printed by the popover and
+    /// Settings. U12 (b): a Console login adds an OAuth credential and makes it the active
+    /// one; a stored API key is kept. KTD10: a user who moved OpenCode's data with XDG
+    /// variables has a Terminal that reads elsewhere, so the Terminal claim stays "normally".
+    static let opencodeBuiltInSignInWarning = "This adds an OpenCode Console login to the default OpenCode setup on this Mac, which Terminal normally uses too, and makes it the active login. A saved API key stays saved. To track a different Console account without changing this one, add it as a separate account."
+
+    /// KTD11: upstream's logout asks in Terminal which login to remove and removes only that one.
+    static let opencodeBuiltInResetWarning = "OpenCode asks in Terminal which login to sign out, then signs in to Console again. This changes the default OpenCode setup on this Mac, which Terminal normally uses too. Only the login you pick is removed. To track a different Console account instead, add it as a separate account."
 }
 
 /// One material for every section: the popover's card language — `RaisedTile` at
@@ -607,6 +621,8 @@ private struct SettingsPaneTransitionModifier: ViewModifier {
 struct MenuBarPreviewPill: View {
     let meters: [MenuBarMeter]
     let showsPercentage: Bool
+    /// `.compact` only in a pill card too narrow for the standard pill.
+    var metrics: MenuBarPillMetrics = .standard
 
     var body: some View {
         // PB13: read inside `body` so the observation registers here and the plate repaints
@@ -614,8 +630,9 @@ struct MenuBarPreviewPill: View {
         let darkMenuBar = MenuBarAppearanceMonitor.shared.isDarkMenuBar
         // KTD13: pending mains preview the static ghost; real readings and value-choice
         // specimens keep their meaningful fills. Palette follows the bar, motion never does.
-        return MenuBarLabel(meters: meters, showsPercentage: showsPercentage, appearance: .menuBar, motionEnabled: false)
-            .menuBarPreviewPlate(darkMenuBar: darkMenuBar)
+        return MenuBarLabel(meters: meters, showsPercentage: showsPercentage, appearance: .menuBar,
+                            motionEnabled: false, metrics: metrics)
+            .menuBarPreviewPlate(darkMenuBar: darkMenuBar, horizontalPadding: metrics.plateHorizontalPadding)
     }
 }
 
@@ -628,9 +645,12 @@ extension View {
     /// `.menuBar` explicitly and swap the plate underneath with the same flag, so dark ink on
     /// a light bar still lands on a light plate. Shared by the Menu Bar pane and the
     /// Appearance specimen so the two strips cannot drift.
-    func menuBarPreviewPlate(darkMenuBar: Bool) -> some View {
+    func menuBarPreviewPlate(
+        darkMenuBar: Bool,
+        horizontalPadding: CGFloat = MenuBarPillMetrics.standard.plateHorizontalPadding
+    ) -> some View {
         self
-            .padding(.horizontal, 7)
+            .padding(.horizontal, horizontalPadding)
             .padding(.vertical, 3)
             .background(
                 darkMenuBar ? Color(white: 0.15) : Color(white: 0.93),

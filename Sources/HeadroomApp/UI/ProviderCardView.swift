@@ -620,7 +620,7 @@ struct ProviderCardView: View {
               claudeSessionOwnedState == nil,
               claudeGuidedSetupOutcome == nil,
               snapshot.codexConnectionAction == nil,
-              providerSetupOutcome != nil else { return false }
+              snapshot.planStatusRecovery != nil || providerSetupOutcome != nil else { return false }
         return SetupSessions.isWaiting(for: primaryAccount)
     }
 
@@ -720,6 +720,18 @@ struct ProviderCardView: View {
                 }
                 if action == .reconnect, !snapshot.windows.isEmpty {
                     bars(for: snapshot, dimmed: true)
+                }
+            }
+        } else if let planRecovery = snapshot.planStatusRecovery {
+            // KTD7/D2 (OpenCode plan): signed in, no plan to read. The identity row and one
+            // sentence-and-button row, no meter. Ahead of the outcome branch so a transient
+            // failure keeps the row; a permanent one never reaches here.
+            VStack(alignment: .leading, spacing: IdentityRowMetrics.identityToSentenceGap) {
+                accountIdentityRow(for: primaryEntry)
+                if SetupSessions.isWaiting(for: primaryAccount) {
+                    CardRowWaitingLine(account: primaryAccount, showsStopWaiting: singleAccountWaitingLineHostsStop)
+                } else {
+                    PlanStatusActionRow(presentation: planRecovery, account: primaryAccount, onRetry: onRetrySetup)
                 }
             }
         } else if let outcome = providerSetupOutcome {
@@ -1106,6 +1118,9 @@ struct ProviderCardView: View {
                     if let reason = permanentFailure {
                         actionable(reason)
                             .transition(bodyFade)
+                    } else {
+                        // D3/KTD21: the red limited line sits under the identity row.
+                        UsageLimitSentenceView(snapshot: snapshot, now: now)
                     }
                     if permanentFailure == nil || !snapshot.windows.isEmpty {
                         bars(for: snapshot, dimmed: !isLive)
@@ -1541,7 +1556,7 @@ struct CardRowAction<Accessory: View>: View {
                     criticalInk: criticalInk,
                     showsArrow: primary.opensElsewhere
                 ))
-                .help(primary.label)
+                .help(primary.help ?? primary.label)
                 .accessibilityLabel(accountLabel.map { "\(primary.label) for \($0)" } ?? primary.label)
                 .accessibilityValue(message)
             if let secondary {
@@ -1596,6 +1611,9 @@ struct CardRowButtonAction {
     /// Whether the click leaves Headroom (Terminal, a web page). Only those rows carry the
     /// trailing ↗; Check Now re-reads in place.
     var opensElsewhere: Bool = true
+    /// The row's tooltip when it should say more than the label (KTD21: the no-Go row's
+    /// workspace note). Nil keeps the label.
+    var help: String? = nil
     let perform: () -> Void
 }
 
@@ -1869,6 +1887,7 @@ extension SetupSessions.RecoveryRoute {
         // as the alternative, so it needs a glyph of its own: the code is what you type.
         case .setup(.deviceCode): "number"
         case .setup, .workspaceTrust, .cursorTools: "apple.terminal"
+        case .feedbackEmail: "envelope"
         case .checkNow: "arrow.clockwise"
         }
     }

@@ -55,6 +55,51 @@ struct LockScreenWidgetRecipeTests {
         }
     }
 
+    @Test func pinnedOpenCodeWithNoSyncedOpenCodeShowsOffAndNeverFallsBack() throws {
+        for style in WidgetLayoutStyle.allCases {
+            for family in LockScreenWidgetFamily.allCases {
+                let r = recipe(style, family, [F.claude(), F.codex(), F.grok()], choice: .opencode)
+                let slot = try #require(r.slots.first)
+                #expect(r.slots.count == 1)
+                #expect(slot.providerID == "opencode")
+                #expect(slot.primary.state == .off)
+                #expect(slot.primary.numberText == "—")
+                #expect(r.inlineTextCandidates.first == "OpenCode · Off")
+            }
+        }
+    }
+
+    /// KTD15 (OpenCode plan): OpenCode's three windows project from the Mac (KTD6) with
+    /// weekly as the primary; a family with less room sheds the monthly window, the last
+    /// secondary, and never relabels it.
+    @Test func openCodeSecondariesDropMonthlyByFamilyWithoutRelabelling() throws {
+        let envelope = OpenCodePhoneFixture.project(OpenCodePhoneFixture.go())
+        for style in WidgetLayoutStyle.allCases where style != .tightestFirst {
+            for family in LockScreenWidgetFamily.allCases {
+                let r = LockScreenWidgetRecipe(
+                    style: style, family: family, providerChoice: .opencode,
+                    state: .content(envelope), now: OpenCodePhoneFixture.captured)
+                let slot = try #require(r.slots.first)
+                #expect(slot.primary.window?.kind == .weekly, "\(style) \(family)")
+                let kinds = slot.secondary.map(\.window?.kind)
+                let order: [WidgetWindowKind?] = [.fiveHour, .other("Monthly")]
+                #expect(Array(order.prefix(kinds.count)) == kinds, "\(style) \(family)")
+                if let monthly = slot.secondary.first(where: { $0.window?.kind == .other("Monthly") }) {
+                    #expect(monthly.window?.label == "Monthly")
+                    #expect(monthly.caption.contains("Month") || monthly.caption.contains("Mo"), "\(monthly.caption)")
+                }
+            }
+        }
+        let liquid = LockScreenWidgetRecipe(
+            style: .liquidLevel, family: .rectangle, providerChoice: .opencode,
+            state: .content(envelope), now: OpenCodePhoneFixture.captured)
+        #expect(liquid.slots.first?.secondary.map(\.window?.kind) == [.fiveHour])
+        let nested = LockScreenWidgetRecipe(
+            style: .nestedMeter, family: .rectangle, providerChoice: .opencode,
+            state: .content(envelope), now: OpenCodePhoneFixture.captured)
+        #expect(nested.slots.first?.secondary.map(\.window?.kind) == [.fiveHour, .other("Monthly")])
+    }
+
     @Test func unavailableWeeklyRemainsPrimary() throws {
         let claude = F.provider("claude", "Claude", [
             F.window(.fiveHour, label: "5h", percent: 72),
@@ -333,6 +378,26 @@ struct LockScreenWidgetRecipeTests {
         let live = recipe(.vesselHero, .rectangle, [F.claude(), F.codex()])
         #expect(live.displayName(forSlotAt: 0) == "Claude")
         #expect(live.displayName(forSlotAt: 5) == "")
+    }
+
+    /// U9 follow-up: "Demo · OpenCode" overflowed Vessel Hero's single column, which never
+    /// shrinks sideways. A name not verified to fit the prefix reads "Demo", as a pair's
+    /// first slot does, and its mark still names the provider.
+    @Test func aLongDemoNameDropsToDemoInEveryRectangle() throws {
+        let envelope = OpenCodePhoneFixture.project(OpenCodePhoneFixture.go())
+        for style in WidgetLayoutStyle.allCases where style != .tightestFirst {
+            let demo = LockScreenWidgetRecipe(
+                style: style, family: .rectangle, providerChoice: .opencode,
+                state: .demo(envelope), now: OpenCodePhoneFixture.captured)
+            #expect(demo.slots.map(\.providerID) == ["opencode"], "\(style)")
+            #expect(demo.displayName(forSlotAt: 0) == "Demo", "\(style)")
+            let live = LockScreenWidgetRecipe(
+                style: style, family: .rectangle, providerChoice: .opencode,
+                state: .content(envelope), now: OpenCodePhoneFixture.captured)
+            #expect(live.displayName(forSlotAt: 0) == "OpenCode", "\(style)")
+        }
+        #expect(recipe(.vesselHero, .rectangle, [F.claude()], choice: .claude, demo: true).displayName(forSlotAt: 0) == "Demo · Claude")
+        #expect(recipe(.vesselHero, .rectangle, [F.claude(), F.codex()], choice: .codex, demo: true).displayName(forSlotAt: 0) == "Demo · Codex")
     }
 
     @Test func cursorTitleNamesThePoolWhereNoCaptionDoes() {

@@ -182,6 +182,12 @@ enum AccountsSettingsInteractions {
         )
     }
 
+    /// A provider's standing help line under its group, shown whether or not it is fetched.
+    /// Only OpenCode has one (KTD21): each home reads one Console workspace.
+    static func providerGroupNote(for providerID: ProviderID) -> String? {
+        providerID == .opencode ? SettingsCopy.opencodeWorkspaceScope : nil
+    }
+
     static func providerGroupPresentation(
         providerDisplayName: String,
         accounts: [ProviderAccount],
@@ -446,11 +452,20 @@ enum AccountsSettingsInteractions {
         return builtInRowActions(for: builtIn, in: store)
     }
 
+    /// The "Sign out and set up again?" message. For the built-in OpenCode account it is
+    /// also the D7 warning, so a reset from Settings asks once, not twice.
+    static func resetDialogMessage(for account: ProviderAccount, providerDisplayName: String) -> String {
+        if account.providerID == .opencode {
+            return BuiltInSignInConfirmation.message(for: .reset)
+        }
+        return "Signing in again switches the \(providerDisplayName) CLI login across this Mac, including Terminal sessions. If you only want Headroom to show another login, add it as a separate account and use Make Main."
+    }
+
     @discardableResult
     static func resetBuiltIn(
         _ account: ProviderAccount,
         in store: UsageStore,
-        beginReset: @MainActor (ProviderAccount) -> Void = SetupSessions.resetSetup(for:)
+        beginReset: @MainActor (ProviderAccount) -> Void = { SetupSessions.resetSetup(for: $0) }
     ) -> Bool {
         guard account.isBuiltIn,
               store.canResetBuiltInAccount(for: account.providerID)

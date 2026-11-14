@@ -606,6 +606,26 @@ struct RememberedRowPresentationTests {
         #expect(AccountSectionContent(freshness: .live, kind: .engine) == .meters)
     }
 
+    /// KTD7/D2 (OpenCode plan): the no-plan row draws its sentence and button, no meters; a
+    /// permanent failure still wins, and a remembered row has no live control to offer.
+    @Test func theNoPlanRowDrawsTheActionNotTheMeters() throws {
+        let presentation = try #require(UsageSnapshot.PlanStatus.noActivePlan.recoveryPresentation(for: .opencode))
+        #expect(AccountSectionContent(freshness: .live, kind: .engine, planRecovery: presentation)
+            == .planStatus(presentation))
+        #expect(AccountSectionContent(freshness: .stale(.providerSetup(.opencodeTransientCapture)), kind: .engine,
+                                      planRecovery: presentation) == .planStatus(presentation))
+        #expect(AccountSectionContent(freshness: .stale(.providerSetup(.opencodeSignedOut)), kind: .engine,
+                                      planRecovery: presentation) == .signIn(.providerSetup(.opencodeSignedOut)))
+        #expect(AccountSectionContent(freshness: .live, kind: .remembered, planRecovery: presentation) == .meters)
+    }
+
+    /// D2: the approved row shows what the click does, after the sentence.
+    @Test func theNoPlanRowShowsItsActionAfterTheSentence() throws {
+        let presentation = try #require(UsageSnapshot.PlanStatus.noActivePlan.recoveryPresentation(for: .opencode))
+        #expect(PlanStatusActionRow.message(for: presentation) == "No Go plan on this workspace. See\u{00A0}Go\u{00A0}Plans")
+        #expect(PlanStatusActionRow.rowLabel(for: presentation) == "See\u{00A0}Go\u{00A0}Plans")
+    }
+
     @Test func voiceOverSaysLastReadAndWhenForARememberedRow() {
         let shown = presentation(entry(.remembered, readAgo: 2 * 86_400))
         let label = IdentityRowText.accessibilityParts(
@@ -714,16 +734,18 @@ struct CardRowActionTests {
     @Test func terminalHandoffsWebPagesAndRereadsEachGetTheirOwnGlyph() {
         for action in [SetupRecoveryAction.openClaudeSetup, .connectCodex, .reconnectCodex, .connectGrok,
                        .reconnectGrok, .connectCursor, .openClaudeWorkspace, .openCursorWorkspace,
-                       .reviewCursorTools, .resolveCodexStorage, .connectCopilot] {
+                       .reviewCursorTools, .resolveCodexStorage, .connectCopilot, .connectOpenCode] {
             #expect(SetupSessions.recoveryRoute(for: action).systemImage == "apple.terminal")
         }
         for action in [SetupRecoveryAction.installClaudeCLI, .installCodexCLI, .installGrokCLI,
-                       .installCursorAgent, .installCopilotCLI, .showPrivacyGuidance] {
+                       .installCursorAgent, .installCopilotCLI, .showPrivacyGuidance,
+                       .installOpenCodeCLI, .updateOpenCode, .seeOpenCodeGoPlans] {
             #expect(SetupSessions.recoveryRoute(for: action).systemImage == "globe")
         }
         // Device code is the alternative beside a Terminal sign-in, so it can't share its glyph.
         #expect(SetupSessions.recoveryRoute(for: .connectCodexDeviceCode).systemImage == "number")
         #expect(SetupSessions.recoveryRoute(for: .checkNow).systemImage == "arrow.clockwise")
+        #expect(SetupSessions.recoveryRoute(for: .contactSupport).systemImage == "envelope")
     }
 
     /// The ↗ promises the click leaves Headroom, so Check Now — a re-read in place — never

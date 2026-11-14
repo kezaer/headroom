@@ -105,6 +105,8 @@ enum SetupSessions {
         case workspaceTrust
         case cursorTools
         case privacyGuidance(URL)
+        /// KTD21 (OpenCode plan): Contact Support opens Settings › About's feedback email.
+        case feedbackEmail
         case checkNow
     }
 
@@ -415,7 +417,14 @@ enum SetupSessions {
         return try body()
     }
 
-    static func openSetup(for account: ProviderAccount, onRetry: @escaping () -> Void) {
+    /// `confirmed` is set only by the D7 confirmation itself (`BuiltInSignInConfirmation`).
+    static func openSetup(
+        for account: ProviderAccount,
+        onRetry: @escaping () -> Void,
+        confirmed: Bool = false
+    ) {
+        guard confirmed || !requestsBuiltInSignInConfirmation(for: account, purpose: .setup, onRetry: onRetry)
+        else { return }
         noteHandoffBegan(for: account)
         if let coordinator {
             coordinator.begin(for: account)
@@ -429,15 +438,36 @@ enum SetupSessions {
         case .grok: assertionFailure("Grok setup requires the configured coordinator")
         case .cursor: assertionFailure("Cursor setup requires the configured coordinator")
         case .copilot: assertionFailure("Copilot setup requires the configured coordinator")
+        case .opencode: assertionFailure("OpenCode setup requires the configured coordinator")
         default: assertionFailure("No setup session registered for \(account.providerID)")
         }
     }
 
-    static func resetSetup(for account: ProviderAccount) {
+    static func resetSetup(for account: ProviderAccount, confirmed: Bool = false) {
+        guard confirmed || !requestsBuiltInSignInConfirmation(for: account, purpose: .reset, onRetry: {})
+        else { return }
         noteHandoffBegan(for: account)
         // QA1: the Connected chip's delayed callback belongs to the session reset replaces.
         SetupSessionActivity.shared.releaseConnectedPayoff(for: account.key)
         coordinator?.beginReset(for: account)
+    }
+
+    /// D7/AE7 (OpenCode plan): whether this start must wait for the built-in sign-in warning.
+    /// Every built-in OpenCode sign-in, Sign In Again and reset asks, every time; nothing is
+    /// remembered. An open handoff never asks: the coordinator answers that start with
+    /// `.blockedByOpenHandoff` and opens nothing.
+    static func needsBuiltInSignInConfirmation(for account: ProviderAccount) -> Bool {
+        account.providerID == .opencode && account.isBuiltIn && !hasActiveHandoff(for: account)
+    }
+
+    private static func requestsBuiltInSignInConfirmation(
+        for account: ProviderAccount,
+        purpose: SetupHandoffPurpose,
+        onRetry: @escaping () -> Void
+    ) -> Bool {
+        guard needsBuiltInSignInConfirmation(for: account) else { return false }
+        BuiltInSignInConfirmation.shared.request(account: account, purpose: purpose, onRetry: onRetry)
+        return true
     }
 
     /// R2M12: stamp the start of a handoff. Idempotent while a wait is already running, so
@@ -483,6 +513,11 @@ enum SetupSessions {
         for account: ProviderAccount,
         onRetry: @escaping () -> Void
     ) {
+        // KTD7 (OpenCode plan): the plans page may sell the user a Go plan, so the next
+        // popover open re-checks this account once instead of waiting out the interval.
+        if action == .seeOpenCodeGoPlans {
+            store?.armRecheckOnNextPopoverOpen(account.key)
+        }
         switch recoveryRoute(for: action) {
         case .documentation(let url), .privacyGuidance(let url):
             NSWorkspace.shared.open(url)
@@ -506,6 +541,9 @@ enum SetupSessions {
             } else {
                 CodexSetupSession.openSetup(for: account, onRetry: onRetry)
             }
+        case .feedbackEmail:
+            guard let store else { return }
+            Task { _ = await FeedbackMail.send(store: store, isInert: AppComposition.usesInertFeedback()) }
         case .checkNow:
             guard checkNowTasks[account.key] == nil else { return }
             checkNowTasks[account.key] = Task {
@@ -528,7 +566,7 @@ enum SetupSessions {
             // R8: Anthropic's current official installation guide.
             .documentation(URL(string: "https://code.claude.com/docs/en/installation")!)
         case .openClaudeSetup, .connectCodex, .reconnectCodex, .resolveCodexStorage,
-             .connectGrok, .reconnectGrok, .connectCursor, .connectCopilot:
+             .connectGrok, .reconnectGrok, .connectCursor, .connectCopilot, .connectOpenCode:
             .setup(.standard)
         case .installCodexCLI:
             .documentation(URL(string: "https://developers.openai.com/codex/cli/")!)
@@ -540,6 +578,14 @@ enum SetupSessions {
             .documentation(URL(string: "https://docs.cursor.com/en/cli/installation")!)
         case .installCopilotCLI:
             .documentation(CopilotCLI.installationURL)
+        case .installOpenCodeCLI:
+            .documentation(OpenCodeCLI.installationURL)
+        case .updateOpenCode:
+            .documentation(URL(string: "https://anoma.ly/notes/opencode-2-0")!)
+        case .seeOpenCodeGoPlans:
+            .documentation(URL(string: "https://opencode.ai/go")!)
+        case .contactSupport:
+            .feedbackEmail
         // A startup question is answered in the same interactive launch an approval uses;
         // `performRecovery` records the reason that tells them apart.
         case .openClaudeWorkspace, .answerClaudeQuestion, .openCursorWorkspace:
@@ -605,7 +651,8 @@ enum SetupSessions {
             purpose: purpose(for: account),
             mode: mode(for: account),
             interactiveReason: interactiveReason(for: account),
-            reportedCompletion: finalVerificationCompletion(for: account)
+            reportedCompletion: finalVerificationCompletion(for: account),
+            providerID: account.providerID
         )
     }
 
@@ -784,6 +831,7 @@ enum SetupSessions {
         case .grok: "Grok Build"
         case .cursor: "Cursor Agent"
         case .copilot: "GitHub Copilot"
+        case .opencode: "OpenCode"
         default: account.providerID.raw.capitalized
         }
     }
@@ -936,13 +984,26 @@ enum SetupSessions {
         )
     }
 
+    /// U5: resolved executable plus the account's home in, `--version` output out. Injected
+    /// so staging tests never run a real `opencode`.
+    typealias OpenCodeVersionReading = @Sendable (String, OpenCodeAccountHome) async -> String?
+
+    static let readOpenCodeVersion: OpenCodeVersionReading = { executablePath, home in
+        await OpenCodeCLI.readVersionOutput(executablePath: executablePath, home: home)
+    }
+
     static func prepareHandoff(
         for account: ProviderAccount,
         mode: SetupHandoffMode,
         purpose: SetupHandoffPurpose = .setup,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
         claudeExecutableLocator: any CLIExecutableLocating = CLIExecutableLocator.claude(),
-        claudeVersionReader: @escaping ClaudeVersionReading = readClaudeVersion
+        claudeVersionReader: @escaping ClaudeVersionReading = readClaudeVersion,
+        openCodeExecutableResolver: @escaping @Sendable () -> String? = { OpenCodeCLI.resolveExecutable() },
+        openCodeExecutableOverride: String? = OpenCodeLaunchArguments.executableOverride(
+            arguments: ProcessInfo.processInfo.arguments
+        ),
+        openCodeVersionReader: @escaping OpenCodeVersionReading = readOpenCodeVersion
     ) async -> SetupPreparationResult {
         let accountCompletionMarker = completionMarker(
             for: account,
@@ -1104,6 +1165,34 @@ enum SetupSessions {
                         completionMarker: completionMarker
                     )
                     manualCommand = CopilotCLI.manualLoginCommand(executablePath: executable)
+                case .opencode:
+                    guard let home = ProviderAccountConfiguration.make(for: account).opencodeHome else {
+                        return .failure(.stagingFailed)
+                    }
+                    guard let executable = OpenCodeCLI.signInExecutable(
+                        for: home,
+                        override: openCodeExecutableOverride,
+                        resolve: openCodeExecutableResolver
+                    ) else {
+                        return .failure(.executableMissing)
+                    }
+                    // KTD3/U5: a 1.x client never gets `auth` — staging refuses before any
+                    // Terminal opens, with the same outcome the usage read reports.
+                    let versionOutput = await openCodeVersionReader(executable, home)
+                    if OpenCodeCLI.signInSupport(versionOutput: versionOutput) == .tooOld {
+                        return .failure(.provider(.opencodeUpdateRequired))
+                    }
+                    script = OpenCodeCLI.loginScript(
+                        executablePath: executable,
+                        home: home,
+                        purpose: purpose,
+                        completionMarker: completionMarker
+                    )
+                    manualCommand = OpenCodeCLI.manualLoginCommand(
+                        executablePath: executable,
+                        home: home,
+                        purpose: purpose
+                    )
                 default:
                     return .failure(.stagingFailed)
                 }

@@ -274,6 +274,11 @@ public struct UsageWindow: Sendable, Equatable {
     /// Original source observation anchor. It survives stale/unavailable transitions;
     /// publication and migration timestamps never replace it.
     public let observedAt: Date?
+    /// The source itself said this window is at its limit (OpenCode's `limited`, KTD6/D3 of
+    /// the OpenCode plan), which is the authority for the card's limited sentence; a window
+    /// that merely reads 100% is not. False for every other provider. Mac-local: never
+    /// persisted or synced, because the sentence shows only on a live window.
+    public let isLimited: Bool
 
     public init(
         kind: WindowKind,
@@ -282,7 +287,8 @@ public struct UsageWindow: Sendable, Equatable {
         resetLabel: String? = nil,
         resetTimeZoneIdentifier: String? = nil,
         freshness: UsageWindowFreshness = .live,
-        observedAt: Date? = nil
+        observedAt: Date? = nil,
+        isLimited: Bool = false
     ) {
         self.kind = kind
         self.utilization = utilization
@@ -291,6 +297,7 @@ public struct UsageWindow: Sendable, Equatable {
         self.resetTimeZoneIdentifier = resetTimeZoneIdentifier
         self.freshness = freshness
         self.observedAt = observedAt ?? freshness.observedAt
+        self.isLimited = isLimited
     }
 
     /// Convenience for providers that receive an exact machine deadline.
@@ -337,7 +344,8 @@ public struct UsageWindow: Sendable, Equatable {
             resetLabel: resetLabel,
             resetTimeZoneIdentifier: resetTimeZoneIdentifier,
             freshness: freshness,
-            observedAt: observedAt
+            observedAt: observedAt,
+            isLimited: isLimited
         )
     }
 }
@@ -473,6 +481,27 @@ public struct UsageSnapshot: Sendable, Equatable {
     /// behavior as it was before identities existed. Mac-local: it never reaches the
     /// widget envelope or the phone.
     public let identity: AccountIdentityOutcome?
+    /// What the source said about the account's plan when it isn't a usage number: today
+    /// only OpenCode's signed-in workspace without Go (KTD7, OpenCode plan). Nil on every
+    /// other reading.
+    public let planStatus: PlanStatus?
+
+    /// KTD7 (OpenCode plan): a stored value, so its raw value is permanent once shipped.
+    public enum PlanStatus: String, Sendable, Equatable, Codable {
+        /// Signed in, but the workspace has no plan with usage limits to read.
+        case noActivePlan
+    }
+
+    /// KTD16 (OpenCode plan): the plan text every widget and phone export carries. A plan
+    /// status with a name of its own wins over the source label, so a no-Go account reads
+    /// "No Go plan" on the phone and its widgets with no sync field added. Only while the
+    /// status can still be true: after a permanent failure (signed out, sign-in expired, CLI
+    /// missing, update required) the home may hold another login or none, so the retained
+    /// status names no plan there.
+    public var exportedPlanLabel: String? {
+        if case .stale(let reason) = freshness, reason.isPermanent { return planLabel }
+        return planStatus?.syncedPlanName(for: providerID) ?? planLabel
+    }
 
     public init(
         providerID: ProviderID,
@@ -483,7 +512,8 @@ public struct UsageSnapshot: Sendable, Equatable {
         codexResetCreditsField: CodexResetCreditsField? = nil,
         capturedAt: Date?,
         freshness: Freshness,
-        identity: AccountIdentityOutcome? = nil
+        identity: AccountIdentityOutcome? = nil,
+        planStatus: PlanStatus? = nil
     ) {
         self.providerID = providerID
         self.windows = windows
@@ -494,6 +524,7 @@ public struct UsageSnapshot: Sendable, Equatable {
         self.capturedAt = capturedAt
         self.freshness = freshness
         self.identity = identity
+        self.planStatus = planStatus
     }
 
     /// `--probe-codex` line. Three live states stay distinguishable: an integer
@@ -552,7 +583,8 @@ public struct UsageSnapshot: Sendable, Equatable {
             codexResetCreditsField: codexResetCreditsField,
             capturedAt: capturedAt,
             freshness: .stale(reason),
-            identity: identity
+            identity: identity,
+            planStatus: planStatus
         )
     }
 
@@ -567,7 +599,8 @@ public struct UsageSnapshot: Sendable, Equatable {
             codexResetCreditsField: codexResetCreditsField,
             capturedAt: capturedAt,
             freshness: freshness,
-            identity: identity
+            identity: identity,
+            planStatus: planStatus
         )
     }
 
@@ -581,7 +614,8 @@ public struct UsageSnapshot: Sendable, Equatable {
             codexResetCreditsField: codexResetCreditsField,
             capturedAt: capturedAt,
             freshness: freshness,
-            identity: identity
+            identity: identity,
+            planStatus: planStatus
         )
     }
 
@@ -597,7 +631,8 @@ public struct UsageSnapshot: Sendable, Equatable {
             codexResetCreditsField: codexResetCreditsField,
             capturedAt: capturedAt,
             freshness: freshness ?? self.freshness,
-            identity: identity
+            identity: identity,
+            planStatus: planStatus
         )
     }
 }
@@ -637,6 +672,9 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
     case openAIAPI
     case xaiAPI
     case cursorAPI
+    /// KTD13 (OpenCode plan): appended after the API surfaces, not beside the other
+    /// subscriptions, so no stored raw value or `allCases` position moves.
+    case opencodeSubscription
 
     public var providerID: ProviderID {
         switch self {
@@ -645,6 +683,7 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
         case .grokSubscription, .xaiAPI: return .grok
         case .cursorSubscription, .cursorAPI: return .cursor
         case .copilotSubscription: return .copilot
+        case .opencodeSubscription: return .opencode
         }
     }
 
@@ -659,12 +698,14 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
         case .openAIAPI: return "OpenAI API spend"
         case .xaiAPI: return "xAI API spend"
         case .cursorAPI: return "Cursor on-demand spend"
+        case .opencodeSubscription: return "OpenCode subscription"
         }
     }
 
     public var isSubscription: Bool {
         switch self {
-        case .claudeSubscription, .codexSubscription, .grokSubscription, .cursorSubscription, .copilotSubscription:
+        case .claudeSubscription, .codexSubscription, .grokSubscription, .cursorSubscription, .copilotSubscription,
+             .opencodeSubscription:
             return true
         case .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
             return false
@@ -675,7 +716,10 @@ public enum UsageSurface: String, CaseIterable, Sendable, Codable, Equatable {
         switch self {
         case .claudeSubscription, .codexSubscription:
             return true
-        case .grokSubscription, .cursorSubscription, .copilotSubscription, .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
+        // R11: OpenCode is off for fresh installs and upgrades alike, like Grok, Cursor and
+        // Copilot before it.
+        case .grokSubscription, .cursorSubscription, .copilotSubscription, .opencodeSubscription,
+             .anthropicAPI, .openAIAPI, .xaiAPI, .cursorAPI:
             return false
         }
     }
@@ -931,5 +975,17 @@ public struct APISpendSnapshot: Sendable, Equatable {
             capturedAt: capturedAt,
             freshness: .stale(reason)
         )
+    }
+}
+
+extension UsageSnapshot.PlanStatus {
+    /// KTD16 (OpenCode plan): the plan name exported for this status. The Mac card says it
+    /// in its own action row (KTD7) and draws no plan capsule; the phone has no such row, so
+    /// it prints the status as the plan name. Nil for a provider that has no name for it.
+    public func syncedPlanName(for provider: ProviderID) -> String? {
+        switch (self, provider) {
+        case (.noActivePlan, .opencode): "No Go plan"
+        default: nil
+        }
     }
 }

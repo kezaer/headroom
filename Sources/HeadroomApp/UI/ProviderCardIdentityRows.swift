@@ -29,7 +29,7 @@ func presentedSetupOutcome(
     return neverSignedInOutcome(for: providerID)
 }
 
-/// The typed "this account has never signed in" outcome per provider — the same five
+/// The typed "this account has never signed in" outcome per provider, one of those
 /// `ProviderSetupOutcome.isNeverSignedIn` reports true for. Provider-scoped rather than
 /// hard-wired to Claude's, because `UsageStore.addAccount` hands the preset to every
 /// provider that can carry an extra account.
@@ -40,6 +40,7 @@ func neverSignedInOutcome(for providerID: ProviderID) -> ProviderSetupOutcome? {
     case .grok: .grokAuthAbsent
     case .cursor: .cursorAuthAbsent
     case .copilot: .copilotSignedOut
+    case .opencode: .opencodeSignedOut
     default: nil
     }
 }
@@ -165,9 +166,14 @@ struct AccountRowKindPresentation: Equatable {
 enum AccountSectionContent: Equatable {
     case sessionOwned
     case signIn(FailureReason)
+    /// KTD7/D2 (OpenCode plan): signed in with no plan to read. A sentence and a button, no
+    /// meter row.
+    case planStatus(ProviderRecoveryPresentation)
     case meters
 
-    init(freshness: Freshness, kind: DisplayAccountKind) {
+    /// `planRecovery` is `UsageSnapshot.planStatusRecovery`, which already lets a permanent
+    /// failure win.
+    init(freshness: Freshness, kind: DisplayAccountKind, planRecovery: ProviderRecoveryPresentation? = nil) {
         guard kind.offersRetry else {
             self = .meters
             return
@@ -178,7 +184,77 @@ enum AccountSectionContent: Equatable {
         case .stale(let reason) where reason.isPermanent:
             self = .signIn(reason)
         default:
-            self = .meters
+            self = planRecovery.map(Self.planStatus) ?? .meters
+        }
+    }
+}
+
+/// KTD7/D2 (OpenCode plan): the no-plan row, the same `CardRowAction` a recovery row draws, in
+/// neutral ink (DESIGN.md rule 4: nobody refused anything). Shared by the single-account card
+/// and the account sections so one account and several read alike.
+struct PlanStatusActionRow: View {
+    let presentation: ProviderRecoveryPresentation
+    let account: ProviderAccount
+    let onRetry: () -> Void
+
+    var body: some View {
+        CardRowAction(
+            message: Self.message(for: presentation),
+            severity: .attention,
+            accountLabel: account.label,
+            primary: primaryAction,
+            secondary: presentation.secondaryAction.flatMap { action in
+                presentation.secondaryLabel.map { label in
+                    .init(label: label, recovery: action) {
+                        SetupSessions.performRecovery(action, for: account, onRetry: onRetry)
+                    }
+                }
+            }
+        )
+    }
+}
+
+extension PlanStatusActionRow {
+    /// D2 (OpenCode plan): the approved row reads
+    /// "No Go plan on this workspace. See Go Plans". `CardRowAction` accents an action it finds
+    /// in the sentence and otherwise hides the label in the tooltip, which left a row that
+    /// never said what the click does. The label joins the sentence here so it is visible.
+    static func message(for presentation: ProviderRecoveryPresentation) -> String {
+        let status = presentation.status
+        guard status.range(of: presentation.primaryLabel, options: [.caseInsensitive]) == nil else { return status }
+        let sentence = status.hasSuffix(".") ? status : status + "."
+        return "\(sentence) \(rowLabel(for: presentation))"
+    }
+
+    /// The action words never split across lines: at the popover's width the row wraps, and
+    /// "See" alone at the end of the first line read as part of the sentence.
+    static func rowLabel(for presentation: ProviderRecoveryPresentation) -> String {
+        presentation.primaryLabel.replacingOccurrences(of: " ", with: "\u{00A0}")
+    }
+
+    /// KTD21: the no-Go row's tooltip says why another workspace's Go plan doesn't show.
+    static func primaryHelp(for action: SetupRecoveryAction) -> String? {
+        action == .seeOpenCodeGoPlans ? SettingsCopy.opencodeWorkspaceScope : nil
+    }
+
+    private var primaryAction: CardRowButtonAction {
+        var action = CardRowButtonAction(label: Self.rowLabel(for: presentation), recovery: presentation.primaryAction) {
+            SetupSessions.performRecovery(presentation.primaryAction, for: account, onRetry: onRetry)
+        }
+        action.help = Self.primaryHelp(for: presentation.primaryAction)
+        return action
+    }
+}
+
+/// D3/KTD21 (OpenCode plan): the red limited line under the identity row. The recipe decides
+/// whether it shows and what it says; Standard only (KTD15).
+struct UsageLimitSentenceView: View {
+    let snapshot: UsageSnapshot
+    let now: Date
+
+    var body: some View {
+        if let sentence = UsageLimitSentence(snapshot: snapshot, now: now) {
+            StatusSentence(text: sentence.text, severity: .critical)
         }
     }
 }
@@ -336,7 +412,13 @@ struct AccountSectionView: View {
         if case .stale(let reason) = snapshot.freshness, reason.isPermanent {
             return IdentityRowMetrics.identityToSentenceGap
         }
+        if case .planStatus = sectionContent { return IdentityRowMetrics.identityToSentenceGap }
         return tuning.identityToMetersGap
+    }
+
+    private var sectionContent: AccountSectionContent {
+        AccountSectionContent(freshness: snapshot.freshness, kind: entry.kind,
+                              planRecovery: snapshot.planStatusRecovery)
     }
 
     /// SL1: live and transient stale are one branch, so a live ↔ stale flip repaints the rows
@@ -347,7 +429,7 @@ struct AccountSectionView: View {
         kind: AccountRowKindPresentation
     ) -> some View {
         ZStack(alignment: .topLeading) {
-            switch AccountSectionContent(freshness: snapshot.freshness, kind: entry.kind) {
+            switch sectionContent {
             case .sessionOwned:
                 // Review #6 (2026-09-19 sign-in review): a reset blanks this row to
                 // `.pending` and then waits on the Terminal exit, scheduling no check — so
@@ -358,9 +440,21 @@ struct AccountSectionView: View {
             case .signIn(let reason):
                 signInContent(reason, setupState: setupState)
                     .transition(HeadroomMotion.fade(HeadroomMotion.valueSpring, reduceMotion: reduceMotion))
+            case .planStatus(let presentation):
+                Group {
+                    if isWaitingForSetup {
+                        waitingPhaseRow
+                    } else {
+                        PlanStatusActionRow(presentation: presentation, account: account, onRetry: onRetry)
+                    }
+                }
+                .transition(HeadroomMotion.fade(HeadroomMotion.valueSpring, reduceMotion: reduceMotion))
             case .meters:
-                bars(dimmed: kind.dimsWholeRow || snapshot.freshness != .live, kind: kind)
-                    .transition(HeadroomMotion.fade(HeadroomMotion.valueSpring, reduceMotion: reduceMotion))
+                VStack(alignment: .leading, spacing: tuning.identityToMetersGap) {
+                    UsageLimitSentenceView(snapshot: snapshot, now: now)
+                    bars(dimmed: kind.dimsWholeRow || snapshot.freshness != .live, kind: kind)
+                }
+                .transition(HeadroomMotion.fade(HeadroomMotion.valueSpring, reduceMotion: reduceMotion))
             }
         }
     }
@@ -503,6 +597,7 @@ struct AccountSectionView: View {
     /// Whether `stateContent` is drawing `waitingPhaseRow` for this state — the same branch
     /// order `sessionOwnedRow` and `signInContent` take.
     private func showsWaitingPhaseRow(_ setupState: SetupSessionState) -> Bool {
+        if case .planStatus = sectionContent { return isWaitingForSetup }
         switch snapshot.freshness {
         case .pending:
             return setupRowRecovery(for: setupState) == .sessionOnly

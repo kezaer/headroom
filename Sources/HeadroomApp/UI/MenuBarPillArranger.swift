@@ -25,6 +25,16 @@ enum PillShelfCommit: Equatable {
     case remove(ProviderID)
 }
 
+/// A pill card's insides at one card width: the pill's type and spacing, and whether the
+/// move carets fit beside it.
+struct PillCardGeometry: Equatable, Sendable {
+    let pill: MenuBarPillMetrics
+    let showsCarets: Bool
+    /// Below `PillShelfModel.nameFloor` the header is the mark alone; the name stays in its
+    /// tooltip and the card's VoiceOver label.
+    var showsName = true
+}
+
 /// The arranger's pure decisions, apart from the generic view so they can be tested: where a
 /// dragged card would land, where every other card sits meanwhile, and what the drop commits.
 enum PillShelfModel {
@@ -32,17 +42,42 @@ enum PillShelfModel {
     static let wellPadding: CGFloat = 9
     static let spacing: CGFloat = 8
     static let maximumCardWidth: CGFloat = 100
-    /// The narrowest card. At the Settings window's 720pt floor four cards get 98pt and five
-    /// get 77pt, so the floor sits at 77 for five providers to share one row (U6, Copilot
-    /// plan; it was 84 for four). The name and value truncate below the old floor.
-    static let minimumCardWidth: CGFloat = 77
+    /// The narrowest card. At the Settings window's 720pt floor four cards get 98pt, five get
+    /// 77pt and six get 63pt, so the floor sits at 62 for six providers to share one row
+    /// (KTD14, OpenCode plan; it was 84 for four and 77 for five). The name and value
+    /// truncate below the old floors.
+    static let minimumCardWidth: CGFloat = 62
 
-    /// Every card shares one width so a card keeps its size across both rows, and five cards
+    /// Every card shares one width so a card keeps its size across both rows, and six cards
     /// fit one row at the window's minimum width instead of scrolling.
     static func cardWidth(forWidth width: CGFloat, count: Int) -> CGFloat {
         guard count > 0 else { return maximumCardWidth }
         let available = width - 2 * wellPadding - CGFloat(count - 1) * spacing
         return min(maximumCardWidth, max(minimumCardWidth, (available / CGFloat(count)).rounded(.down)))
+    }
+
+    /// What a move caret needs beside the pill: its 11pt target sits 1pt in from the card
+    /// edge, and its ~5pt chevron ends about 9pt in, so 10 keeps a point of air before the plate.
+    static let caretReserve: CGFloat = 10
+    /// The header's fixed parts take 44pt — two 9pt insets, the × chip's 10pt reserve, the 12pt
+    /// mark and its 4pt gap. Under 24pt left, a name truncates to a bare ellipsis, which says
+    /// less than the mark alone.
+    static let nameFloor: CGFloat = 68
+
+    /// How a card of `cardWidth` draws its pill. Standard wherever its widest value ("100%")
+    /// fits with both carets clear of it — every card of up to four providers, and five at the
+    /// default window. Narrower cards take the one compact step; where even that leaves no
+    /// room for the carets (six cards at the 720pt floor), the card drops its carets and keeps
+    /// drag, the × button and the VoiceOver move actions, and its header keeps only the mark.
+    /// Decided by width only, never by the values on screen, so a card never changes form when
+    /// a reading changes.
+    static func cardGeometry(cardWidth: CGFloat, showsPercentage: Bool) -> PillCardGeometry {
+        let showsName = cardWidth >= nameFloor
+        for pill in [MenuBarPillMetrics.standard, .compact]
+        where pill.widestPillWidth(showsPercentage: showsPercentage) + 2 * caretReserve <= cardWidth {
+            return PillCardGeometry(pill: pill, showsCarets: true, showsName: showsName)
+        }
+        return PillCardGeometry(pill: .compact, showsCarets: false, showsName: showsName)
     }
 
     /// The last pill cannot leave the menu bar; a shelf card can always go up.
@@ -189,10 +224,13 @@ struct MenuBarPillArranger<Card: View>: View {
     let menuBarMessage: (title: String?, detail: String)?
     let notShownCaption: String
     let notShownHelp: String
+    /// Whether the pills draw percentages; with the card width it picks the card geometry.
+    let showsPercentage: Bool
     let onCommit: (PillShelfCommit) -> Void
     /// Draws a card in the form of the given row. A dropped card takes its drop row's form
-    /// the moment it is let go, so it morphs while it lands (PS8).
-    @ViewBuilder let card: (ProviderID, PillShelf) -> Card
+    /// the moment it is let go, so it morphs while it lands (PS8). Every card shares the one
+    /// geometry its width allows.
+    @ViewBuilder let card: (ProviderID, PillShelf, PillCardGeometry) -> Card
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -221,6 +259,10 @@ struct MenuBarPillArranger<Card: View>: View {
     }
 
     private var pitch: CGFloat { cardWidth + PillShelfModel.spacing }
+
+    private var cardGeometry: PillCardGeometry {
+        PillShelfModel.cardGeometry(cardWidth: cardWidth, showsPercentage: showsPercentage)
+    }
 
     private var slots: [ProviderID: PillShelfSlot] {
         if let landing {
@@ -301,9 +343,10 @@ struct MenuBarPillArranger<Card: View>: View {
             }
             .layoutValue(key: PillShelfPartKey.self, value: .well(.notShown))
 
+            let geometry = cardGeometry
             ForEach(shown + notShown, id: \.self) { id in
                 let lifted = dragged?.id == id
-                card(id, presentation(of: id))
+                card(id, presentation(of: id), geometry)
                     .scaleEffect(lifted ? Self.liftScale : 1)
                     .shadow(
                         color: .black.opacity(lifted ? (colorScheme == .dark ? 0.45 : 0.16) : 0),
