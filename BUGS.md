@@ -4,6 +4,30 @@ Non-blocking items. The earlier OAuth/Keychain-token approach and its U9 spike a
 Anthropic prohibits and blocks third-party subscription-OAuth use, so Claude now reads the
 official `claude` CLI's `/usage` panel instead.
 
+## Initial CodeQL findings (2026-11-14)
+
+- **Swift scanning is unavailable with the required toolchain.** Both default setup and an
+  explicit Xcode 27 build were attempted. The traced build failed to load Apple's Swift macro
+  plugin with `Bad CPU type in executable`. GitHub's CodeQL 2.27.3 release notes confirm that
+  macOS/Xcode 27 traced builds are unsupported; Headroom requires Swift 6.4. Keep the working
+  Python, JavaScript/TypeScript and Actions scans enabled, and revisit Swift when upstream
+  support lands. Do not downgrade app requirements or suppress extraction errors to claim
+  coverage. Source: https://github.com/github/codeql-cli-binaries/blob/main/CHANGELOG.md#release-2273-2026-10-20.
+
+- The first Python security analysis raised 24 alerts in `Scripts/github-release.py`,
+  `Scripts/bench-trace-summary.py` and `Scripts/dmg-layout-check.py`. They cover command-line
+  arguments, file paths, deserialization, XML parsing and a regular expression under the
+  local-input threat model. They are **untriaged**, not confirmed vulnerabilities or accepted
+  false positives. Review each data flow and its trust boundary before fixing or dismissing it.
+  The alerts remain open at https://github.com/kylezantos/headroom/security/code-scanning.
+
+- During security-workflow validation, the unchanged core suite failed once in
+  `OpenCodeUsageSourceProcessTests.clientThatNeverExitsIsKilledAtTheDeadlineWithItsGroup`
+  at `OpenCodeUsageSourceTests.swift:1028` (`!isRunning(child)`). The same source passed all
+  2,483 tests in the preceding cleanup run. Investigate child termination/reaping and the
+  test's deadline before deciding whether this is a process-lifecycle bug or timing sensitivity;
+  do not weaken the assertion. Initial failing run: GitHub Actions `43629168227`.
+
 ## Follow the default login: open items (2026-11-10)
 
 Phase 1 covers Claude,
