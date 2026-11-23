@@ -9,12 +9,15 @@ Settings › Accounts manages which provider logins appear.
 Use the debug build after each edit. Run it from the repository root.
 
 ```sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
 swift build --product Headroom
 ```
 
-This builds the debug app without packaging it. Use the screenshots below to
-inspect the result, or build the release bundle for a hands-on check.
-With only Command Line Tools, use the pinned build command under Check screenshots.
+Always keep both variables. A plain `swift build` uses the default 27.2 SDK, which fails
+to load the SwiftUI `State` macro. This builds the debug app without packaging it.
+Use the screenshots below to inspect the result, or build the release bundle for a
+hands-on check.
 
 ## Run offline
 
