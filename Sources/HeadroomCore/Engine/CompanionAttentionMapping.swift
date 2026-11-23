@@ -33,7 +33,7 @@ public enum CompanionAttentionMapping {
         // KTD21: an API-key connection is fixed by signing in, like a signed-out account.
         case .claudeLoginRequired, .codexAuthAbsent, .grokAuthAbsent, .cursorAuthAbsent, .copilotSignedOut,
             .opencodeSignedOut, .opencodeConsoleSignInRequired, .antigravitySignedOut,
-            .codexSignedOutInT3, .codexSignedOutInFolder, .codexAPIKeyHome:
+            .antigravitySignedOutInT3, .codexSignedOutInT3, .codexSignedOutInFolder, .codexAPIKeyHome:
             .signInRequired
         // A paused client also needs a different CLI before Headroom reads it again.
         case .opencodeUpdateRequired, .antigravityUpdateRequired, .antigravityUnsupportedClient, .codexAppServerUnsupported:

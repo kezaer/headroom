@@ -410,10 +410,15 @@ enum Entry {
     /// `/credits` answers. Prints the parsed rows, the credits badge, or the outcome name with
     /// its stage or cause only: never raw output, stderr, an email or anything identifying.
     private static func runAntigravityProbe() {
-        print("agy CLI: \(AntigravityCLI.resolveExecutable() == nil ? "missing" : "available")")
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            let capture = await AntigravityCLIUsageSource().capture()
+            let plan = AntigravityLaunchResolver(t3: T3Installation())
+                .resolve(preference: Preferences().antigravitySourcePreference)
+            let source = plan.map { $0.signInHome == .system ? "System agy CLI" : "T3 Code" }
+            print("Antigravity source: \(source ?? "missing")")
+            let capture = await AntigravityCLIUsageSource(
+                resolveLaunch: { plan }, memory: .preferences(Preferences())
+            ).capture()
             switch capture {
             case .usage:
                 let snapshot = await AntigravityProvider(source: CapturedAntigravityUsageSource(capture: capture))
@@ -1125,13 +1130,23 @@ enum AppComposition {
         usesInertPhoneSync(arguments: arguments, environment: environment)
     }
 
+    static func isT3AntigravityAvailable() -> Bool {
+        !usesInertAntigravity() && t3Installation.antigravity() != nil
+    }
+
     static func makeAntigravityCLISource(
         arguments: [String] = CommandLine.arguments,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> any AntigravityUsageSource {
-        usesInertAntigravity(arguments: arguments, environment: environment)
-            ? InertAntigravityUsageSource()
-            : AntigravityCLIUsageSource(memory: .preferences(Preferences(defaults: launchDefaults)))
+        guard !usesInertAntigravity(arguments: arguments, environment: environment) else {
+            return InertAntigravityUsageSource()
+        }
+        let preferences = Preferences(defaults: launchDefaults)
+        let resolver = AntigravityLaunchResolver(t3: t3Installation)
+        return AntigravityCLIUsageSource(
+            resolveLaunch: { resolver.resolve(preference: preferences.antigravitySourcePreference) },
+            memory: .preferences(preferences)
+        )
     }
 
     /// The one UserDefaults domain a launch may read or write. `.standard` in the shipping

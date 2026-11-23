@@ -203,6 +203,7 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
     case antigravityUnsupportedClient
     /// `agy` printed its sign-in prompt instead of answering.
     case antigravitySignedOut
+    case antigravitySignedOutInT3
     /// The usage answer no longer matches the contract; only a Headroom update fixes it.
     case antigravityFormatChanged
     case antigravityTransientCapture
@@ -273,6 +274,7 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         case .antigravityCLIMissing: ProviderSignInCopy.cliMissing(for: .antigravity)
         case .antigravityUpdateRequired: "Antigravity usage needs agy\u{00A0}1.5.9 or newer"
         case .antigravityUnsupportedClient: "Headroom paused Antigravity reads after an agy change. Contact support"
+        case .antigravitySignedOutInT3: "Sign in to Antigravity in T3 Code"
         case .antigravitySignedOut: ProviderSignInCopy.status(for: .antigravity)
         case .antigravityFormatChanged: "Headroom can’t read Antigravity usage after an agy change. Contact support"
         case .antigravityTransientCapture: "Couldn’t read Antigravity usage\u{00A0}—\u{00A0}will retry"
@@ -299,7 +301,7 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         // KTD12 (OpenCode plan): an API-key connection has never signed in to the Console.
         case .claudeLoginRequired, .codexAuthAbsent, .grokAuthAbsent, .cursorAuthAbsent, .copilotSignedOut,
              .opencodeSignedOut, .opencodeConsoleSignInRequired, .antigravitySignedOut,
-             .codexSignedOutInT3, .codexSignedOutInFolder, .codexAPIKeyHome:
+             .codexSignedOutInT3, .codexSignedOutInFolder, .codexAPIKeyHome, .antigravitySignedOutInT3:
             true
         default:
             false
@@ -355,7 +357,7 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         case .codexCLIMissing:
             .init(status: message, primaryLabel: "Install Codex CLI", primaryAction: .installCodexCLI)
         case .codexSignedOutInT3, .codexSignedOutInFolder, .codexAppServerUnsupported,
-             .codexAPIKeyHome, .codexHomeMissing, .codexAppServerUnavailable:
+             .codexAPIKeyHome, .codexHomeMissing, .codexAppServerUnavailable, .antigravitySignedOutInT3:
             .init(status: message, primaryLabel: "Check Now", primaryAction: .checkNow)
         case .codexAuthAbsent:
             .init(status: message, primaryLabel: ProviderSignInCopy.button, primaryAction: .connectCodex,

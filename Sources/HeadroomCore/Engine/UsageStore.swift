@@ -105,6 +105,7 @@ public final class UsageStore {
     public internal(set) var accountsByProvider: [ProviderID: [ProviderAccount]]
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
+    public private(set) var antigravitySourcePreference: AntigravitySourcePreference
     public internal(set) var borrowedHomeScanSummary: BorrowedHomeScanSummary?
     public internal(set) var tracksCLIDefaultAlongsideT3: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
@@ -361,6 +362,7 @@ public final class UsageStore {
             ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
         })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
+        self.antigravitySourcePreference = preferences.antigravitySourcePreference
         self.tracksCLIDefaultAlongsideT3 = accountRegistry?.tracksCLIDefaultAlongsideT3 ?? false
         self.usagePercentageMode = preferences.usagePercentageMode
         self.accountTitleInk = preferences.accountTitleInk
@@ -1508,6 +1510,18 @@ public final class UsageStore {
         }
         return candidateIDs.compactMap { menuBarWindow(for: $0) }
             .min { $0.window.percentRemaining < $1.window.percentRemaining }
+    }
+
+    public func setAntigravitySourcePreference(_ preference: AntigravitySourcePreference) {
+        guard preference != antigravitySourcePreference else { return }
+        observedCLIVersions[AccountKey(providerID: .antigravity, accountID: .primary)] = nil
+        preferences.antigravitySourcePreference = preference
+        antigravitySourcePreference = preference
+        guard let key = displayPrimaryKey(for: .antigravity) else { return }
+        invalidateUsageForAccountReset(key)
+        // Selecting a source does not clear that home's sticky sign-out.
+        scheduler.requestPriority(key, origin: .sourceSelection)
+        scheduler.dispatchDue(for: .antigravity)
     }
 
     public func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {

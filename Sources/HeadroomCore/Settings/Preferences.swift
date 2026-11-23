@@ -1,5 +1,11 @@
 import Foundation
 
+public enum AntigravitySourcePreference: String, Sendable, CaseIterable, Identifiable, Codable {
+    case autoPreferT3
+    case systemCLI
+    public var id: String { rawValue }
+}
+
 /// UserDefaults-backed preferences (U8). Renewal dates and poll interval are
 /// non-secret, so they live here, not the Keychain (KTD4). The `Preferences` type
 /// lands early (with U2) because U6 reads the interval and U7 reads renewal dates.
@@ -32,6 +38,8 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let showsAntigravityFiveHourWindows = "showsAntigravityFiveHourWindows"
         static let antigravityStoppedClient = "antigravityStoppedClient"
         static let antigravitySignedOut = "antigravitySignedOut"
+        static let antigravitySourcePreference = "antigravitySourcePreference"
+        static let antigravitySignedOutHomes = "antigravitySignedOutHomes.v1"
         static let syncToIPhoneEnabled = "syncToIPhoneEnabled"
         static let apiSpendPeriod = "apiSpendPeriod"
         static let settingsPane = "settingsPane"
@@ -293,6 +301,19 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
             if newValue { defaults.set(true, forKey: Key.antigravitySignedOut) }
             else { defaults.removeObject(forKey: Key.antigravitySignedOut) }
         }
+    }
+
+    public var antigravitySourcePreference: AntigravitySourcePreference {
+        get {
+            defaults.string(forKey: Key.antigravitySourcePreference)
+                .flatMap(AntigravitySourcePreference.init(rawValue:)) ?? .autoPreferT3
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.antigravitySourcePreference) }
+    }
+
+    public var antigravitySignedOutHomes: Set<String> {
+        get { Set(defaults.stringArray(forKey: Key.antigravitySignedOutHomes) ?? []) }
+        nonmutating set { defaults.set(newValue.sorted(), forKey: Key.antigravitySignedOutHomes) }
     }
 
     public var syncToIPhoneEnabled: Bool {

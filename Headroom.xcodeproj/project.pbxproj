@@ -642,6 +642,7 @@
 		E96C1BA5BBC1C94FC710370B /* AntigravityRowLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB5F3296A5B17E64A8B4CEF6 /* AntigravityRowLabels.swift */; };
 		E96E8DC7DD25A474AB975BF9 /* CompanionIdentityProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6019B00EF172D09CACA2F6B /* CompanionIdentityProbe.swift */; };
 		E99EE8C82A72E8E3EE939D3A /* antigravity-light.svg in Resources */ = {isa = PBXBuildFile; fileRef = 47942521915E2369C26D3CCD /* antigravity-light.svg */; };
+		E9CE01A100571C95263C6DD2 /* AntigravityLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = C88EE9C9D2B9A2E8749CED4B /* AntigravityLaunch.swift */; };
 		E9ED48AF8AA26154FA45AB81 /* MenuBarLabelGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E49C4C6939DD580E123ADC /* MenuBarLabelGeometry.swift */; };
 		EAB85D053D349C41960ACC99 /* HeadroomMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C86F6DC46F48D9B1AC756F9 /* HeadroomMotionTests.swift */; };
 		EB61787A8DEC9D82564BBB68 /* RefreshReceiptPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69193D80EC57DFD1C431841B /* RefreshReceiptPresentation.swift */; };
@@ -1068,6 +1069,7 @@
 		C480BDF363144C652E09039D /* WidgetFreshnessTreatment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetFreshnessTreatment.swift; sourceTree = "<group>"; };
 		C6EAF7AD1814FA8C7568EEBA /* BenchCounters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchCounters.swift; sourceTree = "<group>"; };
 		C7EE68EB182952B7A902EDF5 /* HeadroomWidgetLockScreenPrimitives.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadroomWidgetLockScreenPrimitives.swift; sourceTree = "<group>"; };
+		C88EE9C9D2B9A2E8749CED4B /* AntigravityLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AntigravityLaunch.swift; sourceTree = "<group>"; };
 		C8D5513C2AB2C61E436AB502 /* WidgetWindowRanking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetWindowRanking.swift; sourceTree = "<group>"; };
 		C90C09F55109393B2A7C0AC1 /* ClaudeUsageWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeUsageWorkspace.swift; sourceTree = "<group>"; };
 		C95A760A881E08EB16385330 /* MeterStyleTile+Settings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MeterStyleTile+Settings.swift"; sourceTree = "<group>"; };
@@ -1784,6 +1786,7 @@
 				F7339860B2F91C83B1108CED /* AccountStorage.swift */,
 				8B16C47E373B50FF0722668B /* AntigravityConnection.swift */,
 				EC9CE9C61C3E9ED27BF015A0 /* AntigravityDTOs.swift */,
+				C88EE9C9D2B9A2E8749CED4B /* AntigravityLaunch.swift */,
 				739E1CD9313187883934822A /* AntigravityProvider.swift */,
 				DC6D8DDBC01FCFDC7B99FAED /* AntigravityUsageSource.swift */,
 				A4523C40238BDDB31A5B2AE5 /* APISpendProviders.swift */,
@@ -2175,6 +2178,7 @@
 				4B4C9CAB4F37C267CE7FAF7E /* AccountStorage.swift in Sources */,
 				5A40EA8685741CD9AD7DFA21 /* AntigravityConnection.swift in Sources */,
 				CD866B9B32EAA9DF03A2D9A2 /* AntigravityDTOs.swift in Sources */,
+				E9CE01A100571C95263C6DD2 /* AntigravityLaunch.swift in Sources */,
 				27A8B7284ACAE8FB51663FD0 /* AntigravityProvider.swift in Sources */,
 				54D9EB00D982E100D9436AFC /* AntigravityRowLabels.swift in Sources */,
 				B1AA44471B7C876050CCD875 /* AntigravityUsageSource.swift in Sources */,

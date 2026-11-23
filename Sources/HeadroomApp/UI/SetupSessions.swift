@@ -1013,6 +1013,12 @@ enum SetupSessions {
         openCodeVersionReader: @escaping OpenCodeVersionReading = readOpenCodeVersion
     ) async -> SetupPreparationResult {
         guard let setup = SetupCapableAccount(account) else { return .failure(.stagingFailed) }
+        if account.providerID == .antigravity {
+            let preference = store?.antigravitySourcePreference ?? AppComposition.launchPreferences.antigravitySourcePreference
+            if preference == .autoPreferT3, AppComposition.isT3AntigravityAvailable() {
+                return .failure(.provider(.antigravitySignedOutInT3))
+            }
+        }
         let accountCompletionMarker = completionMarker(
             for: setup,
             builtInClaudeWorkspace: builtInClaudeWorkspace
@@ -1202,8 +1208,7 @@ enum SetupSessions {
                         purpose: purpose
                     )
                 case .antigravity:
-                    // Single-account like Copilot, with no home routing and no device-code flow:
-                    // the handoff always signs in the CLI's default home, which the usage read uses.
+                    // Setup is only available for the system CLI's own home.
                     guard let executable = AntigravityCLI.resolveExecutable() else {
                         return .failure(.executableMissing)
                     }

@@ -583,8 +583,9 @@ struct AntigravityUsageSourceProcessTests {
         let fake = try FakeAgy(privateScript: true)
         defer { fake.remove() }
         let source = fake.source()
-        _ = await source.capture()
-        _ = await source.capture()
+        try fake.set("version", stdout: "1.5.13\n", exit: 0)
+        #expect(await source.captureWithVersion().version == "v1.5.13")
+        #expect(await source.captureWithVersion().version == "v1.5.13")
         #expect(fake.count(.version) == 1)
         try fake.touch(secondsAgo: 3_600)
         _ = await source.capture()
@@ -596,7 +597,9 @@ struct AntigravityUsageSourceProcessTests {
         let fake = try FakeAgy()
         defer { fake.remove() }
         try fake.set("version", stdout: "1.5.8\n", exit: 0)
-        #expect(await fake.source().capture() == .failed(.updateRequired))
+        let reading = await fake.source().captureWithVersion()
+        #expect(reading.result == .failed(.updateRequired))
+        #expect(reading.version == "v1.5.8")
         #expect(fake.argv == ["--version"])
     }
 

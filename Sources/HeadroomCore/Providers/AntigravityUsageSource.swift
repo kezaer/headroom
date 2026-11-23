@@ -90,6 +90,7 @@ public enum AntigravityCaptureFailure: Sendable, Equatable {
     /// explicit user refresh (Refresh, Try Again, Check Now, or a completed Headroom sign-in)
     /// re-checks safely with zero browser tabs so external terminal sign-ins recover automatically.
     case signedOut
+    case signedOutInT3
     case formatChanged(AntigravityFormatStage)
     case transient(AntigravityTransientCause)
 
@@ -99,6 +100,7 @@ public enum AntigravityCaptureFailure: Sendable, Equatable {
         case .updateRequired: .antigravityUpdateRequired
         case .unsupportedClient: .antigravityUnsupportedClient
         case .signedOut: .antigravitySignedOut
+        case .signedOutInT3: .antigravitySignedOutInT3
         case .formatChanged: .antigravityFormatChanged
         case .transient: .antigravityTransientCapture
         }
@@ -116,6 +118,13 @@ public enum AntigravityCapture: Sendable, Equatable {
 /// takes no account home.
 public protocol AntigravityUsageSource: Sendable {
     func capture() async -> AntigravityCapture
+    func captureWithVersion() async -> (result: AntigravityCapture, version: String?)
+}
+
+public extension AntigravityUsageSource {
+    func captureWithVersion() async -> (result: AntigravityCapture, version: String?) {
+        (await capture(), nil)
+    }
 }
 
 // MARK: - Commands
@@ -360,10 +369,10 @@ public struct AntigravityStoppedClient: Codable, Sendable, Equatable {
 /// stop and the signed-out mark. Without it a relaunch would spawn a client that already
 /// spent a turn, or open another browser sign-in.
 public struct AntigravityProbeMemory: Sendable {
-    public let loadStoppedClient: @Sendable () -> AntigravityStoppedClient?
-    public let saveStoppedClient: @Sendable (AntigravityStoppedClient?) -> Void
-    public let loadSignedOut: @Sendable () -> Bool
-    public let saveSignedOut: @Sendable (Bool) -> Void
+    let loadStoppedClients: @Sendable () -> [AntigravityStoppedClient]
+    let saveStoppedClients: @Sendable ([AntigravityStoppedClient]) -> Void
+    let loadSignedOutHomes: @Sendable () -> Set<String>
+    let saveSignedOutHomes: @Sendable (Set<String>) -> Void
 
     public init(
         loadStoppedClient: @escaping @Sendable () -> AntigravityStoppedClient?,
@@ -371,10 +380,24 @@ public struct AntigravityProbeMemory: Sendable {
         loadSignedOut: @escaping @Sendable () -> Bool,
         saveSignedOut: @escaping @Sendable (Bool) -> Void
     ) {
-        self.loadStoppedClient = loadStoppedClient
-        self.saveStoppedClient = saveStoppedClient
-        self.loadSignedOut = loadSignedOut
-        self.saveSignedOut = saveSignedOut
+        self.init(
+            loadStoppedClients: { loadStoppedClient().map { [$0] } ?? [] },
+            saveStoppedClients: { saveStoppedClient($0.first) },
+            loadSignedOutHomes: { loadSignedOut() ? ["system"] : [] },
+            saveSignedOutHomes: { saveSignedOut($0.contains("system")) }
+        )
+    }
+
+    init(
+        loadStoppedClients: @escaping @Sendable () -> [AntigravityStoppedClient],
+        saveStoppedClients: @escaping @Sendable ([AntigravityStoppedClient]) -> Void,
+        loadSignedOutHomes: @escaping @Sendable () -> Set<String>,
+        saveSignedOutHomes: @escaping @Sendable (Set<String>) -> Void
+    ) {
+        self.loadStoppedClients = loadStoppedClients
+        self.saveStoppedClients = saveStoppedClients
+        self.loadSignedOutHomes = loadSignedOutHomes
+        self.saveSignedOutHomes = saveSignedOutHomes
     }
 
     /// Nothing outlives the source: tests and the one-shot `--probe-antigravity` run.
@@ -384,13 +407,25 @@ public struct AntigravityProbeMemory: Sendable {
 
     public static func preferences(_ preferences: Preferences) -> Self {
         Self(
-            loadStoppedClient: {
-                preferences.antigravityStoppedClientData
-                    .flatMap { try? JSONDecoder().decode(AntigravityStoppedClient.self, from: $0) }
+            loadStoppedClients: {
+                guard let data = preferences.antigravityStoppedClientData else { return [] }
+                let decoder = JSONDecoder()
+                if let clients = try? decoder.decode([AntigravityStoppedClient].self, from: data) { return clients }
+                return (try? decoder.decode(AntigravityStoppedClient.self, from: data)).map { [$0] } ?? []
             },
-            saveStoppedClient: { preferences.antigravityStoppedClientData = $0.flatMap { try? JSONEncoder().encode($0) } },
-            loadSignedOut: { preferences.antigravitySignedOut },
-            saveSignedOut: { preferences.antigravitySignedOut = $0 }
+            saveStoppedClients: { clients in
+                preferences.antigravityStoppedClientData = clients.isEmpty ? nil : try? JSONEncoder().encode(clients)
+            },
+            loadSignedOutHomes: {
+                var homes = preferences.antigravitySignedOutHomes
+                if preferences.antigravitySignedOut {
+                    homes.insert("system")
+                    preferences.antigravitySignedOutHomes = homes
+                    preferences.antigravitySignedOut = false
+                }
+                return homes
+            },
+            saveSignedOutHomes: { preferences.antigravitySignedOutHomes = $0 }
         )
     }
 }
@@ -444,7 +479,8 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
     static let nonInteractiveBrowser = "/usr/bin/false"
     static let disableAutoUpdateValue = "true"
 
-    private let resolveExecutable: @Sendable () -> String?
+    private let resolveLaunch: @Sendable () -> AntigravityLaunchPlan?
+    private let rechecksLaunch: Bool
     private let resolveLoginPath: @Sendable () -> String
     private let inheritedEnvironment: @Sendable () -> [String: String]
     private let workingDirectory: String
@@ -455,14 +491,14 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
     private let interpreter: String?
     private let memory: AntigravityProbeMemory
 
-    private var resolved: (executable: String, loginPath: String)?
+    private var resolved: ResolvedLaunch?
     private var passingVersion: (key: ExecutableKey, version: AntigravityVersion)?
-    private var stop: Stop? {
-        didSet { if stop?.stored != oldValue?.stored { memory.saveStoppedClient(stop?.stored) } }
+    private var stoppedClients: [String: Stop] {
+        didSet { memory.saveStoppedClients(stoppedClients.values.map(\.stored)) }
     }
     /// Set by a sign-in prompt. Only `clearsSignedOut` origins clear it.
-    private var signedOut: Bool {
-        didSet { if signedOut != oldValue { memory.saveSignedOut(signedOut) } }
+    private var signedOutHomes: Set<String> {
+        didSet { if signedOutHomes != oldValue { memory.saveSignedOutHomes(signedOutHomes) } }
     }
 
     public init(
@@ -500,7 +536,42 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
         interpreter: String?,
         memory: AntigravityProbeMemory = .none
     ) {
-        self.resolveExecutable = resolveExecutable
+        self.init(
+            resolveLaunch: { resolveExecutable().map { .init(executable: $0, signInHome: .system) } },
+            rechecksLaunch: false, resolveLoginPath: resolveLoginPath, inheritedEnvironment: inheritedEnvironment,
+            workingDirectory: workingDirectory, deadline: deadline, versionDeadline: versionDeadline,
+            interpreter: interpreter, memory: memory
+        )
+    }
+
+    public init(
+        resolveLaunch: @escaping @Sendable () -> AntigravityLaunchPlan?,
+        memory: AntigravityProbeMemory = .none
+    ) {
+        self.init(
+            resolveLaunch: resolveLaunch, rechecksLaunch: true,
+            resolveLoginPath: {
+                CLIExecutableResolver.resolveLoginPath(
+                    fallback: "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                )
+            },
+            inheritedEnvironment: { ProcessInfo.processInfo.environment },
+            workingDirectory: AntigravityCLI.defaultWorkingDirectory.path,
+            deadline: Self.defaultDeadline, versionDeadline: Self.defaultVersionDeadline,
+            interpreter: nil, memory: memory
+        )
+    }
+
+    init(
+        resolveLaunch: @escaping @Sendable () -> AntigravityLaunchPlan?,
+        rechecksLaunch: Bool,
+        resolveLoginPath: @escaping @Sendable () -> String,
+        inheritedEnvironment: @escaping @Sendable () -> [String: String],
+        workingDirectory: String, deadline: TimeInterval, versionDeadline: TimeInterval,
+        interpreter: String?, memory: AntigravityProbeMemory
+    ) {
+        self.resolveLaunch = resolveLaunch
+        self.rechecksLaunch = rechecksLaunch
         self.resolveLoginPath = resolveLoginPath
         self.inheritedEnvironment = inheritedEnvironment
         self.workingDirectory = workingDirectory
@@ -508,30 +579,49 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
         self.versionDeadline = versionDeadline
         self.interpreter = interpreter
         self.memory = memory
-        self.stop = memory.loadStoppedClient().map(Stop.init)
-        self.signedOut = memory.loadSignedOut()
+        self.stoppedClients = Dictionary(
+            memory.loadStoppedClients().map { ($0.path ?? "", Stop($0)) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        self.signedOutHomes = memory.loadSignedOutHomes()
     }
 
     public func capture() async -> AntigravityCapture {
-        guard let (executable, loginPath) = await resolvedExecutable() else { return .failed(.cliMissing) }
-        if signedOut {
-            // Every other read would open another browser sign-in.
-            guard Self.clearsSignedOut(UserRequestedProbeContext.origins) else { return .failed(.signedOut) }
-            signedOut = false
+        await captureWithVersion().result
+    }
+
+    public func captureWithVersion() async -> (result: AntigravityCapture, version: String?) {
+        var version: AntigravityVersion?
+        let result = await capture(observedVersion: &version)
+        return (result, version.map { "v\($0.major).\($0.minor).\($0.patch)" })
+    }
+
+    private func capture(observedVersion: inout AntigravityVersion?) async -> AntigravityCapture {
+        guard let resolved = await resolvedLaunch() else { return .failed(.cliMissing) }
+        let executable = resolved.plan.executable
+        let home = resolved.plan.signInHome
+        let signInKey = home.memoryKey
+        if signedOutHomes.contains(signInKey) {
+            guard Self.clearsSignedOut(UserRequestedProbeContext.origins) else {
+                return .failed(home.signedOutFailure)
+            }
+            signedOutHomes.remove(signInKey)
         }
         var environment = inheritedEnvironment()
         for name in Self.strippedEnvironment { environment.removeValue(forKey: name) }
         environment["BROWSER"] = Self.nonInteractiveBrowser
         environment["AGY_CLI_DISABLE_AUTO_UPDATE"] = Self.disableAutoUpdateValue
         if let noBrowserDir = prepareNoBrowserBinDirectory() {
-            environment["PATH"] = "\(noBrowserDir):\(loginPath)"
+            environment["PATH"] = "\(noBrowserDir):\(resolved.loginPath)"
         } else {
-            environment["PATH"] = loginPath
+            environment["PATH"] = resolved.loginPath
         }
+        environment.merge(home.environmentOverrides) { _, override in override }
         var preparedWorkingDirectory = false
 
         let key = Self.executableKey(for: executable)
-        if let stop {
+        let stoppedKey = key?.path ?? ""
+        if let stop = stoppedClients[stoppedKey] {
             passingVersion = nil
             if stop.key == key {
                 // Routine polls never spawn a stopped client. A user request runs only the local
@@ -539,12 +629,13 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
                 // is noticed.
                 guard UserRequestedProbeContext.isUserRequested else { return .failed(.unsupportedClient) }
                 let output = await spawn(.version, executable: executable, environment: environment, prepared: &preparedWorkingDirectory)
-                guard let version = AntigravityUsageClassifier.readVersion(output), version != stop.version else {
+                observedVersion = AntigravityUsageClassifier.readVersion(output)
+                guard let version = observedVersion, version != stop.version else {
                     return .failed(.unsupportedClient)
                 }
                 if let key { passingVersion = (key, version) }
             }
-            self.stop = nil
+            stoppedClients.removeValue(forKey: stoppedKey)
         }
 
         let version: AntigravityVersion
@@ -556,10 +647,12 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
             guard let read = AntigravityUsageClassifier.readVersion(output) else {
                 return .failed(.transient(.unreadableVersion))
             }
+            observedVersion = read
             if read < Self.minimumVersion { return .failed(.updateRequired) }
             version = read
             if let key { passingVersion = (key, read) }
         }
+        observedVersion = version
         if version < Self.minimumVersion { return .failed(.updateRequired) }
 
         guard let usageOutput = await spawn(.usage, executable: executable, environment: environment, prepared: &preparedWorkingDirectory) else {
@@ -567,8 +660,11 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
         }
         let usageCapture = AntigravityUsageClassifier.classifyUsage(usageOutput)
         guard case .usage(let usage) = usageCapture else {
-            if usageCapture == .failed(.unsupportedClient) { stop = Stop(key: key, version: version) }
-            if usageCapture == .failed(.signedOut) { signedOut = true }
+            if usageCapture == .failed(.unsupportedClient) { stoppedClients[stoppedKey] = Stop(key: key, version: version) }
+            if usageCapture == .failed(.signedOut) {
+                signedOutHomes.insert(signInKey)
+                return .failed(home.signedOutFailure)
+            }
             return usageCapture
         }
 
@@ -579,11 +675,11 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
         case .unavailable:
             return usageCapture
         case .unsupportedClient:
-            stop = Stop(key: key, version: version)
+            stoppedClients[stoppedKey] = Stop(key: key, version: version)
             return .failed(.unsupportedClient)
         case .signedOut:
-            signedOut = true
-            return .failed(.signedOut)
+            signedOutHomes.insert(signInKey)
+            return .failed(home.signedOutFailure)
         }
     }
 
@@ -601,27 +697,27 @@ public actor AntigravityCLIUsageSource: AntigravityUsageSource {
         "CLOUDSDK_CONFIG",
     ]
 
-    private func resolvedExecutable() async -> (String, String)? {
-        if let resolved, !UserRequestedProbeContext.isUserRequested,
-           FileManager.default.isExecutableFile(atPath: resolved.executable) {
+    private func resolvedLaunch() async -> ResolvedLaunch? {
+        let isUserRequested = UserRequestedProbeContext.isUserRequested
+        if !rechecksLaunch, let resolved, !isUserRequested,
+           FileManager.default.isExecutableFile(atPath: resolved.plan.executable) {
             return resolved
         }
-        resolved = nil
-        let resolveExecutable = resolveExecutable
+        let resolveLaunch = resolveLaunch
         let resolveLoginPath = resolveLoginPath
+        let cachedLoginPath = isUserRequested ? nil : resolved?.loginPath
         let found: ResolvedLaunch? = await CLIProcessThread.run {
-            guard let path = resolveExecutable(), FileManager.default.isExecutableFile(atPath: path) else {
+            guard let plan = resolveLaunch(), FileManager.default.isExecutableFile(atPath: plan.executable) else {
                 return nil
             }
-            return ResolvedLaunch(executable: path, loginPath: resolveLoginPath())
+            return ResolvedLaunch(plan: plan, loginPath: cachedLoginPath ?? resolveLoginPath())
         }
-        guard let found else { return nil }
-        resolved = (found.executable, found.loginPath)
-        return (found.executable, found.loginPath)
+        resolved = found
+        return found
     }
 
     private struct ResolvedLaunch: Sendable {
-        let executable: String
+        let plan: AntigravityLaunchPlan
         let loginPath: String
     }
 

@@ -434,6 +434,11 @@ enum AccountsSettingsInteractions {
         guard account.isBuiltIn,
               store.canResetBuiltInAccount(for: account.providerID)
         else { return .unavailable }
+        if account.providerID == .antigravity,
+           store.antigravitySourcePreference == .autoPreferT3,
+           AppComposition.isT3AntigravityAvailable() {
+            return .unavailable
+        }
         return store.canStopTrackingBuiltInAccount(for: account.providerID)
             ? .resetAndStopTracking
             : .resetOnly
