@@ -332,6 +332,6 @@ private final class NotificationAccountStub: UsageProvider, @unchecked Sendable 
 
 /// No-op storage so these tests never touch the real Application Support tree.
 private struct NotificationTestStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }

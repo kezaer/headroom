@@ -87,8 +87,8 @@ struct ReprintSourceIdentityTests {
 }
 
 private struct IdentityStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }
 
 private final class IdentitySpendProbe: APISpendProvider, @unchecked Sendable {

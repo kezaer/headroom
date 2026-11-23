@@ -367,7 +367,8 @@ enum AccountsSettingsInteractions {
     /// The removal dialog's title, by row kind: stop-tracking for the built-in row, removal
     /// for an extra or a remembered row.
     nonisolated static func removalDialogTitle(for row: DisplayAccount) -> String {
-        row.account.isBuiltIn && !row.isRemembered ? "Stop tracking this account?" : "Remove this account?"
+        let isExternal = row.account.isBuiltIn || row.account.borrowedHome != nil
+        return isExternal && !row.isRemembered ? "Stop tracking this account?" : "Remove this account?"
     }
 
     /// R11: a remembered row's removal only hides it, and it returns when its account is the
@@ -376,7 +377,7 @@ enum AccountsSettingsInteractions {
         if row.isRemembered {
             return "It stays hidden until your CLI is signed in to this account again. Nothing is deleted."
         }
-        return row.account.isBuiltIn
+        return row.account.isBuiltIn || row.account.borrowedHome != nil
             ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
             : "Its sign-in on this Mac is deleted with it. Your subscription is untouched."
     }
@@ -384,7 +385,7 @@ enum AccountsSettingsInteractions {
     /// R11: removing a remembered row deletes nothing, so its confirm button is not
     /// destructive; neither is stop-tracking. Only an extra's removal deletes its sign-in.
     nonisolated static func removalIsDestructive(for row: DisplayAccount) -> Bool {
-        !row.account.isBuiltIn && !row.isRemembered
+        !row.account.isBuiltIn && row.account.borrowedHome == nil && !row.isRemembered
     }
 
     /// U8 (R7): the status a remembered row prints in Settings, the popover's own tag
@@ -406,6 +407,9 @@ enum AccountsSettingsInteractions {
     ) async -> AccountRemovalResult {
         switch row.kind {
         case .engine:
+            if row.account.borrowedHome != nil {
+                return await store.removeAccount(row.key, keepingCLISourceStopped: true)
+            }
             return await removeAccount(row.account, from: store)
         case .remembered:
             return store.removeRememberedAccount(row.key) ? .removed : .notAllowed

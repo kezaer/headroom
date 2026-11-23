@@ -105,6 +105,8 @@ public final class UsageStore {
     public internal(set) var accountsByProvider: [ProviderID: [ProviderAccount]]
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
+    public internal(set) var borrowedHomeScanSummary: BorrowedHomeScanSummary?
+    public internal(set) var tracksCLIDefaultAlongsideT3: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
     /// G1A: account-title ink, mirrored the same way `meterStyle` is. The menu bar and
     /// widgets carry no title ink; the phone's display block does (iPhone parity KTD11).
@@ -197,7 +199,8 @@ public final class UsageStore {
 
     var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
-    private let preferences: Preferences
+    let preferences: Preferences
+    let borrowedHomes: BorrowedHomeEnvironment?
     let accountRegistry: AccountRegistry?
     let accountStorage: any AccountStorageManaging
     let continuityCache: (any UsageContinuityCaching)?
@@ -273,6 +276,13 @@ public final class UsageStore {
     /// order would demote a provider whose built-in was stop-tracked (code-review
     /// finding); this keeps settings/popover/widget provider order stable.
     private let composedProviderOrder: [ProviderID]
+    let composedAccountCapacities: [ProviderID: Int]
+    public internal(set) var observedCLIVersions: [AccountKey: String] = [:]
+
+    /// Explicitly stopped CLI sources remain available to Accounts even at zero rows.
+    public var accountSettingsProviderIDs: Set<ProviderID> {
+        Set(composedProviderOrder).union(registeredProviderOrder)
+    }
 
     public init(
         providers: [any UsageProvider],
@@ -281,6 +291,7 @@ public final class UsageStore {
         accounts: [ProviderAccount]? = nil,
         accountRegistry: AccountRegistry? = nil,
         accountStorage: any AccountStorageManaging = DefaultAccountStorage(),
+        borrowedHomes: BorrowedHomeEnvironment? = nil,
         providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)? = nil,
         continuityCache: (any UsageContinuityCaching)? = nil,
         defaultLoginRecords: (any DefaultLoginRecordStoring)? = nil,
@@ -297,6 +308,7 @@ public final class UsageStore {
         self.preferences = preferences
         self.accountRegistry = accountRegistry
         self.accountStorage = accountStorage
+        self.borrowedHomes = borrowedHomes
         self.providerFactory = providerFactory
         self.continuityCache = continuityCache
         self.defaultLoginRecordStore = defaultLoginRecords
@@ -307,7 +319,17 @@ public final class UsageStore {
         self.now = now
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
-        self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        var configuredProviders = providers
+        if let accountRegistry, let providerFactory {
+            let live = Set(providers.map(\.id))
+            for id in accountRegistry.stoppedCLISources.subtracting(live).sorted(by: { $0.raw < $1.raw }) {
+                configuredProviders.append(providerFactory(.builtIn(for: id)))
+            }
+        }
+        self.composedAccountCapacities = Dictionary(
+            configuredProviders.map { ($0.id, $0.accountCapacity) }, uniquingKeysWith: { first, _ in first }
+        )
+        self.displayNames = Dictionary(configuredProviders.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         self.apiSpendDisplayNames = Dictionary(
             apiSpendProviders.map { ($0.id, $0.displayName) },
             uniquingKeysWith: { first, _ in first }
@@ -333,11 +355,13 @@ public final class UsageStore {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        self.accountsByProvider = Self.accountsIndex(providers: providers, accounts: accounts, registry: accountRegistry)
+        let accountIndex = Self.accountsIndex(providers: providers, accounts: accounts, registry: accountRegistry)
+        self.accountsByProvider = accountIndex
         self.apiSpendSnapshots = Dictionary(uniqueKeysWithValues: apiSpendProviders.map {
             ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
         })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
+        self.tracksCLIDefaultAlongsideT3 = accountRegistry?.tracksCLIDefaultAlongsideT3 ?? false
         self.usagePercentageMode = preferences.usagePercentageMode
         self.accountTitleInk = preferences.accountTitleInk
         self.accountLayout = preferences.accountLayout
@@ -345,7 +369,7 @@ public final class UsageStore {
         self.useEmailAsAccountName = preferences.useEmailAsAccountName
         self.meterStyle = preferences.meterStyle
         let registeredProviderIDs = providers.map(\.id).uniqued()
-        self.composedProviderOrder = registeredProviderIDs
+        self.composedProviderOrder = configuredProviders.map(\.id).uniqued()
         self.menuBarFillSource = preferences.menuBarFillSource.filtered(to: registeredProviderIDs)
         self.savedMenuBarProviderOrder = preferences.menuBarProviderOrder
         if let saved = preferences.widgetPriorityProviders {
@@ -377,7 +401,7 @@ public final class UsageStore {
         for id in registeredProviderOrder { refreshDisplayMerge(for: id, exports: false) }
     }
 
-    private static func restoredSnapshot(
+    static func restoredSnapshot(
         _ cached: UsageSnapshot?,
         for providerID: ProviderID,
         after restorationDate: Date
@@ -997,6 +1021,7 @@ public final class UsageStore {
     }
 
     private func performRefreshAll(origin: UserRefreshOrigin) async {
+        if borrowedHomes != nil { rescanBorrowedHomes() }
         if origin != .setupCheck { visibleRefreshOperationDepth += 1 }
         defer {
             if origin != .setupCheck {
@@ -1172,6 +1197,10 @@ public final class UsageStore {
         // to neither account for certain. Refused here, before `merge`, so it never
         // reaches the snapshot, the continuity cache or a setup session.
         if result.discard != nil { return false }
+        if let version = result.cliVersion, observedCLIVersions[key] != version,
+           acceptsResult(for: key, attachmentGeneration: attachmentGeneration) {
+            observedCLIVersions[key] = version
+        }
         let isCapabilityFailure = result.capability.map { $0 != .available } == true
         if isCapabilityFailure {
             // A provider-wide discovery failure says nothing about this account. Keep a

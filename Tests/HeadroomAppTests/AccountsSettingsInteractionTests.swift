@@ -872,7 +872,7 @@ struct AccountsSettingsInteractionTests {
         let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
         let account = ProviderAccount.builtIn(for: .claude)
         let marker = AccountStorage.setupCompletionMarker(
-            for: account,
+            for: SetupCapableAccount(account)!,
             builtInClaudeWorkspace: workspace
         )
         try AccountStorage.prepareSetupCompletionMarker(marker)
@@ -908,7 +908,7 @@ struct AccountsSettingsInteractionTests {
         let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
         let account = ProviderAccount.builtIn(for: .claude)
         let marker = AccountStorage.setupCompletionMarker(
-            for: account,
+            for: SetupCapableAccount(account)!,
             builtInClaudeWorkspace: workspace
         )
         try AccountStorage.prepareSetupCompletionMarker(marker)
@@ -945,7 +945,7 @@ struct AccountsSettingsInteractionTests {
         let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
         let account = ProviderAccount.builtIn(for: .claude)
         let marker = AccountStorage.setupCompletionMarker(
-            for: account,
+            for: SetupCapableAccount(account)!,
             builtInClaudeWorkspace: workspace
         )
         try FileManager.default.createDirectory(
@@ -1550,15 +1550,15 @@ private final class InteractionStorage: AccountStorageManaging, @unchecked Senda
 
     var removedKeys: [AccountKey] { lock.withLock { _removedKeys } }
 
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> {
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> {
         .success(())
     }
 
-    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { setupHandoffActive }
+    func setupHandoffIsActive(for account: SetupCapableAccount) async -> Bool { setupHandoffActive }
 
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> {
         lock.withLock {
-            _removedKeys.append(account.key)
+            _removedKeys.append(account.account.key)
             return removals.isEmpty ? .success(()) : removals.removeFirst()
         }
     }

@@ -147,6 +147,12 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
     case claudeStartupQuestion
     case claudeTransientCapture
     case codexCLIMissing
+    case codexSignedOutInT3
+    case codexSignedOutInFolder
+    case codexAppServerUnsupported
+    case codexAPIKeyHome
+    case codexHomeMissing
+    case codexAppServerUnavailable
     case codexAuthAbsent
     case codexPermissionDenied
     case codexUnsafePermissions
@@ -222,6 +228,12 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         case .claudeStartupQuestion: "Claude Code is waiting on a one-time question"
         case .claudeTransientCapture: "Couldn’t read Claude usage\u{00A0}—\u{00A0}will retry"
         case .codexCLIMissing: ProviderSignInCopy.cliMissing(for: .codex)
+        case .codexSignedOutInT3: "Sign in to this Codex account in T3 Code"
+        case .codexSignedOutInFolder: "Sign in to Codex using this folder as CODEX_HOME"
+        case .codexAppServerUnsupported: "Update the Codex CLI for this account to read usage"
+        case .codexAPIKeyHome: "Sign in with a ChatGPT subscription to see Codex usage"
+        case .codexHomeMissing: "Headroom can’t find this Codex folder"
+        case .codexAppServerUnavailable: "Couldn’t read usage from the Codex CLI. Headroom will retry"
         case .codexAuthAbsent: ProviderSignInCopy.status(for: .codex)
         case .codexPermissionDenied: "Allow Headroom to read the Codex sign-in file"
         case .codexUnsafePermissions: "Codex sign-in isn’t stored privately\u{00A0}—\u{00A0}sign in again"
@@ -269,7 +281,7 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
 
     public var isPermanent: Bool {
         switch self {
-        case .claudeUnknownUI, .claudeTransientCapture, .codexCredentialIO, .codexSessionUnverified,
+        case .claudeUnknownUI, .claudeTransientCapture, .codexCredentialIO, .codexSessionUnverified, .codexAppServerUnavailable,
              .grokCredentialIO, .grokTransientCapture, .cursorUnknownUI,
              .cursorTransientCapture, .copilotLogsUnreadable,
              .opencodeFormatChanged, .opencodeTransientCapture,
@@ -286,7 +298,8 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
         switch self {
         // KTD12 (OpenCode plan): an API-key connection has never signed in to the Console.
         case .claudeLoginRequired, .codexAuthAbsent, .grokAuthAbsent, .cursorAuthAbsent, .copilotSignedOut,
-             .opencodeSignedOut, .opencodeConsoleSignInRequired, .antigravitySignedOut:
+             .opencodeSignedOut, .opencodeConsoleSignInRequired, .antigravitySignedOut,
+             .codexSignedOutInT3, .codexSignedOutInFolder, .codexAPIKeyHome:
             true
         default:
             false
@@ -341,6 +354,9 @@ public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
                   secondaryLabel: "Open Guided Setup", secondaryAction: .openClaudeSetup)
         case .codexCLIMissing:
             .init(status: message, primaryLabel: "Install Codex CLI", primaryAction: .installCodexCLI)
+        case .codexSignedOutInT3, .codexSignedOutInFolder, .codexAppServerUnsupported,
+             .codexAPIKeyHome, .codexHomeMissing, .codexAppServerUnavailable:
+            .init(status: message, primaryLabel: "Check Now", primaryAction: .checkNow)
         case .codexAuthAbsent:
             .init(status: message, primaryLabel: ProviderSignInCopy.button, primaryAction: .connectCodex,
                   secondaryLabel: "Use Device Code", secondaryAction: .connectCodexDeviceCode,

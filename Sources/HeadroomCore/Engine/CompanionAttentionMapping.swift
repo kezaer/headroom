@@ -32,10 +32,11 @@ public enum CompanionAttentionMapping {
             .cliMissing
         // KTD21: an API-key connection is fixed by signing in, like a signed-out account.
         case .claudeLoginRequired, .codexAuthAbsent, .grokAuthAbsent, .cursorAuthAbsent, .copilotSignedOut,
-            .opencodeSignedOut, .opencodeConsoleSignInRequired, .antigravitySignedOut:
+            .opencodeSignedOut, .opencodeConsoleSignInRequired, .antigravitySignedOut,
+            .codexSignedOutInT3, .codexSignedOutInFolder, .codexAPIKeyHome:
             .signInRequired
         // A paused client also needs a different CLI before Headroom reads it again.
-        case .opencodeUpdateRequired, .antigravityUpdateRequired, .antigravityUnsupportedClient:
+        case .opencodeUpdateRequired, .antigravityUpdateRequired, .antigravityUnsupportedClient, .codexAppServerUnsupported:
             .cliUpdateRequired
         case .claudeTrustRequired, .cursorTrustRequired:
             .workspaceApproval
@@ -47,7 +48,7 @@ public enum CompanionAttentionMapping {
         case .claudeTransientCapture, .codexCredentialIO, .codexSessionUnverified, .grokCredentialIO,
             .grokTransientCapture, .cursorTransientCapture, .copilotLogsUnreadable,
             .opencodeTransientCapture, .opencodeFormatChanged, .antigravityTransientCapture,
-            .antigravityFormatChanged:
+            .antigravityFormatChanged, .codexAppServerUnavailable, .codexHomeMissing:
             .retrying
         case .codexPermissionDenied, .grokPermissionDenied:
             .allowSignInFile

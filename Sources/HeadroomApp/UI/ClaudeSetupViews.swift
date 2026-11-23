@@ -70,12 +70,10 @@ enum ClaudeSetupSession {
         return command(for: account, executablePath: executablePath)
     }
 
-    private static func ensureWorkspace(for account: ProviderAccount) throws -> URL {
-        if account.isBuiltIn {
-            return try ClaudeUsageWorkspace.ensureDefaultDirectory()
-        }
-        try AccountStorage.ensureDirectories(for: account)
-        return workspaceURL(for: account)
+    private static func ensureWorkspace(for setup: SetupCapableAccount) throws -> URL {
+        guard let owned = setup.ownedHome else { return try ClaudeUsageWorkspace.ensureDefaultDirectory() }
+        try AccountStorage.ensureDirectories(for: owned)
+        return workspaceURL(for: setup.account)
     }
 
     /// Tilde-abbreviated form of a resolved command for display; the absolute command is
@@ -90,7 +88,8 @@ enum ClaudeSetupSession {
     static func copy(_ command: String, for account: ProviderAccount = .builtIn(for: .claude)) -> Bool {
         // Terminal may have filesystem permission the app lacks, and the manual command
         // provisions its own workspace. Never leave an older account command on the pasteboard.
-        _ = try? ensureWorkspace(for: account)
+        guard let setup = SetupCapableAccount(account) else { return false }
+        _ = try? ensureWorkspace(for: setup)
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(command, forType: .string)
     }
@@ -176,8 +175,9 @@ enum ClaudeSetupSession {
         executablePath: String?,
         onRetry: @escaping () -> Void
     ) {
+        guard let setup = SetupCapableAccount(account) else { return }
         do {
-            let workspace = try ensureWorkspace(for: account)
+            let workspace = try ensureWorkspace(for: setup)
             // Script filename is per-account: a shared name let a second account's
             // Sign In overwrite the script a still-open Terminal was about to run,
             // landing the login in the wrong config home (code-review finding).

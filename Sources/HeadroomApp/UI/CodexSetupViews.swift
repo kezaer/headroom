@@ -31,11 +31,11 @@ enum CodexSetupSession {
     }
 
     /// `CODEX_HOME` for an extra account; nil for the built-in (default `~/.codex`).
-    static func codexHome(for account: ProviderAccount) -> String? {
-        account.isBuiltIn ? nil : AccountStorage.codexHomeDirectoryURL(for: account).path
+    static func codexHome(for setup: SetupCapableAccount) -> String? {
+        setup.ownedHome.map { AccountStorage.codexHomeDirectoryURL(for: $0.account).path }
     }
 
-    static func loginCommand(for account: ProviderAccount = .builtIn(for: .codex)) -> String {
+    static func loginCommand(for account: SetupCapableAccount = .builtIn(for: .codex)) -> String {
         CodexCLI.accountLoginCommand(codexHome: codexHome(for: account))
     }
 
@@ -43,7 +43,7 @@ enum CodexSetupSession {
     /// actually happened. The Terminal-handoff fallbacks below still ignore the result —
     /// there is nothing better to offer them if the pasteboard refuses.
     @discardableResult
-    static func copyCommand(for account: ProviderAccount = .builtIn(for: .codex)) -> Bool {
+    static func copyCommand(for account: SetupCapableAccount) -> Bool {
         NSPasteboard.general.clearContents()
         return NSPasteboard.general.setString(loginCommand(for: account), forType: .string)
     }
@@ -51,14 +51,15 @@ enum CodexSetupSession {
     @discardableResult
     static func copyCommand() -> Bool { copyCommand(for: .builtIn(for: .codex)) }
 
-    static func openSetup(for account: ProviderAccount = .builtIn(for: .codex), onRetry: @escaping () -> Void) {
+    static func openSetup(for setup: SetupCapableAccount, onRetry: @escaping () -> Void) {
+        let account = setup.account
         guard openingTasks[account.id] == nil else { return }
         openingTasks[account.id] = Task { @MainActor in
             defer { openingTasks[account.id] = nil }
-            if !account.isBuiltIn {
-                _ = try? AccountStorage.ensureDirectories(for: account)
+            if let owned = setup.ownedHome {
+                guard (try? AccountStorage.ensureDirectories(for: owned)) != nil else { return }
             }
-            let codexHome = codexHome(for: account)
+            let codexHome = codexHome(for: setup)
             // Per-account filename — see ClaudeSetupSession.openSetup (script-overwrite race).
             let scriptName = account.isBuiltIn
                 ? "Open Codex Login.command"
@@ -85,17 +86,17 @@ enum CodexSetupSession {
             }.value
 
             guard let preparation else {
-                copyCommand(for: account)
+                copyCommand(for: setup)
                 return
             }
             guard NSWorkspace.shared.open(preparation.scriptURL) else {
-                copyCommand(for: account)
+                copyCommand(for: setup)
                 return
             }
             guard preparation.hasExecutable else {
                 setOpenedSetupAt(nil, for: account.id)
                 cancelRetries(for: account.id)
-                copyCommand(for: account)
+                copyCommand(for: setup)
                 return
             }
             setOpenedSetupAt(Date(), for: account.id)

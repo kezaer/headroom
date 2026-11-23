@@ -1,6 +1,31 @@
 import Foundation
 import Darwin
 
+/// Only an owned account can acquire permission to create or remove account directories.
+public struct HeadroomOwnedHome: Sendable, Hashable {
+    public let account: ProviderAccount
+
+    public init?(_ account: ProviderAccount) {
+        guard account.origin == .headroomOwned, account.id != .primary else { return nil }
+        self.account = account
+    }
+}
+
+/// A validated account for which Headroom can stage a setup handoff.
+public struct SetupCapableAccount: Sendable, Hashable {
+    public let account: ProviderAccount
+    public var ownedHome: HeadroomOwnedHome? { HeadroomOwnedHome(account) }
+
+    public static func builtIn(for provider: ProviderID) -> Self {
+        Self(ProviderAccount.builtIn(for: provider))!
+    }
+
+    public init?(_ account: ProviderAccount) {
+        guard account.isBuiltIn || HeadroomOwnedHome(account) != nil else { return nil }
+        self.account = account
+    }
+}
+
 /// Headroom-owned config homes for additional (non-built-in) accounts. Each extra
 /// account gets an isolated directory the official CLI signs into once:
 /// - Claude: `CLAUDE_CONFIG_DIR` pointed at `…/claude/<id>/config`, plus a stable
@@ -164,9 +189,10 @@ public enum AccountStorage {
     /// resolver once let built-in stop-tracking look at the wrong path, report "no
     /// handoff", and detach the row mid-setup (code-review finding).
     public static func setupCompletionMarker(
-        for account: ProviderAccount,
+        for setup: SetupCapableAccount,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) -> SetupCompletionMarker {
+        let account = setup.account
         guard account.isBuiltIn else {
             let directory = accountDirectoryURL(for: account)
             return SetupCompletionMarker(
@@ -312,13 +338,13 @@ public enum AccountStorage {
     /// the marker expires rather than blocking account removal forever. Unknown marker
     /// formats still fail closed; a PID clears only when the process is provably gone.
     public static func setupHandoffIsActive(
-        for account: ProviderAccount,
+        for setup: SetupCapableAccount,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL,
         now: Date = .now
     ) -> Bool {
         setupHandoffIsActive(
             marker: setupCompletionMarker(
-                for: account,
+                for: setup,
                 builtInClaudeWorkspace: builtInClaudeWorkspace
             ),
             now: now
@@ -713,12 +739,13 @@ public enum AccountStorage {
     /// Create the account's directories so the CLI handoff and probe never race a
     /// missing folder. Safe to call repeatedly.
     @discardableResult
-    public static func ensureDirectories(for account: ProviderAccount) throws -> URL {
-        try ensureDirectories(for: account, baseDirectoryURL: baseDirectoryURL)
+    public static func ensureDirectories(for home: HeadroomOwnedHome) throws -> URL {
+        try ensureDirectories(for: home, baseDirectoryURL: baseDirectoryURL)
     }
 
     @discardableResult
-    static func ensureDirectories(for account: ProviderAccount, baseDirectoryURL: URL) throws -> URL {
+    static func ensureDirectories(for home: HeadroomOwnedHome, baseDirectoryURL: URL) throws -> URL {
+        let account = home.account
         let directory = accountDirectoryURL(for: account, baseDirectoryURL: baseDirectoryURL)
         var targets = [directory]
         if account.providerID == .claude {
@@ -730,7 +757,10 @@ public enum AccountStorage {
             // data and state can never come from different roots.
             targets += opencodeXDGFolderNames.map { directory.appendingPathComponent($0, isDirectory: true) }
         }
+        try checkStoragePath(baseDirectoryURL)
+        try checkStoragePath(directory.deletingLastPathComponent())
         for url in targets {
+            try checkStoragePath(url)
             try FileManager.default.createDirectory(
                 at: url,
                 withIntermediateDirectories: true,
@@ -746,13 +776,15 @@ public enum AccountStorage {
     /// config belongs to the user's own CLI. The recursive delete runs off-main: a used
     /// config home holds thousands of small CLI files and must not beachball the
     /// Settings window (code-review finding).
-    public static func removeDirectories(for account: ProviderAccount) throws {
-        try removeDirectories(for: account, baseDirectoryURL: baseDirectoryURL)
+    public static func removeDirectories(for home: HeadroomOwnedHome) throws {
+        try removeDirectories(for: home, baseDirectoryURL: baseDirectoryURL)
     }
 
-    static func removeDirectories(for account: ProviderAccount, baseDirectoryURL: URL) throws {
-        guard !account.isBuiltIn else { return }
-        let url = accountDirectoryURL(for: account, baseDirectoryURL: baseDirectoryURL)
+    static func removeDirectories(for home: HeadroomOwnedHome, baseDirectoryURL: URL) throws {
+        let url = accountDirectoryURL(for: home.account, baseDirectoryURL: baseDirectoryURL)
+        try checkStoragePath(baseDirectoryURL)
+        try checkStoragePath(url.deletingLastPathComponent())
+        try checkStoragePath(url)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let marker = SetupCompletionMarker(
             pendingPath: url.appendingPathComponent(".headroom-setup-pending").path,
@@ -762,6 +794,17 @@ public enum AccountStorage {
             throw AccountStorageOperationError.setupActive
         }
         try FileManager.default.removeItem(at: url)
+    }
+
+    private static func checkStoragePath(_ url: URL) throws {
+        var info = stat()
+        if lstat(url.path, &info) == 0 {
+            guard info.st_mode & S_IFMT == S_IFDIR else {
+                throw AccountStorageOperationError.invalidDirectory
+            }
+        } else if errno != ENOENT {
+            throw AccountStorageOperationError.invalidDirectory
+        }
     }
 
     public static func credentialFilePermissionsAreSafe(at url: URL) -> Bool {
@@ -804,6 +847,7 @@ public enum AccountStorageFailure: Error, Sendable, Equatable {
 }
 
 private enum AccountStorageOperationError: Error {
+    case invalidDirectory
     case setupActive
 }
 
@@ -811,13 +855,13 @@ private enum AccountStorageOperationError: Error {
 /// tests never touch the real Application Support tree (AGENTS.md: the suite is all
 /// mocked — no CLI/network/Keychain/filesystem).
 public protocol AccountStorageManaging: Sendable {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure>
-    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure>
+    func ensureDirectories(for home: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure>
+    func setupHandoffIsActive(for setup: SetupCapableAccount) async -> Bool
+    func removeDirectories(for home: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure>
 }
 
 public extension AccountStorageManaging {
-    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { false }
+    func setupHandoffIsActive(for setup: SetupCapableAccount) async -> Bool { false }
 }
 
 public struct DefaultAccountStorage: AccountStorageManaging {
@@ -829,24 +873,24 @@ public struct DefaultAccountStorage: AccountStorageManaging {
     public init(builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL) {
         self.builtInClaudeWorkspace = builtInClaudeWorkspace
     }
-    public func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> {
+    public func ensureDirectories(for home: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> {
         do {
-            _ = try AccountStorage.ensureDirectories(for: account)
+            _ = try AccountStorage.ensureDirectories(for: home)
             return .success(())
         } catch {
             return .failure(.createFailed)
         }
     }
-    public func setupHandoffIsActive(for account: ProviderAccount) async -> Bool {
+    public func setupHandoffIsActive(for setup: SetupCapableAccount) async -> Bool {
         let workspace = builtInClaudeWorkspace
         return await Task.detached(priority: .utility) {
-            AccountStorage.setupHandoffIsActive(for: account, builtInClaudeWorkspace: workspace)
+            AccountStorage.setupHandoffIsActive(for: setup, builtInClaudeWorkspace: workspace)
         }.value
     }
-    public func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
+    public func removeDirectories(for home: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> {
         await Task.detached(priority: .utility) {
             do {
-                try AccountStorage.removeDirectories(for: account)
+                try AccountStorage.removeDirectories(for: home)
                 return .success(())
             } catch AccountStorageOperationError.setupActive {
                 return .failure(.setupActive)

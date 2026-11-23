@@ -345,8 +345,9 @@ enum SetupSessions {
         store.companionInteractiveReasonLookup = { key in interactiveReason(for: key) }
         for providerID in store.providerOrder {
             for account in store.accounts(for: providerID) {
+                guard let setup = SetupCapableAccount(account) else { continue }
                 let marker = completionMarker(
-                    for: account,
+                    for: setup,
                     builtInClaudeWorkspace: builtInClaudeWorkspace
                 )
                 if AccountStorage.setupHandoffIsActive(marker: marker) {
@@ -423,7 +424,8 @@ enum SetupSessions {
         onRetry: @escaping () -> Void,
         confirmed: Bool = false
     ) {
-        guard confirmed || !requestsBuiltInSignInConfirmation(for: account, purpose: .setup, onRetry: onRetry)
+        guard let setup = SetupCapableAccount(account),
+              confirmed || !requestsBuiltInSignInConfirmation(for: account, purpose: .setup, onRetry: onRetry)
         else { return }
         noteHandoffBegan(for: account)
         if let coordinator {
@@ -434,7 +436,7 @@ enum SetupSessions {
         // deterministic preview state and the legacy fallback outside production.
         switch account.providerID {
         case .claude: ClaudeSetupSession.openSetup(for: account, onRetry: onRetry)
-        case .codex: CodexSetupSession.openSetup(for: account, onRetry: onRetry)
+        case .codex: CodexSetupSession.openSetup(for: setup, onRetry: onRetry)
         case .grok: assertionFailure("Grok setup requires the configured coordinator")
         case .cursor: assertionFailure("Cursor setup requires the configured coordinator")
         case .copilot: assertionFailure("Copilot setup requires the configured coordinator")
@@ -535,11 +537,12 @@ enum SetupSessions {
             noteHandoffBegan(for: account)
             coordinator?.beginCursorMCPApproval(for: account)
         case .setup(.deviceCode):
+            guard let setup = SetupCapableAccount(account) else { return }
             noteHandoffBegan(for: account)
             if let coordinator {
                 coordinator.begin(for: account, mode: .deviceCode)
             } else {
-                CodexSetupSession.openSetup(for: account, onRetry: onRetry)
+                CodexSetupSession.openSetup(for: setup, onRetry: onRetry)
             }
         case .feedbackEmail:
             guard let store else { return }
@@ -965,8 +968,9 @@ enum SetupSessions {
     }
 
     private static func productionCancellationCleanup(_ account: ProviderAccount, _ prepared: PreparedScript?) {
+        guard let setup = SetupCapableAccount(account) else { return }
         let marker = prepared?.completionMarker ?? completionMarker(
-            for: account,
+            for: setup,
             builtInClaudeWorkspace: builtInClaudeWorkspace
         )
         AccountStorage.clearSetupCompletionMarkers(marker)
@@ -1008,8 +1012,9 @@ enum SetupSessions {
         ),
         openCodeVersionReader: @escaping OpenCodeVersionReading = readOpenCodeVersion
     ) async -> SetupPreparationResult {
+        guard let setup = SetupCapableAccount(account) else { return .failure(.stagingFailed) }
         let accountCompletionMarker = completionMarker(
-            for: account,
+            for: setup,
             builtInClaudeWorkspace: builtInClaudeWorkspace
         )
         // Read on the main actor, before the detached staging task: the reason belongs to the
@@ -1017,8 +1022,8 @@ enum SetupSessions {
         let trustReason = purpose == .trust ? requestedTrustReasons[account.key] : nil
         let preparation = await Task.detached(priority: .userInitiated) { () -> Result<PreparedScript, SetupSessionFailure> in
             do {
-                if !account.isBuiltIn {
-                    _ = try AccountStorage.ensureDirectories(for: account)
+                if let owned = setup.ownedHome {
+                    _ = try AccountStorage.ensureDirectories(for: owned)
                 }
                 let supportDirectory = builtInClaudeWorkspace
                     .deletingLastPathComponent()
@@ -1436,7 +1441,7 @@ enum SetupSessions {
     /// checks via `AccountStorage.setupHandoffIsActive(for:)` (code-review finding:
     /// a divergent built-in path let stop-tracking detach a row mid-handoff).
     private static func completionMarker(
-        for account: ProviderAccount,
+        for account: SetupCapableAccount,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) -> SetupCompletionMarker {
         AccountStorage.setupCompletionMarker(

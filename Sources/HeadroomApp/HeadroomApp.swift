@@ -254,7 +254,26 @@ enum Entry {
     private static func runCodexProbe() {
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            let snapshot = await CodexProvider(credentials: CredentialStore()).fetchSnapshot()
+            defer { semaphore.signal() }
+            let provider: any UsageProvider
+            if let index = CommandLine.arguments.firstIndex(of: "--codex-home") {
+                guard CommandLine.arguments.indices.contains(index + 1) else {
+                    print("RESULT: supply a folder after --codex-home")
+                    return
+                }
+                let url = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
+                switch BorrowedHomeEnvironment.live(t3: T3Installation()).canonicalize(url) {
+                case .failure(let reason):
+                    print("RESULT: \(reason.message)")
+                    return
+                case .success(let path):
+                    let home = BorrowedHome(path: path, source: .manual)
+                    provider = CodexAppServerProvider(accountID: .borrowedHome(path), home: home)
+                }
+            } else {
+                provider = CodexProvider(credentials: CredentialStore())
+            }
+            let snapshot = await provider.fetchSnapshot()
             switch snapshot.freshness {
             case .pending:
                 print("RESULT: pending")
@@ -270,7 +289,6 @@ enum Entry {
             case .stale(let reason):
                 print("RESULT: stale Codex snapshot: \(reason.message)")
             }
-            semaphore.signal()
         }
         semaphore.wait()
     }
@@ -1044,6 +1062,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Composition root (R13): the one place concrete providers are wired to the engine.
 /// Adding a third provider is a one-line append here plus a card — no engine change.
 enum AppComposition {
+    private static let t3Installation = T3Installation()
     struct SubscriptionProviderRegistration {
         let id: ProviderID
         /// KTD10 (2026-09-19 polling plan): the registry is read before any provider instance
@@ -1196,12 +1215,21 @@ enum AppComposition {
             return demoStore()
         }
         let credentials = CredentialStore()
-        let registry = AccountRegistry()
+        let registry = AccountRegistry(defaults: launchDefaults)
+        let borrowedHomes: BorrowedHomeEnvironment?
+        if usesInertPhoneSync() {
+            borrowedHomes = nil
+        } else {
+            let live = BorrowedHomeEnvironment.live(t3: t3Installation)
+            T3DiscoveryCache(defaults: launchDefaults).record(live.scanT3())
+            borrowedHomes = live
+        }
         return UsageStore(
             providers: providers(credentials: credentials, registry: registry),
             apiSpendProviders: apiSpendProviders(credentials: credentials),
             preferences: preferences,
             accountRegistry: registry,
+            borrowedHomes: borrowedHomes,
             providerFactory: { account in provider(for: account, credentials: credentials) },
             continuityCache: UsageContinuityCache(),
             defaultLoginRecords: makeDefaultLoginRecordStore(isDemo: DemoFixture.isEnabled),
@@ -1452,15 +1480,18 @@ enum AppComposition {
     @MainActor
     private static func makeCodexProvider(
         account: ProviderAccount,
-        credentials: CredentialStore,
+        credentials _: CredentialStore,
         builtInClaudeWorkspace _: URL
     ) -> any UsageProvider {
-        guard !account.isBuiltIn else {
-            return CodexProvider(credentials: credentials) // reads ~/.codex/auth.json + wham/usage
+        switch ProviderAccountConfiguration.make(for: account).codexTransport {
+        case .authFile(let url):
+            let credentials = CredentialStore(codexReader: CodexAuthFileReader(path: url))
+            return CodexProvider(credentials: credentials, accountID: account.id)
+        case .appServer(let home):
+            return CodexAppServerProvider(accountID: account.id, home: home)
+        case nil:
+            return UnavailableAccountProvider(account: account)
         }
-        let configuration = ProviderAccountConfiguration.make(for: account)
-        let reader = CodexAuthFileReader(path: configuration.codexAuthFile)
-        return CodexProvider(credentials: CredentialStore(codexReader: reader), accountID: account.id)
     }
 
     @MainActor

@@ -43,6 +43,7 @@ public enum UsageFetchDiscard: Sendable, Equatable {
 public struct UsageProviderFetchResult: Sendable, Equatable {
     public let snapshot: UsageSnapshot
     public let capability: ProviderCapabilityState?
+    public let cliVersion: String?
     /// Set when the store must refuse this result instead of merging it. A discard is not
     /// a failure: it moves no backoff, dims no row and never reaches a setup session,
     /// which would read a stale snapshot during a handoff as retry exhaustion.
@@ -51,11 +52,13 @@ public struct UsageProviderFetchResult: Sendable, Equatable {
     public init(
         snapshot: UsageSnapshot,
         capability: ProviderCapabilityState? = nil,
-        discard: UsageFetchDiscard? = nil
+        discard: UsageFetchDiscard? = nil,
+        cliVersion: String? = nil
     ) {
         self.snapshot = snapshot
         self.capability = capability
         self.discard = discard
+        self.cliVersion = cliVersion
     }
 
     /// A reading taken while the login was changing (KTD2). The snapshot is a placeholder
@@ -77,7 +80,11 @@ public struct UsageProviderFetchResult: Sendable, Equatable {
     public static let identityUnconfirmedReason = FailureReason.transient("Couldn’t confirm the account — will retry")
 
     var withoutDiscard: UsageProviderFetchResult {
-        UsageProviderFetchResult(snapshot: snapshot, capability: capability)
+        UsageProviderFetchResult(snapshot: snapshot, capability: capability, cliVersion: cliVersion)
+    }
+
+    func withCLIVersion(_ version: String?) -> Self {
+        UsageProviderFetchResult(snapshot: snapshot, capability: capability, discard: discard, cliVersion: version)
     }
 }
 

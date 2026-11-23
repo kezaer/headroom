@@ -87,6 +87,7 @@ struct AccountsSettingsTile: View {
     @State private var removalOrigin: AccountKey?
     @State private var removalInProgress: AccountKey?
     @State private var hoveredLabel: AccountKey?
+    @State private var codexHomeError: String?
     @FocusState private var focusedLabel: AccountKey?
     @FocusState private var focusedRemovalAction: AccountKey?
 
@@ -114,7 +115,7 @@ struct AccountsSettingsTile: View {
                 SettingsHelpText(text: "Applies to every account, in the Mac app and on a synced iPhone or iPad. Saved names return when turned off, and are used whenever an email is unavailable.")
             }
 
-            ForEach(store.registeredProviderOrder, id: \.self) { providerID in
+            ForEach(settingsProviderOrder, id: \.self) { providerID in
                 providerGroup(providerID)
             }
         }
@@ -130,7 +131,7 @@ struct AccountsSettingsTile: View {
             // deletes nothing, unlike extra-account removal. Removing a remembered row
             // only hides it too (R11).
             Button(
-                account.isBuiltIn && !row.isRemembered
+                (account.isBuiltIn || account.borrowedHome != nil) && !row.isRemembered
                     ? "Stop Tracking \(store.desktopAccountName(for: account))"
                     : "Remove \(store.desktopAccountName(for: account))",
                 role: AccountsSettingsInteractions.removalIsDestructive(for: row) ? .destructive : nil
@@ -157,6 +158,13 @@ struct AccountsSettingsTile: View {
             Button("Cancel", role: .cancel) { restoreRemovalFocus() }
         } message: { row in
             Text(AccountsSettingsInteractions.removalDialogMessage(for: row))
+        }
+        .alert("Couldn’t Add Codex Folder", isPresented: Binding(
+            get: { codexHomeError != nil }, set: { if !$0 { codexHomeError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(codexHomeError ?? "")
         }
         .confirmationDialog(
             "Sign out and set up again?",
@@ -210,6 +218,14 @@ struct AccountsSettingsTile: View {
 
     private func displayRow(for key: AccountKey) -> DisplayAccount? {
         store.displayProjection(for: key.providerID).row(for: key)
+    }
+
+    private var settingsProviderOrder: [ProviderID] {
+        let providers = store.registeredProviderOrder
+        if !providers.contains(.codex), store.accountSettingsProviderIDs.contains(.codex) {
+            return providers + [.codex]
+        }
+        return providers
     }
 
     // MARK: - Provider group
@@ -318,6 +334,26 @@ struct AccountsSettingsTile: View {
             ForEach(rows) { row in
                 accountRow(row, lastReadAt: lastReadAt[row.key], capability: capability, presentation: presentation)
                     .transition(SettingsAccountExit.transition(reduceMotion: reduceMotion))
+            }
+            if providerID == .codex {
+                HStack {
+                    Button("Add Codex Folder…", action: addCodexFolder)
+                        .disabled(!store.canAddAccount(for: .codex))
+                    Button("Rescan T3 Code") { store.rescanBorrowedHomes() }
+                }
+                .controlSize(.small)
+                if rows.contains(where: { $0.account.borrowedHome?.source.isT3 == true }) {
+                    Toggle("Track the CLI login alongside T3 Code", isOn: Binding(
+                        get: { store.tracksCLIDefaultAlongsideT3 },
+                        set: store.setTracksCLIDefaultAlongsideT3
+                    ))
+                    .controlSize(.small)
+                }
+                ForEach(store.hiddenBorrowedAccounts(for: .codex)) { account in
+                    Button("Track \(account.label)") { _ = store.restoreBorrowedAccount(account.key) }
+                        .controlSize(.small)
+                        .disabled(!store.canAddAccount(for: .codex))
+                }
             }
             if store.isBuiltInTrackingStopped(for: providerID) {
                 // The way back from stop-tracking: resurface the CLI's own login and
@@ -790,7 +826,22 @@ struct AccountsSettingsTile: View {
                     .controlSize(.small)
                     .accessibilityLabel("Cancel removal of \(store.desktopAccountName(for: account))")
             } else {
-                if account.isBuiltIn {
+                if account.borrowedHome != nil {
+                    Menu {
+                        if AccountsSettingsInteractions.promotionState(for: row, in: store) == .available {
+                            Button("Make Main") { makeMain(account) }
+                        }
+                        Button("Stop Tracking") {
+                            removalOrigin = account.key
+                            removalCandidate = row
+                        }
+                    } label: {
+                        AccountActionsMenuGlyph()
+                    }
+                    .accountActionsMenuChrome()
+                    .accessibilityLabel("Actions for \(store.desktopAccountName(for: account))")
+                    .focused($focusedRemovalAction, equals: account.key)
+                } else if account.isBuiltIn {
                     let builtInActions = AccountsSettingsInteractions.builtInRowActions(for: account, in: store)
                     let promotion = AccountsSettingsInteractions.promotionState(for: account, in: store)
                     switch (builtInActions, promotion) {
@@ -1088,6 +1139,17 @@ struct AccountsSettingsTile: View {
     }
 
     // MARK: - Actions
+
+    private func addCodexFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.showsHiddenFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if case .failure(let reason) = store.addExternalCodexHome(at: url, label: nil) {
+            codexHomeError = reason.message
+        }
+    }
 
     /// Create the account and immediately open its official-CLI sign-in so the add
     /// flow is one gesture: click Add → Terminal opens → sign in → row goes live.

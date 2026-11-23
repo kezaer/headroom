@@ -48,7 +48,7 @@ import Testing
         ]
 
         let bindings = try accounts.map { account in
-            let home = try AccountStorage.ensureDirectories(for: account, baseDirectoryURL: accountsBase)
+            let home = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: accountsBase)
             let configuredHome = ProviderAccountConfiguration.make(
                 for: account,
                 accountsBase: accountsBase

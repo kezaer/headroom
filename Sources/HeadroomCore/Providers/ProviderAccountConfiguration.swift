@@ -1,5 +1,10 @@
 import Foundation
 
+public enum CodexTransport: Sendable, Equatable {
+    case authFile(URL)
+    case appServer(BorrowedHome)
+}
+
 /// Inspectable production routing for one provider/account pair. The composition root
 /// consumes this value to build concrete providers; tests can verify identity and exact
 /// paths without spawning a CLI, touching Keychain, or making a network request.
@@ -9,6 +14,13 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
     public let claudeWorkspaceDirectory: URL?
     public let codexHomeDirectory: URL?
     public let codexAuthFile: URL?
+    public private(set) var borrowedCodexHome: BorrowedHome? = nil
+
+    public var codexTransport: CodexTransport? {
+        if let borrowedCodexHome { return .appServer(borrowedCodexHome) }
+        return codexAuthFile.map(CodexTransport.authFile)
+    }
+
     public let grokHomeDirectory: URL?
     public let grokAuthFile: URL?
     /// KTD10: `.builtIn` for the built-in OpenCode account (its four XDG variables are unset,
@@ -32,6 +44,14 @@ public struct ProviderAccountConfiguration: Sendable, Equatable {
         accountsBase: URL = AccountStorage.baseDirectoryURL,
         builtInClaudeWorkspace: URL = ClaudeUsageWorkspace.defaultDirectoryURL
     ) -> ProviderAccountConfiguration {
+        if let home = account.borrowedHome {
+            return .init(
+                accountKey: account.key, claudeConfigDirectory: nil, claudeWorkspaceDirectory: nil,
+                codexHomeDirectory: nil, codexAuthFile: nil,
+                borrowedCodexHome: account.providerID == .codex ? home : nil,
+                grokHomeDirectory: nil, grokAuthFile: nil
+            )
+        }
         switch account.providerID {
         case .claude:
             if account.isBuiltIn {

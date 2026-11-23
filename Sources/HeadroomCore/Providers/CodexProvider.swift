@@ -88,31 +88,25 @@ public struct CodexProvider: UsageProvider {
         guard let dto = try? JSONDecoder().decode(CodexUsageDTO.self, from: body) else {
             return stale(.decode("Couldn’t read Codex usage response"))
         }
-        var windows: [UsageWindow] = []
-        // Kind comes from each window's own `limit_window_seconds`, not its slot — see
-        // #codex-window-kind. The primary/secondary args are only the fallback used when a
-        // response omits the duration.
-        if let w = dto.rate_limit?.primary_window,
-           let win = codexWindow(w, positionalDefault: .fiveHour) {
-            windows.append(win)
-        }
-        if let w = dto.rate_limit?.secondary_window,
-           let win = codexWindow(w, positionalDefault: .weekly) {
-            windows.append(win)
-        }
+        let capturedAt = now()
+        let main = CodexLimitBucket(
+            label: nil, primary: CodexLimitWindow(dto.rate_limit?.primary_window, now: capturedAt),
+            secondary: CodexLimitWindow(dto.rate_limit?.secondary_window, now: capturedAt)
+        )
+        // Preserve the response order, including older flat model counters.
+        var windows = CodexWindowMapping.windows([main])
         for extra in dto.additional_rate_limits ?? [] {
-            let label = extra.displayLabel
-            if let w = extra.rate_limit?.primary_window,
-               let win = codexNamedWindow(w, label: label, positionalDefault: .fiveHour) {
-                windows.append(win)
-            }
-            if let w = extra.rate_limit?.secondary_window,
-               let win = codexNamedWindow(w, label: label, positionalDefault: .weekly) {
-                windows.append(win)
-            }
-            if extra.rate_limit == nil,
-               let win = UsageWindowBuilder.make(.other(label), utilization: extra.utilizationValue, resetsAt: extra.resetAtValue, resetEpochSeconds: extra.resetEpochValue, resetsInSeconds: extra.resetSecondsValue, now: now) {
-                windows.append(win)
+            if let limit = extra.rate_limit {
+                let bucket = CodexLimitBucket(
+                    label: extra.displayLabel, primary: CodexLimitWindow(limit.primary_window, now: capturedAt),
+                    secondary: CodexLimitWindow(limit.secondary_window, now: capturedAt)
+                )
+                windows += CodexWindowMapping.windows([bucket])
+            } else if let window = UsageWindowBuilder.make(
+                .other(extra.displayLabel), utilization: extra.utilizationValue, resetsAt: extra.resetAtValue,
+                resetEpochSeconds: extra.resetEpochValue, resetsInSeconds: extra.resetSecondsValue, now: { capturedAt }
+            ) {
+                windows.append(window)
             }
         }
         guard !windows.isEmpty else {
@@ -125,22 +119,9 @@ public struct CodexProvider: UsageProvider {
             accountEmail: accountEmail,
             bankedResets: dto.resetCreditsField.bankedResets,
             codexResetCreditsField: dto.resetCreditsField,
-            capturedAt: now(),
+            capturedAt: capturedAt,
             freshness: .live
         )
-    }
-
-    /// A main rate-limit window, kinded by its true duration (#codex-window-kind).
-    private func codexWindow(_ w: CodexWindowDTO, positionalDefault: WindowKind) -> UsageWindow? {
-        let kind = CodexWindowClassifier.kind(limitWindowSeconds: w.windowSecondsValue, positionalDefault: positionalDefault)
-        return UsageWindowBuilder.make(kind, utilization: w.utilizationValue, resetsAt: w.resetAtValue, resetEpochSeconds: w.resetEpochValue, resetsInSeconds: w.resetSecondsValue, now: now)
-    }
-
-    /// An additional (model-specific) allowance window, suffixed with its true duration
-    /// rather than a hardcoded "5h"/"weekly" (#codex-window-kind).
-    private func codexNamedWindow(_ w: CodexWindowDTO, label: String, positionalDefault: WindowKind) -> UsageWindow? {
-        let kind = CodexWindowClassifier.kind(limitWindowSeconds: w.windowSecondsValue, positionalDefault: positionalDefault)
-        return UsageWindowBuilder.make(.other("\(label) \(kind.shortLabel)"), utilization: w.utilizationValue, resetsAt: w.resetAtValue, resetEpochSeconds: w.resetEpochValue, resetsInSeconds: w.resetSecondsValue, now: now)
     }
 
     private func stale(_ reason: FailureReason) -> UsageSnapshot {

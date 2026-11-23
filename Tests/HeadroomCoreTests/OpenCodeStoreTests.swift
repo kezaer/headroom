@@ -14,8 +14,8 @@ private func freshDefaults() -> UserDefaults {
 }
 
 private struct NoopStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }
 
 /// A source scripted per home, with one optional gate that holds the next capture open.

@@ -54,18 +54,18 @@ private func window(_ kind: WindowKind, used: Double) -> UsageWindow {
 /// No-op storage so account-lifecycle tests never touch the real Application
 /// Support tree (AGENTS.md: suite is all mocked).
 private struct NoopAccountStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }
 
 private final class FailingRemovalStorage: AccountStorageManaging, @unchecked Sendable {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .failure(.removeFailed) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .failure(.removeFailed) }
 }
 
 private struct ActiveSetupRemovalStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .failure(.setupActive) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .failure(.setupActive) }
 }
 
 /// Records every on-disk removal so stop-tracking tests can prove the CLI's own
@@ -75,17 +75,17 @@ private final class RecordingRemovalStorage: AccountStorageManaging, @unchecked 
     private var removed: [AccountKey] = []
     var removedKeys: [AccountKey] { lock.withLock { removed } }
 
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
-        lock.withLock { removed.append(account.key) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> {
+        lock.withLock { removed.append(account.account.key) }
         return .success(())
     }
 }
 
 private struct ActiveHandoffStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { true }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func setupHandoffIsActive(for account: SetupCapableAccount) async -> Bool { true }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }
 
 private actor FetchConcurrencyProbe {
@@ -1889,7 +1889,7 @@ private enum SeededHomeOpenCodeScript {
         )
         let cache = OpenCodeUsageCaptureCache(source: cli)
         let extra = ProviderAccount(id: AccountID("work"), providerID: .opencode, label: "Work")
-        try AccountStorage.ensureDirectories(for: extra, baseDirectoryURL: accountsBase)
+        try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(extra)!, baseDirectoryURL: accountsBase)
         let extraHome = try #require(ProviderAccountConfiguration.make(for: extra, accountsBase: accountsBase).opencodeHome)
         let builtInHome = try #require(ProviderAccountConfiguration.make(for: .builtIn(for: .opencode), accountsBase: accountsBase).opencodeHome)
         #expect(builtInHome == .builtIn)
