@@ -50,14 +50,19 @@ to the Xcode command for a focused check.
 
 ## Find the UI
 
-Paths below start at `Sources/`. Read only the file for the area you are changing.
+Paths below start at `Sources/`. Short Accounts paths are relative to `HeadroomApp/UI/`.
+Read only the file for the area you are changing.
 
 - Menu bar label and badges — `HeadroomApp/UI/MenuBarLabel.swift` (`MenuBarStatusLabel`, `MenuBarLabelRenderer`).
 - Menu bar glyphs — `HeadroomApp/UI/MenuBarGlyphImage.swift` (`MenuBarGlyphImage`), `VesselGlyph.swift` (`VesselGlyph`).
 - Popover — `HeadroomApp/UI/PopoverView.swift` (`PopoverView`, `RefreshFooter`).
 - Provider card — `HeadroomApp/UI/ProviderCardView.swift` (`ProviderCardView`), `CompactAccountRow.swift` (`CompactAccountRow`).
 - Settings window and panes — `HeadroomApp/UI/SettingsView.swift` (`SettingsView`), `SettingsSidebar.swift` (`SettingsSidebar`), `SettingsPanes.swift` (pane views).
-- Settings › Accounts — `HeadroomApp/UI/AccountsSettingsTile.swift` (`AccountsSettingsTile`, `AddAccountSourceSheet`).
+- Settings › Accounts container — `HeadroomApp/UI/AccountsSettings/AccountsSettingsTile.swift` (`AccountsSettingsTile`).
+- Accounts provider groups — `AccountsSettings/AccountsSettingsProviderGroup.swift` (`AccountsSettingsTile.providerGroup`).
+- Accounts row, menu and recovery — `AccountsSettings/AccountsSettingsAccountRow.swift` (`accountRow`), `AccountsSettingsRowActions.swift` (`accountMenu`), `AccountsSettingsRecovery.swift` (`AccountsSettingsTile.AccountStatus`).
+- Add Source sheet — `AccountsSettings/AddAccountSourceSheet.swift` (`AddAccountSourceSheet`).
+- Accounts columns and badge editor — `AccountsSettings/AccountsSettingsStyle.swift` (`AccountsColumns`, `AccountMenuBarBadgeField`).
 - Provider setup UI — `HeadroomApp/UI/ClaudeSetupViews.swift` (`ClaudeConnectCard`) and `CodexSetupViews.swift` (`CodexConnectCard`).
 - Colours — `HeadroomSharedUI/ProviderStyle.swift` (`ProviderStyle`), `HeadroomCore/Models/BrandColorValues.swift` (`HeadroomBrandColorValues`), `HeadroomCore/Models/MenuBarPalette.swift` (`MenuBarPalette`).
 - Fonts and spacing — `HeadroomApp/UI/SettingsRows.swift` (`SettingsType`, `SettingsMetrics`), `HeadroomApp/UI/PopoverView.swift` (`PopoverCardMetrics`), `HeadroomSharedUI/HeadroomTuning.swift` (`HeadroomTuning`).
