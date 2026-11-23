@@ -4,9 +4,21 @@ Headroom is a macOS menu bar app written in Swift 6 and SwiftUI.
 The menu bar and popover show subscription usage and reset times.
 Settings › Accounts manages which provider logins appear.
 
+## Fast check
+
+Use the debug build after each edit. Run it from the repository root.
+
+```sh
+swift build --product Headroom
+```
+
+This builds the debug app without packaging it. Use the screenshots below to
+inspect the result, or build the release bundle for a hands-on check.
+With only Command Line Tools, use the pinned build command under Check screenshots.
+
 ## Run offline
 
-Quit Headroom first. Open the installed build with this command:
+Quit Headroom before opening the installed build in replay mode.
 
 ```sh
 open -a /Applications/Headroom.app --args --demo captured
@@ -20,28 +32,45 @@ To use a different capture, pass `--demo "captured=/path/to/capture.json"`.
 While online, run `/Applications/Headroom.app/Contents/MacOS/Headroom --capture-demo`
 to refresh the capture. The previous file becomes `previous.json`.
 
-## Build and test
+## Check screenshots
 
-Run from the repository root. To try an edit offline with Command Line Tools:
+Run the headless renderer from the repository root. With Command Line Tools,
+pin the macOS 26.5 SDK as the local bundle script does. The default CLT 27.2 SDK
+fails to load the SwiftUI `State` macro.
 
 ```sh
-Scripts/t3-install-local.sh --build-only
-open -n "$PWD/Headroom.app" --args --demo captured
-swift test --filter 'DemoCaptureTests|DemoFixtureTests'
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+swift build --product Headroom && \
+.build/debug/Headroom --render-popover .build/popover-shots
 ```
 
-Quit your previous preview before opening another one. The build creates
-`Headroom.app` in the checkout. For a UI change, run the filtered tests and check
-the changed screen in the bundled preview. To install in `/Applications`, run
-`Scripts/t3-install-local.sh --install`. The installer opens a normal live session,
-so quit it before running the installed replay command.
+Open `settings-accounts-multi-light.png` and `settings-accounts-multi-dark.png` in
+`.build/popover-shots/` to check the multi-account list. The renderer uses built-in
+fixtures and also writes screenshots of the popover and other Settings panes.
+The full sweep can take a few minutes.
 
-Before pushing a larger change, run `swift build --target HeadroomCoreTests && swift test --skip-build`.
-If the test bundle has not been built yet, run `swift test` once.
+## Preview and test
 
-With full Xcode and the Sparkle dependency already available, run the macOS app tests:
+For a hands-on check, build the release bundle in the checkout and open it in replay mode.
 
 ```sh
+Scripts/t3-install-local.sh --build-only && \
+open -n "$PWD/Headroom.app" --args --demo captured
+```
+
+Quit your previous preview before opening another one.
+
+Run focused replay tests with `swift test --filter 'DemoCaptureTests|DemoFixtureTests'`.
+
+Before pushing a larger change, run `swift build --target HeadroomCoreTests && swift test --skip-build`.
+Run `swift test` if you need to build or relink the test bundle.
+
+The macOS app tests need full Xcode, XcodeGen and a local Sparkle dependency.
+Prepare Sparkle while online with `Scripts/build-app.sh --deps-only` if needed.
+
+```sh
+xcodegen generate
 xcodebuild -project Headroom.xcodeproj -scheme HeadroomAppTests -destination 'platform=macOS' -derivedDataPath .xcode-derived CODE_SIGNING_ALLOWED=NO test
 ```
 
@@ -61,6 +90,8 @@ Read only the file for the area you are changing.
 - Settings › Accounts container — `HeadroomApp/UI/AccountsSettings/AccountsSettingsTile.swift` (`AccountsSettingsTile`).
 - Accounts provider groups — `AccountsSettings/AccountsSettingsProviderGroup.swift` (`AccountsSettingsTile.providerGroup`).
 - Accounts row, menu and recovery — `AccountsSettings/AccountsSettingsAccountRow.swift` (`accountRow`), `AccountsSettingsRowActions.swift` (`accountMenu`), `AccountsSettingsRecovery.swift` (`AccountsSettingsTile.AccountStatus`).
+- Accounts row copy and rules — `HeadroomApp/UI/AccountsSettingsInteractions.swift` (`AccountsSettingsInteractions`).
+- Accounts loading and removal transitions — `HeadroomApp/UI/AccountsSettingsLoading.swift` (`SettingsAccountWaitPill`, `SettingsAccountExit`).
 - Add Source sheet — `AccountsSettings/AddAccountSourceSheet.swift` (`AddAccountSourceSheet`).
 - Accounts columns and badge editor — `AccountsSettings/AccountsSettingsStyle.swift` (`AccountsColumns`, `AccountMenuBarBadgeField`).
 - Provider setup UI — `HeadroomApp/UI/ClaudeSetupViews.swift` (`ClaudeConnectCard`) and `CodexSetupViews.swift` (`CodexConnectCard`).
@@ -69,14 +100,46 @@ Read only the file for the area you are changing.
 
 See `DESIGN.md` for the existing colours, spacing, typography and motion rules.
 
+### Large upstream files
+
+Token counts are rough estimates based on file size. Find the relevant section,
+then read a slice such as `sed -n '276,360p' Sources/HeadroomApp/UI/ProviderCardView.swift`.
+Keep these files intact so the fork can continue syncing with upstream.
+
+| File | Approx. tokens | Find the relevant section |
+| --- | ---: | --- |
+| `ProviderCardView.swift` | 25k | `grep -n -e 'struct ProviderCardView' -e 'struct UsageBarsStack' Sources/HeadroomApp/UI/ProviderCardView.swift` |
+| `PopoverView.swift` | 21k | `grep -n -e 'struct PopoverView' -e 'struct RefreshFooter' Sources/HeadroomApp/UI/PopoverView.swift` |
+| `SettingsPanes.swift` | 15k | `grep -n 'struct .*SettingsPane:' Sources/HeadroomApp/UI/SettingsPanes.swift` |
+| `UsageStore.swift` | 21k | `grep -n -e 'var menuBarMeters' -e 'func setShowAllProviderAccountsInMenuBar' Sources/HeadroomCore/Engine/UsageStore.swift` |
+
+## Recipe for adding a setting
+
+Use the existing `showAllProviderAccountsInMenuBar` toggle as a reference.
+
+1. `HeadroomCore/Settings/Preferences.swift` — add a key, a typed getter with a
+   default, and a setter.
+2. `HeadroomCore/Engine/UsageStore.swift` — add the observable property,
+   initialise it from preferences and add a method that writes both.
+3. `HeadroomApp/UI/SettingsPanes.swift` — add a control in the relevant pane.
+   Bind its getter to the store property and its setter to the store method.
+4. In the view or store projection that uses the setting, read it from the store.
+   For the example toggle, look for `menuBarMeters` in `UsageStore.swift`.
+5. Run the debug build and check the relevant screenshot or replay.
+
+Keep new UI settings out of `DemoCaptureSettings.swift`. Replay gets the setting's
+current default from `Preferences`. That keeps ordinary UI work out of the capture
+format. If a future change needs to preserve a setting in the capture, decode a
+missing key with the same default so existing captures still load.
+
 ## Example
 
-To add 2 points between each source icon and its title in the Add Source sheet:
+This edit adds 2 points between each source icon and its title in the Add Source sheet.
 
 1. Find `AddAccountSourceSheet.choice` in the file listed above.
 2. Change that button label's `HStack(spacing: 10)` to `HStack(spacing: 12)`.
-3. Run the build, preview and focused Swift tests above.
-4. Open Settings › Accounts, then choose **Add Source…** for Codex. Check the icon gap and click one source to make sure the row still opens its next step.
+3. Run the debug build and the focused Swift tests above.
+4. In the bundled preview, open Settings › Accounts and choose **Add Source…** for Codex. Check the icon gap and click a source to make sure it opens its next step.
 5. Run `git diff --check`. Stage the edited Swift file and commit with `git commit -m "Adjust add source icon spacing"`.
 
 ## Rules
