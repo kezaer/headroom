@@ -37,16 +37,18 @@ This plan is how we continue from here.
 
 ### M0: Clean base (re-land the prototype on 1.8.1, one topic at a time)
 
-Each step is one branch and one fork PR into `t3/dev`, taken from `t3/snapshot-2026-11-20`, rebased
-onto 1.8.1, tidied, and tested on its own. Order follows dependencies.
+The steps depend on each other, so M0 is **one branch, `t3/feat/reland-prototype`, with one commit per
+step**, landed through one fork PR into `t3/dev`. Each commit is taken from `t3/snapshot-2026-11-20`,
+applied on 1.8.1, and must build and pass the core tests on its own, so any step can be reviewed or
+reverted by itself. Work after M0 uses one branch per topic.
 
-| Step | Branch | Contents | Design |
+| Step | Commit | Contents | Design |
 |---|---|---|---|
-| M0.0 | `t3/feat/local-build-script` | `Scripts/t3-install-local.sh`: release build with Command Line Tools, bundle, remove Sparkle feed, ad-hoc sign, back up the installed app, install, relaunch. Replaces the manual steps from 2026-11-20. | — |
-| M0.1 | `t3/feat/codex-shadow-homes` | The original goal. `AccountOrigin`, `BorrowedHomes`, `BorrowedHomePaths`, `T3Installation`, `CodexAppServerProvider`, `CodexLimits`, registry/store lifecycle, storage gates, and only the Settings controls needed to add, hide and rename a home. | `design/01-*` |
-| M0.2 | `t3/feat/antigravity-t3` | T3-managed Antigravity discovery (`AntigravityLaunch`). Must be merged with upstream 1.8.1's Antigravity fixes (#255), which touch the same files. | `design/00-grounding.md` |
-| M0.3 | `t3/feat/menubar-brand-glyphs` | Severity-filled brand glyphs in the menu bar, OpenAI blossom for Codex, editable corner badges (`100` / `200`) shown only when one provider has two or more accounts in the menu bar. | `design/01-*` (menu bar part) |
-| M0.4 | `t3/feat/accounts-settings-v7` | Settings › Accounts v7: Account / Source / Plan / Version columns, one `+ Add Source…` sheet (T3 Code / Existing CLI login / Separate login), `Stop Tracking` and `Sign Out & Stop Tracking` menus. | `design/04-*` |
+| M0.0 | build script | `Scripts/t3-install-local.sh`: release build with Command Line Tools, bundle, remove Sparkle feed, ad-hoc sign, back up the installed app, install, relaunch. Replaces the manual steps from 2026-11-20. | — |
+| M0.1 | shadow homes | The original goal. `AccountOrigin`, `BorrowedHomes`, `BorrowedHomePaths`, `T3Installation`, `CodexAppServerProvider`, `CodexLimits`, registry/store lifecycle, storage gates, and only the Settings controls needed to add, hide and rename a home. | `design/01-*` |
+| M0.2 | Antigravity | T3-managed Antigravity discovery (`AntigravityLaunch`). Must be merged with upstream 1.8.1's Antigravity fixes (#255), which touch the same files. | `design/00-grounding.md` |
+| M0.3 | menu bar glyphs | Severity-filled brand glyphs in the menu bar, OpenAI blossom for Codex, editable corner badges (`100` / `200`) shown only when one provider has two or more accounts in the menu bar. | `design/01-*` (menu bar part) |
+| M0.4 | Accounts v7 | Settings › Accounts v7: Account / Source / Plan / Version columns, one `+ Add Source…` sheet (T3 Code / Existing CLI login / Separate login), `Stop Tracking` and `Sign Out & Stop Tracking` menus. | `design/04-*` |
 
 M0 is done when `t3/dev` matches the snapshot's behaviour on 1.8.1, installed and working on this Mac
 with both Codex accounts (100 and 200) showing.
