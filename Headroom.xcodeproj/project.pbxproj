@@ -81,6 +81,7 @@
 		1468C7CED1B72E02608E154D /* IdentityCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27AFEEF6F9BA247936BEFEEA /* IdentityCapsule.swift */; };
 		146C9A913C3D3101510BF00D /* UsageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0C0028BD003CD015FBDD181 /* UsageProvider.swift */; };
 		149782030843A8D54C82A030 /* PhoneRefreshPillRecipe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B955B2ECFF3179BCB6716FDB /* PhoneRefreshPillRecipe.swift */; };
+		14A0A244DCD783E8D54540A2 /* AccountRowPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27F839F11FF533383EDFFEA /* AccountRowPolicy.swift */; };
 		155C72D6DE67F9624B839444 /* HeadroomWidgetLockScreenBody.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6363CD7CEF7AE42AD7A72544 /* HeadroomWidgetLockScreenBody.swift */; };
 		15C18CFDA6C299324208B274 /* WidgetStyleRecipes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD9777C14EEBA0E245CF768 /* WidgetStyleRecipes.swift */; };
 		15E9C0A53E4DEB2AAF548BF3 /* SharedBenchCounters.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA9D3B9CD5BB0E04AE76ABB /* SharedBenchCounters.swift */; };
@@ -450,6 +451,7 @@
 		9D7B34EF54A0CB9745FEBA6E /* MeterStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA51FBDBE0235A09EB8ED191 /* MeterStyle.swift */; };
 		9E04A2161001D0E7469BE23D /* LockScreenWidgetTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A49D60127C59506D65410A /* LockScreenWidgetTokens.swift */; };
 		9E69BAA44A8CDBD9FDE3BB1E /* HeadroomWidgetLockScreenCircles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAE8A6670D6A569D5C511C66 /* HeadroomWidgetLockScreenCircles.swift */; };
+		9E804935E83DDEFA961A20FA /* AccountRowPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27F839F11FF533383EDFFEA /* AccountRowPolicy.swift */; };
 		9E9B83428BABF76BD485AF24 /* WidgetStyleRecipes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD9777C14EEBA0E245CF768 /* WidgetStyleRecipes.swift */; };
 		9EB4193844C02F5D8EDF05F1 /* HeadroomWidgetStatusViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ED97996F3D0D748CD51AACC /* HeadroomWidgetStatusViews.swift */; };
 		9FAF1D82D9C62751E6C6C2E7 /* FeedbackMail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CFEC32380DBFF064B3330F6 /* FeedbackMail.swift */; };
@@ -511,6 +513,7 @@
 		B4B6FABEF2B4FF3C81E0575D /* RefreshReceiptPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69193D80EC57DFD1C431841B /* RefreshReceiptPresentation.swift */; };
 		B6012FDC966B53758A081BE9 /* HalftonePillRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D943C3629B5B80B1861F7DA9 /* HalftonePillRow.swift */; };
 		B6099A17FC050E89A37ED1B2 /* CompanionSyncCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C7D3F7DF2A6B4A32A7A494 /* CompanionSyncCodec.swift */; };
+		B6F1142346373DC78E53FB8F /* AccountRowPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27F839F11FF533383EDFFEA /* AccountRowPolicy.swift */; };
 		B742DA1FF9639308DF6D03D7 /* CompanionFreshnessRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 194C63E8131AF50BE4E59CB2 /* CompanionFreshnessRule.swift */; };
 		B76504E5D64E7063C3FF4F5E /* DisplayAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 381C82C35348DD29DDE38F29 /* DisplayAccounts.swift */; };
 		B779B019A3EDF4D4AF443B69 /* SyncedWidgetSnapshotModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8164B96DDA8CF8840FA46958 /* SyncedWidgetSnapshotModels.swift */; };
@@ -1071,6 +1074,7 @@
 		C1D60E69FE155394DE9BF8B2 /* CopilotUsageLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotUsageLedger.swift; sourceTree = "<group>"; };
 		C21C54F0CE85AEC7C48005B1 /* vessel-app-icon.svg */ = {isa = PBXFileReference; path = "vessel-app-icon.svg"; sourceTree = "<group>"; };
 		C264BB97758E6C201EA36563 /* CopilotConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotConnection.swift; sourceTree = "<group>"; };
+		C27F839F11FF533383EDFFEA /* AccountRowPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountRowPolicy.swift; sourceTree = "<group>"; };
 		C40B2D2A8F7E2BCA4823C279 /* SetupSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupSessionCoordinator.swift; sourceTree = "<group>"; };
 		C480BDF363144C652E09039D /* WidgetFreshnessTreatment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetFreshnessTreatment.swift; sourceTree = "<group>"; };
 		C6EAF7AD1814FA8C7568EEBA /* BenchCounters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchCounters.swift; sourceTree = "<group>"; };
@@ -1723,6 +1727,7 @@
 				7493B61EA41DC37041196C73 /* AccountColumnsPlan.swift */,
 				4AE0B3EEE8A3CF524AB5790B /* AccountEmail.swift */,
 				A2C9AC8661811E08ACE95D61 /* AccountIdentity.swift */,
+				C27F839F11FF533383EDFFEA /* AccountRowPolicy.swift */,
 				EB5F3296A5B17E64A8B4CEF6 /* AntigravityRowLabels.swift */,
 				7A2B2887C4F4FCD8B8DA8FDE /* BrandColorValues.swift */,
 				AA0B56B46D3607F25DF97CCD /* CLIExecutableDiscoveryIssue.swift */,
@@ -2183,6 +2188,7 @@
 				015E17852BA4A0AF9BDBF263 /* AccountIdentity.swift in Sources */,
 				E3DAD680F61370E67E369D19 /* AccountProbeScheduler.swift in Sources */,
 				A113A612C726C4102627D24C /* AccountRegistry.swift in Sources */,
+				9E804935E83DDEFA961A20FA /* AccountRowPolicy.swift in Sources */,
 				4B4C9CAB4F37C267CE7FAF7E /* AccountStorage.swift in Sources */,
 				5A40EA8685741CD9AD7DFA21 /* AntigravityConnection.swift in Sources */,
 				CD866B9B32EAA9DF03A2D9A2 /* AntigravityDTOs.swift in Sources */,
@@ -2365,6 +2371,7 @@
 				B7D06FBDC03D1DE273B772DA /* AccountEmail.swift in Sources */,
 				675C834F5BD5D671467D2554 /* AccountIdentity.swift in Sources */,
 				AB4FA361DCBD77CBFBA6277C /* AccountRegistry.swift in Sources */,
+				B6F1142346373DC78E53FB8F /* AccountRowPolicy.swift in Sources */,
 				D2E85261188C7099D7CD507E /* AntigravityRowLabels.swift in Sources */,
 				C3877FE45FBA2E3E15DFC50B /* BankedResetAcknowledgements.swift in Sources */,
 				F77225CB525B717288DECA96 /* BankedResetNotificationBaseline.swift in Sources */,
@@ -2675,6 +2682,7 @@
 				88286464CEFB8013E9380F27 /* AccountEmail.swift in Sources */,
 				093B5AEA59CB9ADC0395BC7F /* AccountIdentity.swift in Sources */,
 				BA3072EDE1B23A6F7E100BB7 /* AccountRegistry.swift in Sources */,
+				14A0A244DCD783E8D54540A2 /* AccountRowPolicy.swift in Sources */,
 				E96C1BA5BBC1C94FC710370B /* AntigravityRowLabels.swift in Sources */,
 				7D00BE8DB67E3F51576914C8 /* AppearanceSection.swift in Sources */,
 				D13E8EE9A513FB1311992870 /* AppearanceSetting.swift in Sources */,

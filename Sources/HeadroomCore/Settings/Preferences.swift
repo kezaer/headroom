@@ -306,6 +306,11 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         }
     }
 
+    public var tracksT3Claude: Bool {
+        get { defaults.bool(forKey: "tracksT3Claude.v1") }
+        nonmutating set { defaults.set(newValue, forKey: "tracksT3Claude.v1") }
+    }
+
     public var antigravitySourcePreference: AntigravitySourcePreference {
         get {
             defaults.string(forKey: Key.antigravitySourcePreference)

@@ -45,6 +45,21 @@ struct BorrowedHomesTests {
         #expect(try JSONDecoder().decode(ProviderAccount.self, from: encoded) == borrowed)
     }
 
+    @Test func claudeDiscoverySelectsTheEnabledDefaultHome() {
+        let settings = Data(#"""
+        {"providerInstances":{
+          "a-codex":{"driver":"codex"},
+          "b-isolated":{"driver":"claudeAgent","config":{"homePath":"/fixture/other-claude"}},
+          "c-disabled":{"driver":"claudeAgent","enabled":false},
+          "d-default":{"driver":"claudeAgent","displayName":"Personal Claude","config":{"homePath":"~/.claude"}}
+        }}
+        """#.utf8)
+        #expect(T3Installation.claudeInstanceName(in: settings, userHome: "/fixture") == "Personal Claude")
+        let bare = Data(#"{"providerInstances":{"claudeAgent":{"driver":"claudeAgent"}}}"#.utf8)
+        #expect(T3Installation.claudeInstanceName(in: bare, userHome: "/fixture") == "Claude (T3)")
+        #expect(T3Installation.claudeInstanceName(in: Data("{".utf8), userHome: "/fixture") == nil)
+    }
+
     @Test @MainActor func explicitCLIStopSurvivesRestartAndPreservesRegistryEncoding() async throws {
         let defaults = try makeDefaults()
         let registry = AccountRegistry(defaults: defaults)

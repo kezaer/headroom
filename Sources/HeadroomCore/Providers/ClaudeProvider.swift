@@ -45,10 +45,11 @@ public struct ClaudeProvider: UsageProvider {
         // account, so the file names nobody in particular: Absent for every row.
         let inheritsToken = source.launchesWithInheritedOAuthToken
         let before = inheritsToken ? nil : emailSource?.readAccountIdentity()
-        let result = await capture()
+        let capture = await source.captureWithTrace()
+        let result = reading(from: capture.result).withCLIVersion(capture.trace.cliVersion)
         guard result.snapshot.freshness == .live else { return result }
         if inheritsToken {
-            return accountResult(result.snapshot.withIdentity(.absent))
+            return accountResult(result.snapshot.withIdentity(.absent)).withCLIVersion(result.cliVersion)
         }
         guard let before, let emailSource else { return result }
         let outcome = AccountIdentityOutcome.bracketing(
@@ -60,10 +61,11 @@ public struct ClaudeProvider: UsageProvider {
             return .identityUnreadable(for: id, capability: .available)
         }
         return accountResult(result.snapshot.withIdentity(outcome).withAccountEmail(before.email))
+            .withCLIVersion(result.cliVersion)
     }
 
-    private func capture() async -> UsageProviderFetchResult {
-        switch await source.capturePanel() {
+    private func reading(from panel: ClaudePanelResult) -> UsageProviderFetchResult {
+        switch panel {
         case .cliNotFound:
             return capabilityFailure(.confirmedAbsent)
         case .cliInconclusive(let issue):

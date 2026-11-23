@@ -214,11 +214,18 @@ public final class UsageStore {
     /// finding); this keeps settings/popover/widget provider order stable.
     private let composedProviderOrder: [ProviderID]
     let composedAccountCapacities: [ProviderID: Int]
+    public private(set) var tracksT3Claude: Bool
     public internal(set) var observedCLIVersions: [AccountKey: String] = [:]
 
     /// Explicitly stopped CLI sources remain available to Accounts even at zero rows.
     public var accountSettingsProviderIDs: Set<ProviderID> {
         Set(composedProviderOrder).union(registeredProviderOrder)
+    }
+
+    public func setTracksT3Claude(_ enabled: Bool) {
+        guard tracksT3Claude != enabled else { return }
+        preferences.tracksT3Claude = enabled
+        tracksT3Claude = enabled
     }
 
     public init(
@@ -266,6 +273,7 @@ public final class UsageStore {
         self.composedAccountCapacities = Dictionary(
             configuredProviders.map { ($0.id, $0.accountCapacity) }, uniquingKeysWith: { first, _ in first }
         )
+        self.tracksT3Claude = preferences.tracksT3Claude
         self.displayNames = Dictionary(configuredProviders.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         self.apiSpendDisplayNames = Dictionary(
             apiSpendProviders.map { ($0.id, $0.displayName) },

@@ -56,6 +56,20 @@ public struct T3Installation: Sendable {
         }
     }
 
+    /// T3 Claude uses the default Claude CLI login, shared with Terminal.
+    public func claudeInstanceName() -> String? {
+        guard let settings = try? Data(contentsOf: settingsFile) else { return nil }
+        return Self.claudeInstanceName(in: settings, userHome: userHome.path)
+    }
+
+    static func claudeInstanceName(in settings: Data, userHome: String) -> String? {
+        let defaultHomes = ["", "~/.claude", userHome + "/.claude"]
+        let instance = T3SettingsParser.parse(settings)?.first {
+            $0.enabled && $0.driver == "claudeAgent" && defaultHomes.contains($0.homePath ?? "")
+        }
+        return instance.map { $0.displayName ?? "Claude (T3)" }
+    }
+
     public func antigravity() -> T3AntigravityInstall? {
         let tools = root.appendingPathComponent("tools/antigravity-acp/darwin-\(architecture.rawValue)")
         guard let settings = try? Data(contentsOf: settingsFile),
