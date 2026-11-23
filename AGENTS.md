@@ -1,3 +1,6 @@
+Small/local models: read docs/fork/LOCAL-MODELS.md instead of this file.
+It covers offline replay, the UI file map, and local verification.
+
 # AGENTS.md — Headroom
 
 Project-specific guidance for AI agents working in this repo. Read this before making
