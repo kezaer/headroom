@@ -113,6 +113,7 @@ public struct ClaudeBootFingerprint: Sendable, Equatable {
 /// `ClaudeUsageCLIProbe.captureWithTrace()`; closed enums plus a fingerprint, never
 /// CLI output.
 public struct ClaudeCaptureTrace: Sendable, Equatable {
+    var cliVersion: String?
     public var print: ClaudePrintStage?
     /// Set only when the first print run timed out and was retried.
     public var printRetry: ClaudePrintStage?

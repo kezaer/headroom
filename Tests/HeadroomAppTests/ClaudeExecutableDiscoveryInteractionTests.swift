@@ -21,7 +21,7 @@ import HeadroomCore
         let terminalURL = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
         defer {
             SetupSessions.forceCancel(for: account)
-            try? AccountStorage.removeDirectories(for: account)
+            try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!)
             try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
         }
         let staging = await stageClaudeHandoff(
@@ -72,7 +72,7 @@ import HeadroomCore
         )
         let workspace = temporaryWorkspace()
         defer {
-            try? AccountStorage.removeDirectories(for: account)
+            try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!)
             try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
         }
         let staging = await stageClaudeHandoff(
@@ -110,7 +110,7 @@ import HeadroomCore
         )
         let workspace = temporaryWorkspace()
         defer {
-            try? AccountStorage.removeDirectories(for: account)
+            try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!)
             try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
         }
         let staging = await stageClaudeHandoff(
@@ -157,7 +157,7 @@ import HeadroomCore
         let gate = HandoffOpenGate()
         defer {
             SetupSessions.forceCancel(for: account)
-            try? AccountStorage.removeDirectories(for: account)
+            try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!)
             try? FileManager.default.removeItem(at: workspace.deletingLastPathComponent())
         }
         let staging = await stageClaudeHandoff(
@@ -247,7 +247,7 @@ import HeadroomCore
             label: "Work",
             isBuiltIn: false
         )
-        defer { try? AccountStorage.removeDirectories(for: account) }
+        defer { try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!) }
         let workspace = FileManager.default.temporaryDirectory
             .appendingPathComponent("headroom-npm-handoff-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: workspace) }
@@ -388,7 +388,7 @@ import HeadroomCore
             label: "Work",
             isBuiltIn: false
         )
-        defer { try? AccountStorage.removeDirectories(for: account) }
+        defer { try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!) }
         let configDirectory = AccountStorage.claudeConfigDirectoryURL(for: account).path
 
         for (version, expected) in [("2.1.100 (Claude Code)", ClaudeSetupScriptKind.interactive),
@@ -461,7 +461,7 @@ import HeadroomCore
     /// connected and the user believed the reset had happened.
     @MainActor @Test func aRefusedResetIsRememberedSoTryAgainResumesTheReset() async {
         let account = refusalAccount()
-        defer { try? AccountStorage.removeDirectories(for: account) }
+        defer { try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!) }
         let workspace = temporaryWorkspace()
         defer { try? FileManager.default.removeItem(at: workspace) }
 
@@ -496,7 +496,7 @@ import HeadroomCore
     /// Again on an ordinary sign-in must never be turned into a sign-out.
     @MainActor @Test func aRememberedRefusalNeverOutlivesTheFailureItDescribes() async {
         let account = refusalAccount()
-        defer { try? AccountStorage.removeDirectories(for: account) }
+        defer { try? AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!) }
 
         for end in ["begin", "forceCancel", "settle"] {
             let workspace = temporaryWorkspace()

@@ -201,7 +201,7 @@ extension UsageStore {
     }
 
     public func accountCapacity(for providerID: ProviderID) -> Int {
-        providers.first(where: { $0.id == providerID })?.accountCapacity ?? 1
+        providers.first(where: { $0.id == providerID })?.accountCapacity ?? composedAccountCapacities[providerID] ?? 1
     }
 
     @discardableResult
@@ -213,7 +213,8 @@ extension UsageStore {
                   label: AccountRegistry.normalizedLabel(label) ?? defaultLoginLabelForNewAccount(for: providerID)
               )
         else { return nil }
-        guard case .success = accountStorage.ensureDirectories(for: account) else {
+        guard let home = HeadroomOwnedHome(account),
+              case .success = accountStorage.ensureDirectories(for: home) else {
             accountRegistry.removeAccount(account.key)
             return nil
         }
@@ -299,11 +300,18 @@ extension UsageStore {
     }
 
     @discardableResult
-    public func removeAccount(_ key: AccountKey) async -> AccountRemovalResult {
+    public func removeAccount(_ key: AccountKey, keepingCLISourceStopped: Bool = false) async -> AccountRemovalResult {
         guard let accountRegistry,
               let account = accounts(for: key.providerID).first(where: { $0.key == key }),
               !account.isBuiltIn
         else { return .notAllowed }
+        if account.borrowedHome != nil {
+            accountRegistry.removeAccount(key, keepingCLISourceStopped: keepingCLISourceStopped)
+            signOutRecord?.purgeEvents(for: key)
+            detachAccount(key)
+            return .removed
+        }
+        guard let home = HeadroomOwnedHome(account) else { return .notAllowed }
         if let blocked = await setupHandoffBlock(for: account) { return blocked }
         removingAccounts.insert(key)
         accountRemovalStates[key] = .removing
@@ -311,7 +319,7 @@ extension UsageStore {
         // shows, with its own reading, before the row goes; no frame shows neither.
         refreshDisplayMerge(for: key.providerID, exports: true)
         setupCoordinator?.markRemoving(key)
-        let removal = await accountStorage.removeDirectories(for: account)
+        let removal = await accountStorage.removeDirectories(for: home)
         guard case .success = removal else {
             removingAccounts.remove(key)
             refreshDisplayMerge(for: key.providerID, exports: true)
@@ -345,24 +353,38 @@ extension UsageStore {
     }
 
     @discardableResult
-    public func stopTrackingBuiltInAccount(for providerID: ProviderID) async -> AccountRemovalResult {
+    public func stopTrackingBuiltInAccount(
+        for providerID: ProviderID, allowingEmpty: Bool = false
+    ) async -> AccountRemovalResult {
         let key = AccountKey(providerID: providerID, accountID: .primary)
-        guard canStopTrackingBuiltInAccount(for: providerID),
+        guard allowingEmpty ? canResetBuiltInAccount(for: providerID) : canStopTrackingBuiltInAccount(for: providerID),
               let accountRegistry,
               let account = accounts(for: providerID).first(where: { $0.key == key })
         else { return .notAllowed }
         if let blocked = await setupHandoffBlock(for: account) { return blocked }
-        guard accountRegistry.stopTrackingBuiltIn(for: providerID) else { return .notAllowed }
+        let stopped = allowingEmpty
+            ? accountRegistry.stopTrackingCLISource(for: providerID)
+            : accountRegistry.stopTrackingBuiltIn(for: providerID)
+        guard stopped else { return .notAllowed }
+        if providerID == .codex,
+           allowingEmpty || accounts(for: .codex).contains(where: { $0.borrowedHome?.source.isT3 == true }) {
+            accountRegistry.setTracksCLIDefaultAlongsideT3(false)
+            tracksCLIDefaultAlongsideT3 = false
+        }
         detachAccount(key)
         return .removed
     }
 
     @discardableResult
     public func resumeTrackingBuiltInAccount(for providerID: ProviderID) -> ProviderAccount? {
-        guard let accountRegistry, providerFactory != nil,
+        guard let accountRegistry, providerFactory != nil, accountSettingsProviderIDs.contains(providerID),
               accountRegistry.resumeTrackingBuiltIn(for: providerID),
               let account = accountRegistry.accounts(for: providerID).first(where: { $0.isBuiltIn })
         else { return nil }
+        if providerID == .codex {
+            reconcileAccounts(for: providerID)
+            return account
+        }
         attachBuiltInProvider(account)
         accountsByProvider[providerID] = accountRegistry.accounts(for: providerID, capacity: accountCapacity(for: providerID))
         refreshDisplayMerge(for: providerID, exports: false)
@@ -372,38 +394,46 @@ extension UsageStore {
     }
 
     private func setupHandoffBlock(for account: ProviderAccount) async -> AccountRemovalResult? {
-        guard await accountStorage.setupHandoffIsActive(for: account) else { return nil }
+        guard let capable = SetupCapableAccount(account),
+              await accountStorage.setupHandoffIsActive(for: capable) else { return nil }
         accountRemovalStates[account.key] = .setupActive
         return .setupActive
     }
 
     func detachAccount(_ key: AccountKey) {
-        attachmentGenerations[key, default: 0] &+= 1
-        // KTD14: the built-in row reuses `AccountID.primary` across stop and resume, so a
-        // detached row's flag must not survive to make the resumed row's first signed-out
-        // reading look like a sign-out Headroom observed.
+        removeProvider(for: key)
+        // KTD14: deliberate detaches clear sign-in observations and retained usage.
         signOutRecord?.clearLastKnownSignedIn(for: key)
         sessionReliabilityRecord?.endObservation(for: key)
         bankedResetAcknowledgements?.purge(for: key)
         notificationCoordinator?.purge(for: key)
-        // KTD8 (OpenCode plan): a capture still running for the removed row is never joined.
-        providers.first { $0.accountKey == key }?.invalidateInFlightUsage()
-        providers.removeAll { $0.accountKey == key }
-        scheduler.unregister(key)
-        snapshots.removeValue(forKey: key)
         continuityCache?.remove(for: key)
+        if let account = accounts(for: key.providerID).first(where: { $0.key == key }),
+           account.borrowedHome == nil, !account.isBuiltIn {
+            setMenuBarBadge(nil, for: key)
+        }
+        menuBarBadgeOverrides.removeValue(forKey: key)
         deferringRememberedRowExport { defaultLoginDidClear(key, removed: key.accountID != .primary) }
+        removingAccounts.remove(key)
+        accountRemovalStates.removeValue(forKey: key)
+        setupCoordinator?.markRemoved(key)
+        if key.providerID == .codex, reconcileAccounts(for: .codex) { return }
         accountsByProvider[key.providerID] = accountRegistry?.accounts(
             for: key.providerID, capacity: accountCapacity(for: key.providerID)
         ) ?? []
         reinstateBuiltInIfResurfaced(for: key.providerID)
-        removingAccounts.remove(key)
-        accountRemovalStates.removeValue(forKey: key)
-        setupCoordinator?.markRemoved(key)
-        // U10: the detached row leaves the merge in the same turn; the exports follow.
         refreshDisplayMerge(for: key.providerID, exports: false)
         exportWidgetSnapshot()
         exportPhoneSyncSnapshot()
+    }
+
+    private func removeProvider(for key: AccountKey) {
+        attachmentGenerations[key, default: 0] &+= 1
+        providers.first { $0.accountKey == key }?.invalidateInFlightUsage()
+        providers.removeAll { $0.accountKey == key }
+        scheduler.unregister(key)
+        snapshots.removeValue(forKey: key)
+        observedCLIVersions.removeValue(forKey: key)
     }
 
     private func attachBuiltInProvider(_ account: ProviderAccount) {
@@ -426,5 +456,142 @@ extension UsageStore {
         guard accountRemovalStates[key] == .failed || accountRemovalStates[key] == .setupActive else { return }
         accountRemovalStates.removeValue(forKey: key)
         setupCoordinator?.cancelRemoval(key)
+    }
+}
+
+public struct BorrowedHomeScanSummary: Sendable, Equatable {
+    public let t3Installed: Bool
+    public let visibleT3Homes: Int
+    public let hiddenT3Homes: Int
+    public let read: Bool
+}
+
+@MainActor
+extension UsageStore {
+    @discardableResult
+    public func rescanBorrowedHomes() -> BorrowedHomeScanSummary {
+        let scan = borrowedHomes?.scanT3() ?? .unreadable
+        let cache = accountRegistry?.t3DiscoveryCache
+        if cache?.record(scan) == true { reconcileAccounts(for: .codex) }
+        let visible = accounts(for: .codex).filter { $0.borrowedHome?.source.isT3 == true }.count
+        let hidden = hiddenBorrowedAccounts(for: .codex).count
+        let installed = scan != .notInstalled && (scan != .unreadable || cache?.load().isEmpty == false)
+        let summary = BorrowedHomeScanSummary(
+            t3Installed: installed, visibleT3Homes: visible, hiddenT3Homes: hidden, read: scan != .unreadable
+        )
+        if borrowedHomeScanSummary != summary { borrowedHomeScanSummary = summary }
+        return summary
+    }
+
+    public func addExternalCodexHome(at url: URL, label: String?) -> Result<ProviderAccount, BorrowedHomeRejection> {
+        guard let borrowedHomes, let accountRegistry, providerFactory != nil,
+              accountSettingsProviderIDs.contains(.codex) else { return .failure(.unsupportedProvider) }
+        return borrowedHomes.canonicalize(url).flatMap { path in
+            let result = accountRegistry.addBorrowedHome(
+                path, label: label, for: .codex, capacity: accountCapacity(for: .codex)
+            )
+            if case .success(let account) = result {
+                reconcileAccounts(for: .codex)
+                refreshAccountNow(account.key)
+            }
+            return result
+        }
+    }
+
+    public func discoveredT3CodexAccounts() -> [ProviderAccount] {
+        _ = accounts(for: .codex)
+        return accountRegistry?.discoveredT3CodexAccounts() ?? []
+    }
+
+    public func hiddenBorrowedAccounts(for providerID: ProviderID) -> [ProviderAccount] {
+        // Read the observed roster before looking up the persisted hidden decisions.
+        _ = accountsByProvider[providerID]
+        return accountRegistry?.hiddenBorrowedAccounts(for: providerID) ?? []
+    }
+
+    @discardableResult
+    public func restoreBorrowedAccount(_ key: AccountKey) -> Bool {
+        guard accountRegistry?.restoreBorrowedAccount(key, capacity: accountCapacity(for: key.providerID)) == true
+        else { return false }
+        reconcileAccounts(for: key.providerID)
+        refreshAccountNow(key)
+        return true
+    }
+
+    public func setTracksCLIDefaultAlongsideT3(_ on: Bool) {
+        guard let accountRegistry else { return }
+        accountRegistry.setTracksCLIDefaultAlongsideT3(on)
+        if on { _ = accountRegistry.resumeTrackingBuiltIn(for: .codex) }
+        tracksCLIDefaultAlongsideT3 = on
+        if reconcileAccounts(for: .codex) { dispatchDueNow(for: .codex) }
+    }
+
+    public func menuBarBadge(for key: AccountKey) -> String? {
+        guard accounts(for: key.providerID).contains(where: { $0.key == key }) else { return nil }
+        if let value = menuBarBadgeOverrides[key] { return value }
+        let order = accountRegistry?.storedOrderAccounts(for: key.providerID) ?? accounts(for: key.providerID)
+        guard let index = order.firstIndex(where: { $0.key == key }) else { return nil }
+        return MenuBarAccountBadge.defaultBadge(for: order[index].label, index: index)
+    }
+
+    public func setMenuBarBadge(_ badge: String?, for key: AccountKey) {
+        guard let row = accounts(for: key.providerID).first(where: { $0.key == key }) else { return }
+        let badge = MenuBarAccountBadge.sanitize(badge)
+        if row.borrowedHome != nil {
+            accountRegistry?.setBorrowedMenuBarBadge(badge, for: key.accountID)
+        } else {
+            var badges = preferences.menuBarAccountBadges
+            badges[key] = badge
+            preferences.menuBarAccountBadges = badges
+        }
+        menuBarBadgeOverrides[key] = badge
+    }
+
+    @discardableResult
+    func reconcileAccounts(for providerID: ProviderID) -> Bool {
+        guard let accountRegistry, let providerFactory, accountSettingsProviderIDs.contains(providerID) else { return false }
+        let current = accounts(for: providerID)
+        let desired = accountRegistry.accounts(for: providerID, capacity: accountCapacity(for: providerID))
+        guard current != desired else { return false }
+        let desiredKeys = Set(desired.map(\.key))
+        let previous = Dictionary(uniqueKeysWithValues: current.map { ($0.key, $0) })
+        for account in current where !desiredKeys.contains(account.key) {
+            // Discovery/suppression has no authority to purge persisted account state.
+            removeProvider(for: account.key)
+        }
+        let cached = continuityCache?.load() ?? [:]
+        for account in desired {
+            if let existing = previous[account.key] {
+                if existing.origin != account.origin { swapProvider(account, using: providerFactory) }
+            } else {
+                let provider = providerFactory(account)
+                providers.append(provider)
+                scheduler.register(provider)
+                snapshots[account.key] = Self.restoredSnapshot(
+                    cached[account.key], for: providerID, after: now()
+                )
+                setupCoordinator?.markReinstated(account.key)
+            }
+            if account.borrowedHome != nil {
+                menuBarBadgeOverrides[account.key] = accountRegistry.borrowedMenuBarBadge(for: account.id)
+            }
+        }
+        accountsByProvider[providerID] = desired
+        refreshDisplayMerge(for: providerID, exports: false)
+        exportWidgetSnapshot()
+        exportPhoneSyncSnapshot()
+        return true
+    }
+
+    private func swapProvider(
+        _ account: ProviderAccount, using factory: @MainActor (ProviderAccount) -> any UsageProvider
+    ) {
+        guard let index = providers.firstIndex(where: { $0.accountKey == account.key }) else { return }
+        invalidateUsageForHandoffBoundary(account.key)
+        scheduler.unregister(account.key)
+        observedCLIVersions[account.key] = nil
+        let replacement = factory(account)
+        providers[index] = replacement
+        scheduler.register(replacement)
     }
 }

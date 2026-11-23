@@ -1,5 +1,11 @@
 import Foundation
 
+public enum AntigravitySourcePreference: String, Sendable, CaseIterable, Identifiable, Codable {
+    case autoPreferT3
+    case systemCLI
+    public var id: String { rawValue }
+}
+
 /// UserDefaults-backed preferences (U8). Renewal dates and poll interval are
 /// non-secret, so they live here, not the Keychain (KTD4). The `Preferences` type
 /// lands early (with U2) because U6 reads the interval and U7 reads renewal dates.
@@ -32,6 +38,11 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let showsAntigravityFiveHourWindows = "showsAntigravityFiveHourWindows"
         static let antigravityStoppedClient = "antigravityStoppedClient"
         static let antigravitySignedOut = "antigravitySignedOut"
+        static let antigravitySourcePreference = "antigravitySourcePreference"
+        static let antigravitySignedOutHomes = "antigravitySignedOutHomes.v1"
+        static let menuBarIconStyle = "menuBarIconStyle"
+        static let showAllProviderAccountsInMenuBar = "showAllProviderAccountsInMenuBar"
+        static let menuBarAccountBadges = "menuBarAccountBadges.v1"
         static let syncToIPhoneEnabled = "syncToIPhoneEnabled"
         static let apiSpendPeriod = "apiSpendPeriod"
         static let settingsPane = "settingsPane"
@@ -292,6 +303,47 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         nonmutating set {
             if newValue { defaults.set(true, forKey: Key.antigravitySignedOut) }
             else { defaults.removeObject(forKey: Key.antigravitySignedOut) }
+        }
+    }
+
+    public var tracksT3Claude: Bool {
+        get { defaults.bool(forKey: "tracksT3Claude.v1") }
+        nonmutating set { defaults.set(newValue, forKey: "tracksT3Claude.v1") }
+    }
+
+    public var antigravitySourcePreference: AntigravitySourcePreference {
+        get {
+            defaults.string(forKey: Key.antigravitySourcePreference)
+                .flatMap(AntigravitySourcePreference.init(rawValue:)) ?? .autoPreferT3
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.antigravitySourcePreference) }
+    }
+
+    public var antigravitySignedOutHomes: Set<String> {
+        get { Set(defaults.stringArray(forKey: Key.antigravitySignedOutHomes) ?? []) }
+        nonmutating set { defaults.set(newValue.sorted(), forKey: Key.antigravitySignedOutHomes) }
+    }
+
+    public var menuBarIconStyle: MenuBarIconStyle {
+        get {
+            defaults.string(forKey: Key.menuBarIconStyle)
+                .flatMap(MenuBarIconStyle.init(rawValue:)) ?? .providerIcons
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.menuBarIconStyle) }
+    }
+
+    public var showAllProviderAccountsInMenuBar: Bool {
+        get { (defaults.object(forKey: Key.showAllProviderAccountsInMenuBar) as? Bool) ?? true }
+        nonmutating set { defaults.set(newValue, forKey: Key.showAllProviderAccountsInMenuBar) }
+    }
+
+    public var menuBarAccountBadges: [AccountKey: String] {
+        get {
+            guard let data = defaults.data(forKey: Key.menuBarAccountBadges) else { return [:] }
+            return (try? JSONDecoder().decode([AccountKey: String].self, from: data)) ?? [:]
+        }
+        nonmutating set {
+            defaults.set(try? JSONEncoder().encode(newValue), forKey: Key.menuBarAccountBadges)
         }
     }
 

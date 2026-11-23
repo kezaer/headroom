@@ -53,7 +53,7 @@ struct ProviderLogoView: View {
     }
 }
 
-private enum BrandIconImage {
+enum BrandIconImage {
     /// PA15: the bake below is a bundle lookup, an SVG decode, and a 256px offscreen
     /// rasterization, and it ran from `body` — up to ~24 marks every time the popover opens,
     /// on a surface whose entrance animation was deleted because any delay there reads as

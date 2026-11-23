@@ -353,7 +353,7 @@ public struct UsageWindow: Sendable, Equatable {
 /// How close a window is to running out. Drives the semantic color ramp
 /// (healthy → low → critical) on the usage bar and the menu-bar glyph. Thresholds are
 /// fixed here — the single source of truth — so views never reinvent them.
-public enum UsageSeverity: Sendable, Equatable, Comparable {
+public enum UsageSeverity: Sendable, Hashable, Comparable {
     case healthy
     case low
     case critical

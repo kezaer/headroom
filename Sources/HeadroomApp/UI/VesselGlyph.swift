@@ -70,7 +70,8 @@ enum VesselGlyph {
         isNeutral: Bool,
         palette: MenuBarPalette,
         wavePhase: Int? = nil,
-        ink requestedInk: Ink = .solid
+        ink requestedInk: Ink = .solid,
+        kind: MenuBarGlyphKind = .capsule
     ) -> NSImage {
         let ink: Ink
         switch requestedInk {
@@ -78,10 +79,18 @@ enum VesselGlyph {
         case .crossfade(let frame): ink = .crossfade(frame: min(LoadingMotionConstants.menuBarPrintFrameCount - 1, max(0, frame)))
         case .solid, .ghost: ink = requestedInk
         }
-        let clamped = ink == .ghost ? staticFill : min(1, max(0, fill ?? staticFill))
+        let level = fill.flatMap { $0.isFinite ? $0 : nil } ?? staticFill
+        let clamped = ink == .ghost ? staticFill : min(1, max(0, level))
+        let mark: NSImage?
+        if case .providerMark(let provider) = kind {
+            mark = BrandIconImage.image(for: provider, scheme: .light)
+        } else {
+            mark = nil
+        }
+        let inkSize = MenuBarGlyph.size(of: kind)
         let bucket = Int((clamped * 100).rounded())
         let key = ImageKey(
-            fillBucket: bucket,
+            kind: kind, fillBucket: bucket,
             severity: severity,
             isNeutral: isNeutral,
             isDarkMenuBar: palette.isDarkMenuBar,
@@ -95,7 +104,8 @@ enum VesselGlyph {
             if let image = transitions[palette.isDarkMenuBar]?.frames[frame] { return image }
         } else if let image = cache[key] { return image }
         let image = render(
-            size: menuBarSize,
+            size: NSSize(width: inkSize.width, height: inkSize.height),
+            mark: mark,
             lineWidth: 1.6,
             fill: CGFloat(bucket) / 100,
             severity: severity,
@@ -111,6 +121,7 @@ enum VesselGlyph {
 
     private static func render(
         size: NSSize,
+        mark: NSImage?,
         lineWidth: CGFloat,
         fill: CGFloat,
         severity: UsageSeverity,
@@ -120,23 +131,25 @@ enum VesselGlyph {
         ink: Ink
     ) -> NSImage {
         let image = NSImage(size: size, flipped: false) { bounds in
-            // Capsule wall (stroke stays inside the bounds).
-            let wallRect = bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
-            let wall = NSBezierPath(roundedRect: wallRect,
-                                    xRadius: wallRect.width / 2,
-                                    yRadius: wallRect.width / 2)
-            wall.lineWidth = lineWidth
-            strokeColor(for: severity, isNeutral: isNeutral, palette: palette).setStroke()
-            wall.stroke()
-
-            // Liquid: clip to an inset capsule, then fill the lower `fill` fraction. The
-            // clip supplies the rounded base; the fill rectangle supplies the flat top.
-            let inner = bounds.insetBy(dx: lineWidth + 0.6, dy: lineWidth + 0.6)
-            let clip = NSBezierPath(roundedRect: inner,
-                                    xRadius: inner.width / 2,
-                                    yRadius: inner.width / 2)
+            let inner: NSRect
+            let context = NSGraphicsContext.current?.cgContext
             NSGraphicsContext.saveGraphicsState()
-            clip.addClip()
+            if mark != nil, let context {
+                context.clip(to: bounds)
+                context.beginTransparencyLayer(auxiliaryInfo: nil)
+                palette.markTrack(for: severity, isNeutral: isNeutral).menuBarColor.setFill()
+                NSBezierPath(rect: bounds).fill()
+                inner = bounds
+            } else {
+                let wallRect = bounds.insetBy(dx: lineWidth / 2, dy: lineWidth / 2)
+                let wall = NSBezierPath(roundedRect: wallRect, xRadius: wallRect.width / 2, yRadius: wallRect.width / 2)
+                wall.lineWidth = lineWidth
+                strokeColor(for: severity, isNeutral: isNeutral, palette: palette).setStroke()
+                wall.stroke()
+
+                inner = bounds.insetBy(dx: lineWidth + 0.6, dy: lineWidth + 0.6)
+                NSBezierPath(roundedRect: inner, xRadius: inner.width / 2, yRadius: inner.width / 2).addClip()
+            }
             let color = fillColor(for: severity, isNeutral: isNeutral, palette: palette)
             let liquid = (fill > 0 ? wavePhase : nil).map { liquidSurface(in: inner, fill: fill, phase: $0) }
                 ?? NSBezierPath(rect: NSRect(x: inner.minX, y: inner.minY,
@@ -166,6 +179,10 @@ enum VesselGlyph {
                 color.withAlphaComponent(color.alphaComponent * ink.progress).setFill()
                 liquid.fill()
             }
+            if let mark, let context {
+                mark.draw(in: bounds, from: .zero, operation: .destinationIn, fraction: 1)
+                context.endTransparencyLayer()
+            }
             NSGraphicsContext.restoreGraphicsState()
             return true
         }
@@ -176,7 +193,7 @@ enum VesselGlyph {
     private static func drawGhost(size: NSSize, inner: NSRect, fill: CGFloat, wavePhase: Int?,
                                   color: NSColor, opacity: Double = 1) {
         let geometry = HalftoneGeometry(width: size.width, height: size.height, columns: 3, rows: 6,
-                                        inset: inner.minX)
+                                        inset: max(0.5, inner.minX))
         for dot in geometry.dots {
             // Foundation dots are top-down; AppKit's liquid clip is bottom-up.
             let y = size.height - dot.y
@@ -238,20 +255,14 @@ enum VesselGlyph {
     }
 
     private struct ImageKey: Hashable {
+        let kind: MenuBarGlyphKind
         let fillBucket: Int
-        let severity: String
+        let severity: UsageSeverity
         let isNeutral: Bool
         let isDarkMenuBar: Bool
         let wavePhase: Int?
         let ink: Ink
 
-        init(fillBucket: Int, severity: UsageSeverity, isNeutral: Bool, isDarkMenuBar: Bool, wavePhase: Int?, ink: Ink) {
-            self.fillBucket = fillBucket
-            self.severity = String(describing: severity)
-            self.isNeutral = isNeutral
-            self.isDarkMenuBar = isDarkMenuBar
-            self.wavePhase = wavePhase
-            self.ink = ink
-        }
+
     }
 }

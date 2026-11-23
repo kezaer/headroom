@@ -10,8 +10,8 @@ import Testing
         let selected = ProviderAccount(id: AccountID("selected"), providerID: .claude, label: "Selected")
         let sibling = ProviderAccount(id: AccountID("sibling"), providerID: .claude, label: "Sibling")
 
-        let selectedURL = try AccountStorage.ensureDirectories(for: selected, baseDirectoryURL: root)
-        let siblingURL = try AccountStorage.ensureDirectories(for: sibling, baseDirectoryURL: root)
+        let selectedURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(selected)!, baseDirectoryURL: root)
+        let siblingURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(sibling)!, baseDirectoryURL: root)
         for url in [selectedURL,
                     selectedURL.appendingPathComponent("config"),
                     selectedURL.appendingPathComponent("workspace")] {
@@ -19,7 +19,7 @@ import Testing
             #expect(mode.intValue & 0o077 == 0)
         }
 
-        try AccountStorage.removeDirectories(for: selected, baseDirectoryURL: root)
+        try AccountStorage.removeDirectories(for: HeadroomOwnedHome(selected)!, baseDirectoryURL: root)
         #expect(!FileManager.default.fileExists(atPath: selectedURL.path))
         #expect(FileManager.default.fileExists(atPath: siblingURL.path))
     }
@@ -30,10 +30,10 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
 
         try AccountStorage.removeDirectories(
-            for: ProviderAccount(id: AccountID("missing"), providerID: .codex, label: "Missing"),
+            for: try #require(HeadroomOwnedHome(ProviderAccount(id: AccountID("missing"), providerID: .codex, label: "Missing"))),
             baseDirectoryURL: root
         )
-        try AccountStorage.removeDirectories(for: .builtIn(for: .codex), baseDirectoryURL: root)
+        #expect(HeadroomOwnedHome(.builtIn(for: .codex)) == nil)
         #expect(!FileManager.default.fileExists(atPath: root.path))
     }
 
@@ -43,12 +43,12 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let selected = ProviderAccount(id: AccountID("selected"), providerID: .grok, label: "Selected")
         let sibling = ProviderAccount(id: AccountID("sibling"), providerID: .grok, label: "Sibling")
-        let selectedURL = try AccountStorage.ensureDirectories(for: selected, baseDirectoryURL: root)
-        let siblingURL = try AccountStorage.ensureDirectories(for: sibling, baseDirectoryURL: root)
+        let selectedURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(selected)!, baseDirectoryURL: root)
+        let siblingURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(sibling)!, baseDirectoryURL: root)
 
         #expect(selectedURL.path.hasSuffix("/grok/selected"))
         #expect(siblingURL.path.hasSuffix("/grok/sibling"))
-        try AccountStorage.removeDirectories(for: selected, baseDirectoryURL: root)
+        try AccountStorage.removeDirectories(for: HeadroomOwnedHome(selected)!, baseDirectoryURL: root)
 
         #expect(!FileManager.default.fileExists(atPath: selectedURL.path))
         #expect(FileManager.default.fileExists(atPath: siblingURL.path))
@@ -60,8 +60,8 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let selected = ProviderAccount(id: AccountID("selected"), providerID: .opencode, label: "Selected")
         let sibling = ProviderAccount(id: AccountID("sibling"), providerID: .opencode, label: "Sibling")
-        let selectedURL = try AccountStorage.ensureDirectories(for: selected, baseDirectoryURL: root)
-        let siblingURL = try AccountStorage.ensureDirectories(for: sibling, baseDirectoryURL: root)
+        let selectedURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(selected)!, baseDirectoryURL: root)
+        let siblingURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(sibling)!, baseDirectoryURL: root)
 
         #expect(selectedURL.path.hasSuffix("/opencode/selected"))
         for name in ["data", "config", "cache", "state"] {
@@ -74,7 +74,7 @@ import Testing
         #expect(AccountStorage.opencodeAccountHome(for: selected, baseDirectoryURL: root) == .isolated(root: selectedURL.path))
         #expect(AccountStorage.opencodeAccountHome(for: .builtIn(for: .opencode), baseDirectoryURL: root) == .builtIn)
 
-        try AccountStorage.removeDirectories(for: selected, baseDirectoryURL: root)
+        try AccountStorage.removeDirectories(for: HeadroomOwnedHome(selected)!, baseDirectoryURL: root)
         #expect(!FileManager.default.fileExists(atPath: selectedURL.path))
         #expect(FileManager.default.fileExists(atPath: siblingURL.appendingPathComponent("state").path))
     }
@@ -84,19 +84,19 @@ import Testing
             .appendingPathComponent("headroom-opencode-storage-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let account = ProviderAccount(id: AccountID("selected"), providerID: .opencode, label: "Selected")
-        let accountURL = try AccountStorage.ensureDirectories(for: account, baseDirectoryURL: root)
+        let accountURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: root)
         let marker = SetupCompletionMarker(
             pendingPath: accountURL.appendingPathComponent(".headroom-setup-pending").path,
             completedPath: accountURL.appendingPathComponent(".headroom-setup-complete").path
         )
         _ = try AccountStorage.prepareSetupCompletionMarker(marker)
         #expect(throws: (any Error).self) {
-            try AccountStorage.removeDirectories(for: account, baseDirectoryURL: root)
+            try AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: root)
         }
         #expect(FileManager.default.fileExists(atPath: accountURL.appendingPathComponent("data").path))
 
         AccountStorage.clearSetupCompletionMarkers(marker)
-        try AccountStorage.removeDirectories(for: account, baseDirectoryURL: root)
+        try AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: root)
         #expect(!FileManager.default.fileExists(atPath: accountURL.path))
     }
 
@@ -117,7 +117,7 @@ import Testing
             .appendingPathComponent("headroom-storage-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let account = ProviderAccount(id: AccountID("selected"), providerID: .codex, label: "Selected")
-        let accountURL = try AccountStorage.ensureDirectories(for: account, baseDirectoryURL: root)
+        let accountURL = try AccountStorage.ensureDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: root)
         let marker = SetupCompletionMarker(
             pendingPath: accountURL.appendingPathComponent(".headroom-setup-pending").path,
             completedPath: accountURL.appendingPathComponent(".headroom-setup-complete").path
@@ -125,7 +125,7 @@ import Testing
         let generation = try AccountStorage.prepareSetupCompletionMarker(marker)
         #expect(AccountStorage.setupHandoffIsActive(marker: marker))
         #expect(throws: (any Error).self) {
-            try AccountStorage.removeDirectories(for: account, baseDirectoryURL: root)
+            try AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: root)
         }
 
         try Data("setup:standard:\(generation):2147483647\n".utf8).write(
@@ -135,7 +135,7 @@ import Testing
             ))
         )
         #expect(!AccountStorage.setupHandoffIsActive(marker: marker))
-        try AccountStorage.removeDirectories(for: account, baseDirectoryURL: root)
+        try AccountStorage.removeDirectories(for: HeadroomOwnedHome(account)!, baseDirectoryURL: root)
         #expect(!FileManager.default.fileExists(atPath: accountURL.path))
     }
 
@@ -225,7 +225,7 @@ import Testing
         let account = ProviderAccount.builtIn(for: .claude)
 
         let marker = AccountStorage.setupCompletionMarker(
-            for: account, builtInClaudeWorkspace: workspace
+            for: SetupCapableAccount(account)!, builtInClaudeWorkspace: workspace
         )
         #expect(marker.pendingPath == supportRoot
             .appendingPathComponent("Setup", isDirectory: true)
@@ -233,21 +233,21 @@ import Testing
 
         try AccountStorage.prepareSetupCompletionMarker(marker)
         #expect(AccountStorage.setupHandoffIsActive(
-            for: account, builtInClaudeWorkspace: workspace
+            for: SetupCapableAccount(account)!, builtInClaudeWorkspace: workspace
         ))
         let storage = DefaultAccountStorage(builtInClaudeWorkspace: workspace)
-        let activeWhileMarkerPresent = await storage.setupHandoffIsActive(for: account)
+        let activeWhileMarkerPresent = await storage.setupHandoffIsActive(for: SetupCapableAccount(account)!)
         #expect(activeWhileMarkerPresent)
 
         AccountStorage.clearPreparedSetupCompletionMarker(marker)
-        let activeAfterClear = await storage.setupHandoffIsActive(for: account)
+        let activeAfterClear = await storage.setupHandoffIsActive(for: SetupCapableAccount(account)!)
         #expect(!activeAfterClear)
     }
 
     @Test func extraAccountSetupMarkerStaysInsideItsConfigHome() {
         let extra = ProviderAccount(id: AccountID("extra"), providerID: .claude, label: "Extra")
         let marker = AccountStorage.setupCompletionMarker(
-            for: extra,
+            for: SetupCapableAccount(extra)!,
             builtInClaudeWorkspace: URL(fileURLWithPath: "/nonexistent/ClaudeProbe")
         )
         let home = AccountStorage.accountDirectoryURL(for: extra)

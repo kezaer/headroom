@@ -21,8 +21,8 @@ final class ScriptedAccountProvider: UsageProvider, @unchecked Sendable {
 }
 
 private struct RigAccountStorage: AccountStorageManaging {
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> { .success(()) }
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> { .success(()) }
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> { .success(()) }
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> { .success(()) }
 }
 
 /// One Codex (or, with `provider: .claude`, one Claude) install across launches: a real registry, continuity cache, reminder stores

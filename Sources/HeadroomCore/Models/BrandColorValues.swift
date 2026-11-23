@@ -769,16 +769,15 @@ public enum HeadroomBrandMark {
     /// Per-provider shape-mass tuning, applied on top of `inkFraction`.
     ///
     /// This is the dial the rule's own comment predicted: equal ink *boxes* are not equal ink
-    /// *mass*. Measured coverage inside the same 13pt box — Codex 0.71, Cursor 0.56, Claude
-    /// 0.42, Grok 0.25 — put Grok's hairline slash directly under Cursor's solid cube in the
-    /// four-provider card list, so equal geometry read as four different sizes.
+    /// *mass*. The OpenAI Blossom covers about 37% of its square, close to Claude's 42%.
+    /// Cursor's cube covers 56%, and Grok's hairline slash covers 25%.
     ///
     /// PA9 (Sep 2026): first correction pass, weighting each mark against its coverage —
     /// the sparse marks grow, the dense ones shrink. These are starting values; live
     /// `--demo multi-4` captures in both appearances are what settles them.
     ///
     /// Grok 1.10 → 1.20 (Sep 2026): its slash tails take 24% of the ink width, so at 1.10
-    /// the ring — what the eye reads as the mark — measured ~10.8pt against Codex's 12pt and
+    /// the ring — what the eye reads as the mark — measured ~10.8pt and
     /// read a size smaller. At 1.20 the ring lands at ~11.8pt and the hairline tails
     /// overhang the 15pt slot by ~0.3pt a side.
     ///
@@ -786,11 +785,11 @@ public enum HeadroomBrandMark {
     /// the geometric mean of √(ink box) and √(ink area) — box alone overrates sparse marks,
     /// area alone overrates dense ones — the four read Claude 11.6, Codex 11.1, Grok 11.2,
     /// Cursor 10.2. Coverage alone had pushed Cursor down, but its cube is also the narrowest
-    /// box (0.88 aspect), so it read a size small. These values put all four at 11.0–11.2.
+    /// box (0.88 aspect), so it read a size small.
     public static func massCorrection(for providerID: String) -> Double {
         switch providerID {
         case ProviderID.claude.raw: 1.00
-        case ProviderID.codex.raw: 0.92
+        case ProviderID.codex.raw: 1.08
         case ProviderID.grok.raw: 1.20
         case ProviderID.cursor.raw: 1.03
         // Copilot 1.14 → 1.00 (Nov 2026): its box is 1.20 wide, so at 1.14 the ink spanned
@@ -799,8 +798,8 @@ public enum HeadroomBrandMark {
         // Claude's width, and the gap matches theirs.
         case ProviderID.copilot.raw: 1.00
         // OpenCode 1.00 (Nov 2026): a solid 4:5 block, ~0.74 alpha-weighted coverage (the
-        // frame plus its translucent inner block), close to Codex's 0.70 but in a box only
-        // 0.8 as wide. Scored like Claude and Cursor above, it reads level with Codex and
+        // frame plus its translucent inner block) in a box only 0.8 as wide.
+        // Scored like Claude and Cursor above, it reads level with Codex and
         // Cursor at 1.00, and its 10.4pt width leaves a wider title gap than Claude's, never
         // the cramped one Copilot had.
         case ProviderID.opencode.raw: 1.00

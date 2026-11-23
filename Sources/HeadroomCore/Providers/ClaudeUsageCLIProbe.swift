@@ -7,6 +7,7 @@ public protocol ClaudeUsageSource: Sendable {
     /// Returns the ANSI-stripped text of Claude Code's `/usage` panel, or nil when the
     /// CLI is missing / not logged in / the capture failed.
     func capturePanel() async -> ClaudePanelResult
+    func captureWithTrace() async -> (result: ClaudePanelResult, trace: ClaudeCaptureTrace)
     /// Whether the CLI this source launches inherits `CLAUDE_CODE_OAUTH_TOKEN`. The CLI
     /// then signs in as that token's account, not the account named in `.claude.json`,
     /// so the file says nothing about whose reading it is (default-login plan, KTD2).
@@ -15,6 +16,10 @@ public protocol ClaudeUsageSource: Sendable {
 }
 
 public extension ClaudeUsageSource {
+    func captureWithTrace() async -> (result: ClaudePanelResult, trace: ClaudeCaptureTrace) {
+        (await capturePanel(), ClaudeCaptureTrace())
+    }
+
     var launchesWithInheritedOAuthToken: Bool { false }
 }
 
@@ -174,6 +179,9 @@ public struct ClaudeUsageCLIProbe: ClaudeUsageSource {
                     deadline: printTimeout,
                     retryDeadline: printRetryTimeout
                 )
+                if let output = print.versionOutput, let (major, minor, patch) = Self.parsedVersion(output) {
+                    trace.cliVersion = "v\(major).\(minor).\(patch)"
+                }
                 trace.print = print.stage
                 trace.printRetry = print.retryStage
                 switch print.result {

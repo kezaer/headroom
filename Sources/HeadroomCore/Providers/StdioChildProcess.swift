@@ -100,6 +100,12 @@ struct StdioChildProcess {
         return StdioChildProcess(pid: pid, stdin: input[1], stdout: output[0], stderr: errorPipe[0])
     }
 
+    /// Bounded protocol replies must not hang if a child stops consuming stdin.
+    func writeWithoutBlocking(_ data: Data) -> Bool {
+        guard stdin >= 0, fcntl(stdin, F_SETFL, O_NONBLOCK) != -1 else { return false }
+        return write(data)
+    }
+
     func write(_ data: Data) -> Bool {
         guard stdin >= 0 else { return false }
         return data.withUnsafeBytes { rawBuffer in

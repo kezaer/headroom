@@ -29,9 +29,14 @@ public struct AntigravityProvider: UsageProvider {
     }
 
     public func fetchSnapshot() async -> UsageSnapshot {
-        switch await source.capture() {
+        await fetchResult().snapshot
+    }
+
+    public func fetchResult() async -> UsageProviderFetchResult {
+        let capture = await source.captureWithVersion()
+        let snapshot: UsageSnapshot = switch capture.result {
         case .usage(let usage):
-            return UsageSnapshot(
+            UsageSnapshot(
                 providerID: id,
                 windows: Self.windows(for: usage.buckets),
                 planLabel: creditsLabel(usage.credits),
@@ -39,8 +44,9 @@ public struct AntigravityProvider: UsageProvider {
                 freshness: .live
             )
         case .failed(let failure):
-            return .stale(for: id, reason: failure.failureReason)
+            .stale(for: id, reason: failure.failureReason)
         }
+        return UsageProviderFetchResult(snapshot: snapshot, cliVersion: capture.version)
     }
 
     /// The row a bucket becomes. These labels are stored window IDs and must never change.

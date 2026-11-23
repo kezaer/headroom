@@ -104,41 +104,10 @@ enum AccountsSettingsInteractions {
         let accessibilityLabel: String
     }
 
-    /// L11A: the group header's "Add Account…" button. It stays *shown* wherever the
-    /// provider is multi-account — a control that vanishes is harder to learn than one
-    /// that is dimmed — and carries its own reason for being unavailable.
-    enum AddAccountActionState: Equatable {
-        case enabled(help: String)
-        case disabled(help: String)
-
-        var isEnabled: Bool {
-            if case .enabled = self { return true }
-            return false
-        }
-
-        var helpText: String {
-            switch self {
-            case .enabled(let help), .disabled(let help): help
-            }
-        }
-    }
-
-    /// R11: "off" means "not fetched", never "unmanageable". Fetch-derived chrome (status
-    /// text, fetch-recovery buttons, the provider capability banner) disappears and the
-    /// rows dim, while sign-in, rename, removal, stop-tracking and "Show CLI Account"
-    /// stay live.
-    ///
-    /// L11A revises R11 for one control: "Add Account…" now dims with the rest of the
-    /// group. It was left live so a first account could be created before the switch had
-    /// ever been turned on, but that made the one full-contrast control in an off group
-    /// the one that does the most. The switch itself stays enabled, so the first-account
-    /// path costs one extra click and nothing else.
+    /// Provider enablement gates fetch-derived recovery. Source management stays available.
     struct ProviderGroupPresentation: Equatable {
         let subscriptionSwitch: SubscriptionSwitchPresentation
         let isFetching: Bool
-        let showsAccountCounter: Bool
-        let showsAddAction: Bool
-        let addAction: AddAccountActionState
 
         var dimsAccountRows: Bool { !isFetching }
         /// R11: only *fetch-derived* status hides while the provider is off. Sign-in the
@@ -191,66 +160,35 @@ enum AccountsSettingsInteractions {
     static func providerGroupPresentation(
         providerDisplayName: String,
         accounts: [ProviderAccount],
-        capacity: Int,
-        hasFreeAccountSlot: Bool,
         isSurfaceEnabled: Bool,
         hasActiveHandoff: @MainActor (ProviderAccount) -> Bool = SetupSessions.hasActiveHandoff(for:)
     ) -> ProviderGroupPresentation {
-        // Cursor is deliberately single-account (no config-home isolation), so its header
-        // carries the switch alone — a "1 of 1" counter and a permanently disabled Add
-        // would be noise.
-        let multiAccount = capacity > 1
-        return ProviderGroupPresentation(
+        ProviderGroupPresentation(
             subscriptionSwitch: subscriptionSwitchPresentation(
                 providerDisplayName: providerDisplayName,
                 accounts: accounts,
                 isSurfaceEnabled: isSurfaceEnabled,
                 hasActiveHandoff: hasActiveHandoff
             ),
-            isFetching: isSurfaceEnabled,
-            showsAccountCounter: multiAccount,
-            showsAddAction: multiAccount,
-            addAction: addAccountActionState(
-                providerDisplayName: providerDisplayName,
-                capacity: capacity,
-                hasFreeAccountSlot: hasFreeAccountSlot,
-                isSurfaceEnabled: isSurfaceEnabled
-            )
+            isFetching: isSurfaceEnabled
         )
     }
 
-    /// L11A. Ordering is load-bearing: capacity outranks the subscription switch, because
-    /// turning a full provider back on would not free a slot — "Turn Grok on to add an
-    /// account" there would send the user through the switch for nothing.
-    ///
-    /// An open Terminal handoff deliberately does *not* block this. It holds the
-    /// subscription switch (R10) because flipping mid-handoff would strand the account the
-    /// handoff is about to produce, but starting a second sign-in is legitimate.
-    nonisolated static func addAccountActionState(
-        providerDisplayName: String,
-        capacity: Int,
-        hasFreeAccountSlot: Bool,
-        isSurfaceEnabled: Bool
-    ) -> AddAccountActionState {
-        guard hasFreeAccountSlot else {
-            // A single-account provider (Cursor) is a design bound, not a tested envelope.
-            return .disabled(help: capacity <= 1
-                ? "\(providerDisplayName) supports one account"
-                : "Tested up to \(capacity) accounts per provider")
-        }
-        guard isSurfaceEnabled else {
-            // PB9: no full stop — the other two tooltips in this very function have none, and
-            // a single-sentence tooltip is a label, not prose.
-            return .disabled(help: "Turn \(providerDisplayName) on to add an account")
-        }
-        return .enabled(help: "Sign in another account via the official CLI")
+    nonisolated static func accountCounterText(usedSlots: Int, capacity: Int) -> String {
+        "\(usedSlots) of \(capacity)"
     }
 
-    /// R15 (2026-09-19 polling plan): the header counter reads as a tested envelope, not a
-    /// product limit, once a provider reaches it.
-    nonisolated static func accountCounterText(usedSlots: Int, capacity: Int) -> String {
-        if capacity <= 1 { return "Single account" }
-        return usedSlots >= capacity ? "Tested up to \(capacity)" : "\(usedSlots) of \(capacity)"
+    nonisolated static func defaultCLIPath(for providerID: ProviderID) -> String? {
+        switch providerID {
+        case .codex: "~/.codex"
+        case .claude: "~/.claude"
+        case .antigravity: "~/.gemini"
+        case .grok: "~/.grok"
+        case .cursor: "~/.cursor"
+        case .copilot: "~/.config/gh"
+        case .opencode: "~/.local/share/opencode"
+        default: nil
+        }
     }
 
     /// R12: leaving Accounts (pane switch or window close) must not silently discard a
@@ -366,25 +304,51 @@ enum AccountsSettingsInteractions {
 
     /// The removal dialog's title, by row kind: stop-tracking for the built-in row, removal
     /// for an extra or a remembered row.
-    nonisolated static func removalDialogTitle(for row: DisplayAccount) -> String {
-        row.account.isBuiltIn && !row.isRemembered ? "Stop tracking this account?" : "Remove this account?"
+    nonisolated static func removalPolicy(for row: DisplayAccount) -> AccountRowPolicy.Removal? {
+        guard !row.isRemembered else { return nil }
+        return AccountRowPolicy.make(for: row.account, canStopTrackingBuiltIn: true).removal
     }
 
-    /// R11: a remembered row's removal only hides it, and it returns when its account is the
-    /// default login again, so the dialog says both, plainly, and says nothing is deleted.
-    nonisolated static func removalDialogMessage(for row: DisplayAccount) -> String {
-        if row.isRemembered {
-            return "It stays hidden until your CLI is signed in to this account again. Nothing is deleted."
+    nonisolated static func removalActionTitle(for row: DisplayAccount) -> String {
+        removalIsDestructive(for: row) ? "Sign Out & Stop Tracking" : "Stop Tracking"
+    }
+
+    static func stopTrackingSource(_ row: DisplayAccount, in store: UsageStore) async -> AccountRemovalResult {
+        guard !removalIsDestructive(for: row) else { return .notAllowed }
+        if row.account.isBuiltIn {
+            return await store.stopTrackingBuiltInAccount(for: row.account.providerID, allowingEmpty: true)
         }
-        return row.account.isBuiltIn
-            ? "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
-            : "Its sign-in on this Mac is deleted with it. Your subscription is untouched."
+        if !row.isRemembered, row.account.borrowedHome != nil {
+            return await store.removeAccount(row.key, keepingCLISourceStopped: true)
+        }
+        return await removeAccount(row, from: store)
     }
 
-    /// R11: removing a remembered row deletes nothing, so its confirm button is not
-    /// destructive; neither is stop-tracking. Only an extra's removal deletes its sign-in.
+    nonisolated static func removalDialogTitle(for row: DisplayAccount) -> String {
+        switch removalPolicy(for: row) {
+        case .stopTrackingCLIDefault: "Stop tracking this account?"
+        case .hideT3Home: "Hide this T3 account?"
+        case .forgetFolder: "Forget this Codex folder?"
+        case .deleteOwnedHome: "Sign out and stop tracking this account?"
+        case nil: "Remove this account?"
+        }
+    }
+
+    nonisolated static func removalDialogMessage(for row: DisplayAccount) -> String {
+        switch removalPolicy(for: row) {
+        case .stopTrackingCLIDefault:
+            "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted."
+        case .deleteOwnedHome:
+            "Its sign-in on this Mac is deleted with it. Your subscription is untouched."
+        case .hideT3Home, .forgetFolder:
+            removalPolicy(for: row)?.confirmationMessage ?? ""
+        case nil:
+            "It stays hidden until your CLI is signed in to this account again. Nothing is deleted."
+        }
+    }
+
     nonisolated static func removalIsDestructive(for row: DisplayAccount) -> Bool {
-        !row.account.isBuiltIn && !row.isRemembered
+        removalPolicy(for: row) == .deleteOwnedHome
     }
 
     /// U8 (R7): the status a remembered row prints in Settings, the popover's own tag
@@ -394,9 +358,9 @@ enum AccountsSettingsInteractions {
     }
 
     /// U8: the status line's tooltip. A remembered row is never read on its own; it goes
-    /// live when the CLI is signed in to it again, or as an account added with Add Account.
+    /// live when the CLI is signed in to it again, or after adding a separate login.
     nonisolated static let rememberedStatusHelp =
-        "Headroom reads this account again when your CLI is signed in to it. To keep it live alongside your current login, add it with Add Account…"
+        "Headroom reads this account again when your CLI is signed in to it. To keep it live alongside your current login, choose Separate login in Add Source…"
 
     /// KTD8: removing a remembered row hides it in the record store (R11); it deletes no
     /// config home and writes no registry tombstone. Engine rows keep their two paths.
@@ -430,6 +394,11 @@ enum AccountsSettingsInteractions {
         guard account.isBuiltIn,
               store.canResetBuiltInAccount(for: account.providerID)
         else { return .unavailable }
+        if account.providerID == .antigravity,
+           store.antigravitySourcePreference == .autoPreferT3,
+           AppComposition.isT3AntigravityAvailable() {
+            return .unavailable
+        }
         return store.canStopTrackingBuiltInAccount(for: account.providerID)
             ? .resetAndStopTracking
             : .resetOnly

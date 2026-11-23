@@ -393,24 +393,17 @@ struct AccountsSettingsInteractionTests {
         #expect(opened.count == extras)
     }
 
-    @Test func accountCounterReadsAsATestedEnvelopeOnlyAtCapacity() {
+    @Test func everyCapacityUsesTheSameAccountCounter() {
         #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 19, capacity: 20) == "19 of 20")
-        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 20, capacity: 20) == "Tested up to 20")
-        // Cursor's single account is a design bound, not an envelope anyone tested up to.
-        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 1, capacity: 1) == "Single account")
+        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 20, capacity: 20) == "20 of 20")
+        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 1, capacity: 1) == "1 of 1")
+        #expect(AccountsSettingsInteractions.accountCounterText(usedSlots: 0, capacity: 1) == "0 of 1")
     }
 
-    @Test func singleAccountProviderExplainsItsBoundInsteadOfAnEnvelope() {
-        let cursor = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Cursor",
-            accounts: [ProviderAccount.builtIn(for: .cursor)],
-            capacity: 1,
-            hasFreeAccountSlot: false,
-            isSurfaceEnabled: true,
-            hasActiveHandoff: { _ in false }
-        )
-        #expect(!cursor.addAction.isEnabled)
-        #expect(cursor.addAction.helpText == "Cursor supports one account")
+    @Test func everyProviderHasADefaultCLIPath() {
+        let providers: [ProviderID] = [.codex, .claude, .antigravity, .grok, .cursor, .copilot, .opencode]
+        #expect(providers.compactMap(AccountsSettingsInteractions.defaultCLIPath(for:))
+                == ["~/.codex", "~/.claude", "~/.gemini", "~/.grok", "~/.cursor", "~/.config/gh", "~/.local/share/opencode"])
     }
 
     @Test func renameCommitsTrimmedFocusLossDraftAndRejectsBlankDraft() {
@@ -675,8 +668,6 @@ struct AccountsSettingsInteractionTests {
         let off = AccountsSettingsInteractions.providerGroupPresentation(
             providerDisplayName: "Grok",
             accounts: accounts,
-            capacity: 5,
-            hasFreeAccountSlot: true,
             isSurfaceEnabled: false,
             hasActiveHandoff: { _ in false }
         )
@@ -694,15 +685,11 @@ struct AccountsSettingsInteractionTests {
         #expect(off.offHelpText == SettingsCopy.providerOffNotice)
         #expect(SettingsCopy.providerOffAccessibilityLabel
                 == "Off — not fetched while this provider is off")
-        #expect(off.showsAccountCounter)
-        #expect(off.showsAddAction)
         #expect(off.subscriptionSwitch.isEnabled)
 
         let on = AccountsSettingsInteractions.providerGroupPresentation(
             providerDisplayName: "Grok",
             accounts: accounts,
-            capacity: 5,
-            hasFreeAccountSlot: true,
             isSurfaceEnabled: true,
             hasActiveHandoff: { _ in false }
         )
@@ -712,116 +699,6 @@ struct AccountsSettingsInteractionTests {
         #expect(!on.hidesFetchRecovery)
         #expect(!on.hidesCapabilityBanner)
         #expect(on.offHelpText == nil)
-    }
-
-    // MARK: - L11A: Add Account while the provider is off
-
-    @Test func addAccountIsLiveWhileTheProviderIsOnAndHasARoomySlot() {
-        let presentation = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Grok",
-            accounts: [ProviderAccount.builtIn(for: .grok)],
-            capacity: 5,
-            hasFreeAccountSlot: true,
-            isSurfaceEnabled: true,
-            hasActiveHandoff: { _ in false }
-        )
-
-        #expect(presentation.showsAddAction)
-        #expect(presentation.addAction.isEnabled)
-        #expect(presentation.addAction.helpText == "Sign in another account via the official CLI")
-    }
-
-    @Test func addAccountIsDisabledWhileTheProviderIsOffAndSaysWhy() {
-        let presentation = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Grok",
-            accounts: [ProviderAccount.builtIn(for: .grok)],
-            capacity: 5,
-            hasFreeAccountSlot: true,
-            isSurfaceEnabled: false,
-            hasActiveHandoff: { _ in false }
-        )
-
-        // L11A: the button is still drawn — it dims with the group rather than vanishing.
-        #expect(presentation.showsAddAction)
-        #expect(!presentation.addAction.isEnabled)
-        #expect(presentation.addAction.helpText == "Turn Grok on to add an account")
-        // The switch is the way back out, so it must not dim with everything else.
-        #expect(presentation.subscriptionSwitch.isEnabled)
-    }
-
-    @Test func addAccountAtCapacityKeepsTheCapacityReasonEvenWhileOff() {
-        let full = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Grok",
-            accounts: [ProviderAccount.builtIn(for: .grok)],
-            capacity: 5,
-            hasFreeAccountSlot: false,
-            isSurfaceEnabled: false,
-            hasActiveHandoff: { _ in false }
-        )
-
-        // L11A: turning the provider on would not free a slot, so the off-switch reason
-        // must never displace the capacity one — it would send the user through the
-        // switch for nothing.
-        #expect(!full.addAction.isEnabled)
-        #expect(full.addAction.helpText == "Tested up to 5 accounts per provider")
-
-        let fullAndOn = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Grok",
-            accounts: [ProviderAccount.builtIn(for: .grok)],
-            capacity: 5,
-            hasFreeAccountSlot: false,
-            isSurfaceEnabled: true,
-            hasActiveHandoff: { _ in false }
-        )
-        #expect(!fullAndOn.addAction.isEnabled)
-        #expect(fullAndOn.addAction.helpText == "Tested up to 5 accounts per provider")
-    }
-
-    @Test func addAccountIgnoresAnOpenHandoffButStillFollowsTheSwitch() {
-        let accounts = [
-            ProviderAccount.builtIn(for: .grok),
-            ProviderAccount(id: AccountID("second"), providerID: .grok, label: "Second"),
-        ]
-
-        let midHandoffOn = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Grok",
-            accounts: accounts,
-            capacity: 5,
-            hasFreeAccountSlot: true,
-            isSurfaceEnabled: true,
-            hasActiveHandoff: { $0.id == AccountID("second") }
-        )
-        // R10 holds the *switch* mid-handoff; L11A does not extend that to Add Account,
-        // because starting a second sign-in strands nothing.
-        #expect(midHandoffOn.addAction.isEnabled)
-        #expect(!midHandoffOn.subscriptionSwitch.isEnabled)
-
-        let midHandoffOff = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Grok",
-            accounts: accounts,
-            capacity: 5,
-            hasFreeAccountSlot: true,
-            isSurfaceEnabled: false,
-            hasActiveHandoff: { $0.id == AccountID("second") }
-        )
-        #expect(!midHandoffOff.addAction.isEnabled)
-        #expect(midHandoffOff.addAction.helpText == "Turn Grok on to add an account")
-    }
-
-    @Test func singleAccountProviderHeaderDropsTheCounterAndAddButKeepsTheSwitch() {
-        let presentation = AccountsSettingsInteractions.providerGroupPresentation(
-            providerDisplayName: "Cursor",
-            accounts: [ProviderAccount.builtIn(for: .cursor)],
-            capacity: 1,
-            hasFreeAccountSlot: false,
-            isSurfaceEnabled: false,
-            hasActiveHandoff: { _ in false }
-        )
-
-        #expect(!presentation.showsAccountCounter)
-        #expect(!presentation.showsAddAction)
-        #expect(presentation.subscriptionSwitch.isEnabled)
-        #expect(presentation.subscriptionSwitch.accessibilityLabel == "Cursor subscription")
     }
 
     @Test func leavingAccountsCommitsOnlyTheDraftsThatWouldChangeALabel() {
@@ -872,7 +749,7 @@ struct AccountsSettingsInteractionTests {
         let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
         let account = ProviderAccount.builtIn(for: .claude)
         let marker = AccountStorage.setupCompletionMarker(
-            for: account,
+            for: SetupCapableAccount(account)!,
             builtInClaudeWorkspace: workspace
         )
         try AccountStorage.prepareSetupCompletionMarker(marker)
@@ -908,7 +785,7 @@ struct AccountsSettingsInteractionTests {
         let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
         let account = ProviderAccount.builtIn(for: .claude)
         let marker = AccountStorage.setupCompletionMarker(
-            for: account,
+            for: SetupCapableAccount(account)!,
             builtInClaudeWorkspace: workspace
         )
         try AccountStorage.prepareSetupCompletionMarker(marker)
@@ -945,7 +822,7 @@ struct AccountsSettingsInteractionTests {
         let workspace = supportRoot.appendingPathComponent("ClaudeProbe", isDirectory: true)
         let account = ProviderAccount.builtIn(for: .claude)
         let marker = AccountStorage.setupCompletionMarker(
-            for: account,
+            for: SetupCapableAccount(account)!,
             builtInClaudeWorkspace: workspace
         )
         try FileManager.default.createDirectory(
@@ -1550,15 +1427,15 @@ private final class InteractionStorage: AccountStorageManaging, @unchecked Senda
 
     var removedKeys: [AccountKey] { lock.withLock { _removedKeys } }
 
-    func ensureDirectories(for account: ProviderAccount) -> Result<Void, AccountStorageFailure> {
+    func ensureDirectories(for account: HeadroomOwnedHome) -> Result<Void, AccountStorageFailure> {
         .success(())
     }
 
-    func setupHandoffIsActive(for account: ProviderAccount) async -> Bool { setupHandoffActive }
+    func setupHandoffIsActive(for account: SetupCapableAccount) async -> Bool { setupHandoffActive }
 
-    func removeDirectories(for account: ProviderAccount) async -> Result<Void, AccountStorageFailure> {
+    func removeDirectories(for account: HeadroomOwnedHome) async -> Result<Void, AccountStorageFailure> {
         lock.withLock {
-            _removedKeys.append(account.key)
+            _removedKeys.append(account.account.key)
             return removals.isEmpty ? .success(()) : removals.removeFirst()
         }
     }
@@ -2507,10 +2384,12 @@ struct RememberedRowInteractionTests {
         #expect(AccountsSettingsInteractions.removalDialogMessage(for: builtIn)
             == "Headroom stops showing it. Your CLI stays signed in — nothing on this Mac is deleted.")
         #expect(AccountsSettingsInteractions.removalIsDestructive(for: builtIn) == false)
-        #expect(AccountsSettingsInteractions.removalDialogTitle(for: extra) == "Remove this account?")
+        #expect(AccountsSettingsInteractions.removalDialogTitle(for: extra) == "Sign out and stop tracking this account?")
         #expect(AccountsSettingsInteractions.removalDialogMessage(for: extra)
             == "Its sign-in on this Mac is deleted with it. Your subscription is untouched.")
         #expect(AccountsSettingsInteractions.removalIsDestructive(for: extra))
+        #expect(AccountsSettingsInteractions.removalActionTitle(for: extra) == "Sign Out & Stop Tracking")
+        #expect(AccountsSettingsInteractions.removalActionTitle(for: builtIn) == "Stop Tracking")
     }
 
     /// R7: Settings prints the popover's own tag as the row's status line.
@@ -2524,7 +2403,7 @@ struct RememberedRowInteractionTests {
             now: summary.lastReadAt!.addingTimeInterval(120)
         )
         #expect(status == "Last read 2 min ago")
-        #expect(AccountsSettingsInteractions.rememberedStatusHelp.contains("Add Account"))
+        #expect(AccountsSettingsInteractions.rememberedStatusHelp.contains("Add Source"))
     }
 
     /// R12: no Make Main, no Sign Out & Set Up Again, no sign-in or Try Again — in Settings

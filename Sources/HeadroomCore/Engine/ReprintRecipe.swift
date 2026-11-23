@@ -58,6 +58,7 @@ public struct ReprintRecipe: Sendable, Equatable {
         let resolvedPhase = phase
         pills = meters.map { meter in
             let provider = meter.summary.providerID
+            let separateAccount = meter.badge == nil ? nil : meter.sourceAccountKey
             let relevantEntries: [UserRefreshEntry]
             let active: Bool
             let endedAt: Date?
@@ -65,6 +66,10 @@ public struct ReprintRecipe: Sendable, Equatable {
                 relevantEntries = currentMains.values.compactMap { entries[$0] }
                 active = !probingAccounts.isEmpty
                 endedAt = probeEndTimes.values.max()
+            } else if let separateAccount {
+                relevantEntries = entries[separateAccount].map { [$0] } ?? []
+                active = probingAccounts.contains(separateAccount)
+                endedAt = probeEndTimes[separateAccount]
             } else if let provider {
                 relevantEntries = currentMains[provider].flatMap { entries[$0] }.map { [$0] } ?? []
                 active = probingAccounts.contains { $0.providerID == provider }
@@ -80,7 +85,7 @@ public struct ReprintRecipe: Sendable, Equatable {
                 || (inTail && !reduceMotion && (sloshWholeTail || provider.map(spendInFlightProviders.contains) == true))
             )
             return LoadingPillState(
-                id: automatic ? "automatic" : (provider?.raw ?? "neutral"),
+                id: automatic ? "automatic" : (separateAccount?.description ?? provider?.raw ?? "neutral"),
                 level: automatic ? LoadingMotionConstants.decorativeLevel : (meter.fill ?? LoadingMotionConstants.decorativeLevel),
                 ink: ink,
                 isSloshing: slosh

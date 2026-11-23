@@ -18,6 +18,7 @@ public enum UserRefreshOrigin: Sendable, Hashable {
     case fullRefresh
     case accountAction
     case setupCheck
+    case sourceSelection
 }
 
 public enum UserRefreshOutcome: Sendable, Equatable {

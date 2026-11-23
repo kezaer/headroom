@@ -169,6 +169,7 @@ struct ClaudeUsageCLIProbeTests {
         }
         #expect(ClaudeUsageParser.parse(text).count == 2)
         #expect(trace.print == .versionBelowFloor)
+        #expect(trace.cliVersion == "v2.1.216")
         #expect(trace.ptyRemoteControlOptOut == true)
         #expect(trace.ptyBoot == .ready)
         #expect(trace.ptyBootFingerprint == nil)

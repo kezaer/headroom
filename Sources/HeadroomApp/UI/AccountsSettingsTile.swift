@@ -56,18 +56,6 @@ func acceptsAccountLabelDraftChange(
     focusedAccountKey == accountKey
 }
 
-/// Settings → Accounts (multi-account, Jul 2026): one tile managing every configured
-/// subscription account. Grouped per provider — brand row with a live "n of 5" count
-/// and an Add button, then one row per account: an editable label, a plain-language
-/// status, and the account's actions (Sign in for a pending login, Remove for extras).
-///
-/// The built-in account *is* the user's own CLI login, so it can never be deleted —
-/// its row shows a quiet "CLI login" tag, and once another account exists it offers a
-/// non-destructive "stop tracking" instead of the extras' trash affordance (which
-/// deletes that account's Headroom-owned config home). A stop-tracked built-in can be
-/// resurfaced from the provider header. All sign-ins run through the official CLI in
-/// Terminal (compliance boundary unchanged); this tile only opens that handoff and
-/// reflects the result.
 struct AccountsSettingsTile: View {
     let store: UsageStore
     /// KTD3: resolved on the settings root so a pane switch neither blanks the badges nor
@@ -80,6 +68,9 @@ struct AccountsSettingsTile: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @State private var addSource: AccountSourceSheetRequest?
+    @State private var t3Sources = SharedT3AccountSources()
+    @State private var sourceActionError: String?
     @State private var labelDrafts: [AccountKey: String] = [:]
     /// KTD8: a display row, so the confirmed removal follows the row's kind.
     @State private var removalCandidate: DisplayAccount?
@@ -90,12 +81,13 @@ struct AccountsSettingsTile: View {
     @FocusState private var focusedLabel: AccountKey?
     @FocusState private var focusedRemovalAction: AccountKey?
 
+    private var providerOrder: [ProviderID] {
+        let order: [ProviderID] = [.codex, .claude, .antigravity, .grok, .cursor, .copilot, .opencode]
+        let available = store.accountSettingsProviderIDs
+        return order.filter(available.contains) + store.registeredProviderOrder.filter { !order.contains($0) }
+    }
+
     var body: some View {
-        // The pane scaffold prints "Accounts" above this tile (U2/U4), so the tile carries no
-        // title of its own. T3: the shared tile, so provider groups stand `groupToGroup` apart
-        // like every other pane's groups; the old hand-rolled 10pt rhythm ran the intro line
-        // into the first group. The bold group labels separate providers, so the hairline
-        // between them went with it.
         SettingsTile {
             SettingsHelpText(text: "Track several subscriptions side by side. Every account signs in through its official CLI in Terminal — Headroom never sees your credentials.")
 
@@ -114,9 +106,29 @@ struct AccountsSettingsTile: View {
                 SettingsHelpText(text: "Applies to every account, in the Mac app and on a synced iPhone or iPad. Saved names return when turned off, and are used whenever an email is unavailable.")
             }
 
-            ForEach(store.registeredProviderOrder, id: \.self) { providerID in
+            Divider()
+            ForEach(providerOrder, id: \.self) { providerID in
                 providerGroup(providerID)
             }
+        }
+        .task { t3Sources = await SharedT3AccountSources.discover() }
+        .sheet(item: $addSource) { request in
+            AddAccountSourceSheet(
+                providerID: request.id,
+                displayName: providerName(request.id),
+                store: store,
+                t3Sources: $t3Sources,
+                enableProvider: { enableProvider(request.id) },
+                addSeparateLogin: { addAccount(for: request.id) }
+            )
+        }
+        .alert("Couldn’t Stop Tracking", isPresented: Binding(
+            get: { sourceActionError != nil },
+            set: { if !$0 { sourceActionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { sourceActionError = nil }
+        } message: {
+            Text(sourceActionError ?? "")
         }
         .confirmationDialog(
             removalCandidate.map(AccountsSettingsInteractions.removalDialogTitle(for:))
@@ -130,9 +142,7 @@ struct AccountsSettingsTile: View {
             // deletes nothing, unlike extra-account removal. Removing a remembered row
             // only hides it too (R11).
             Button(
-                account.isBuiltIn && !row.isRemembered
-                    ? "Stop Tracking \(store.desktopAccountName(for: account))"
-                    : "Remove \(store.desktopAccountName(for: account))",
+                AccountsSettingsInteractions.removalActionTitle(for: row),
                 role: AccountsSettingsInteractions.removalIsDestructive(for: row) ? .destructive : nil
             ) {
                 removalInProgress = account.key
@@ -230,13 +240,11 @@ struct AccountsSettingsTile: View {
             : [:]
         let capacity = store.accountCapacity(for: providerID)
         let capabilityState = store.providerCapabilities[providerID]?.state
-        let displayName = store.displayNames[providerID] ?? providerID.raw.capitalized
+        let displayName = providerName(providerID)
         let surface = UsageSurface.subscription(for: providerID)
         let presentation = AccountsSettingsInteractions.providerGroupPresentation(
             providerDisplayName: displayName,
             accounts: accounts,
-            capacity: capacity,
-            hasFreeAccountSlot: store.canAddAccount(for: providerID),
             isSurfaceEnabled: surface.map { store.isSurfaceEnabled($0) } ?? true
         )
         let allCapability = capabilityRecoveryPresentation(
@@ -250,39 +258,24 @@ struct AccountsSettingsTile: View {
         // so the announcement would be lost once the provider is switched back on.
         let announcedCapability = presentation.hidesCapabilityBanner ? nil : capabilityState
         VStack(alignment: .leading, spacing: SettingsMetrics.withinGroup) {
-            HStack(spacing: 12) {
-                HStack(spacing: 7) {
-                    ProviderLogoView(providerID: providerID, size: 15)
-                    SettingsGroupLabel(displayName)
+            HStack(spacing: 7) {
+                ProviderLogoView(providerID: providerID, size: 15)
+                SettingsGroupLabel(displayName)
+                Text(AccountsSettingsInteractions.accountCounterText(usedSlots: accounts.count, capacity: capacity))
+                    .font(SettingsType.help.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                Spacer(minLength: 8)
+                Button("+ Add Source…") {
+                    commitPendingLabels()
+                    focusedLabel = nil
+                    addSource = AccountSourceSheetRequest(id: providerID)
                 }
-                if presentation.showsAccountCounter {
-                    // A stop-tracked built-in is hidden from the list but keeps its
-                    // registry slot, so count it — otherwise the header reads "4 of 5"
-                    // while Add Account is disabled.
-                    let usedSlots = accounts.count
-                        + (store.isBuiltInTrackingStopped(for: providerID) ? 1 : 0)
-                    Text(AccountsSettingsInteractions.accountCounterText(usedSlots: usedSlots, capacity: capacity))
-                        .font(SettingsType.help.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 12)
-                mergedBuiltInMenu(for: providerID)
-                if presentation.showsAddAction {
-                    // L11A: an off group dims as one unit, Add included. Both the enabled
-                    // and disabled reasons come from `ProviderGroupPresentation` so the
-                    // rule is tested rather than restated here.
-                    Button("Add Account…") { addAccount(for: providerID) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(!presentation.addAction.isEnabled)
-                        .help(presentation.addAction.helpText)
-                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityLabel("Add \(displayName) source")
                 if let surface {
-                    subscriptionSwitch(
-                        surface,
-                        displayName: displayName,
-                        presentation: presentation.subscriptionSwitch
-                    )
+                    subscriptionSwitch(surface, displayName: displayName, presentation: presentation.subscriptionSwitch)
                 }
             }
             if let capability, !accounts.isEmpty {
@@ -315,34 +308,39 @@ struct AccountsSettingsTile: View {
                 .padding(.leading, 16)
                 .transition(HeadroomMotion.fade(HeadroomMotion.settle, reduceMotion: reduceMotion))
             }
-            ForEach(rows) { row in
-                accountRow(row, lastReadAt: lastReadAt[row.key], capability: capability, presentation: presentation)
-                    .transition(SettingsAccountExit.transition(reduceMotion: reduceMotion))
-            }
-            if store.isBuiltInTrackingStopped(for: providerID) {
-                // The way back from stop-tracking: resurface the CLI's own login and
-                // fetch it right away. Quiet on purpose — it's an undo, not a feature.
-                Button("Show CLI Account") {
-                    _ = withAnimation(
-                        HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion)
-                    ) {
-                        AccountsSettingsInteractions.resumeTrackingBuiltIn(
-                            for: providerID,
-                            in: store
+            let showsBadge = rows.count > 1
+            VStack(spacing: 0) {
+                if rows.isEmpty {
+                    SettingsHelpText(text: "No \(displayName) accounts. Use Add Source… to track one.")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                } else {
+                    AccountsColumns(showsBadge: showsBadge) {
+                        columnTitle("Account")
+                    } source: {
+                        columnTitle("Source")
+                    } plan: {
+                        columnTitle("Plan")
+                    } version: {
+                        columnTitle("Version")
+                    } badge: {
+                        columnTitle("Badge")
+                    } actions: {
+                        Color.clear.frame(height: 1).accessibilityHidden(true)
+                    }
+                    .padding(.vertical, 5)
+                    .background(Color.primary.opacity(0.025))
+                    ForEach(rows) { row in
+                        Divider()
+                        accountRow(
+                            row, showsBadge: showsBadge, lastReadAt: lastReadAt[row.key],
+                            capability: capability, presentation: presentation
                         )
+                        .transition(SettingsAccountExit.transition(reduceMotion: reduceMotion))
                     }
                 }
-                // B3A: quiet still, but a control — the small chip owns its own font and ink,
-                // so the per-site 11pt secondary label goes away. B3H keeps the resting
-                // container here: on a Settings pane, beside native bordered controls, a
-                // hover-only chip would read as a line of text until the pointer found it.
-                .buttonStyle(SetupChipButtonStyle(size: .small, chrome: .resting))
-                .help("Track the account your CLI is signed into again")
-                .padding(.leading, 16)
             }
-            if let note = AccountsSettingsInteractions.providerGroupNote(for: providerID) {
-                SettingsHelpText(text: note)
-            }
+            .accountSettingsInset(radius: 9)
             if let offHelpText = presentation.offHelpText {
                 // R11: one line naming the only consequence of "off". Without it, an
                 // account added while the surface is off would look broken rather than
@@ -369,33 +367,20 @@ struct AccountsSettingsTile: View {
         }
     }
 
-    /// Default-login U10 (KTD11): while the default login shows through the extra row that
-    /// reads the same account, the list draws that one row with its own actions, and the
-    /// built-in's "Sign Out & Set Up Again" and stop-tracking live here. Nothing is drawn
-    /// for a provider with no merge, so its header is unchanged (R15). No row is marked as
-    /// the default login (R16).
-    @ViewBuilder private func mergedBuiltInMenu(for providerID: ProviderID) -> some View {
-        let actions = AccountsSettingsInteractions.mergedBuiltInActions(for: providerID, in: store)
-        if actions != .unavailable,
-           let builtIn = AccountsSettingsInteractions.mergedBuiltIn(for: providerID, in: store) {
-            Menu {
-                Section("CLI login") {
-                    Button("Sign Out & Set Up Again") { requestReset(builtIn) }
-                    if actions == .resetAndStopTracking {
-                        Button("Stop Tracking") {
-                            removalOrigin = builtIn.key
-                            removalCandidate = DisplayAccount(account: builtIn, kind: .engine)
-                        }
-                    }
-                }
-            } label: {
-                AccountActionsMenuGlyph()
-            }
-            .accountActionsMenuChrome()
-            .help("CLI login actions")
-            .accessibilityLabel("Actions for the \(store.displayNames[providerID] ?? providerID.raw) CLI login")
-            .focused($focusedRemovalAction, equals: builtIn.key)
-        }
+    private func providerName(_ id: ProviderID) -> String {
+        id == .copilot ? "GitHub Copilot" : store.displayNames[id] ?? id.displayName
+    }
+
+    private func enableProvider(_ id: ProviderID) {
+        guard let surface = UsageSurface.subscription(for: id), !store.isSurfaceEnabled(surface) else { return }
+        surfaceBinding(surface).wrappedValue = true
+    }
+
+    private func columnTitle(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
     }
 
     /// R9/R10: the provider's on/off switch now sits with the accounts it governs. Its
@@ -419,6 +404,7 @@ struct AccountsSettingsTile: View {
 
     private func accountRow(
         _ row: DisplayAccount,
+        showsBadge: Bool,
         lastReadAt: Date?,
         capability: CapabilityRecoveryPresentation?,
         presentation: AccountsSettingsInteractions.ProviderGroupPresentation
@@ -466,91 +452,72 @@ struct AccountsSettingsTile: View {
             guard case .stale(let reason) = snapshot.freshness else { return nil }
             return reason.providerSetupOutcome?.message
         }()
-        let usesSecondLine = capability == nil
-            && removalState == nil
-            && recoveryActions?.usesSecondLine == true
-        return VStack(alignment: .leading, spacing: usesSecondLine ? 5 : 1) {
-            HStack(spacing: 8) {
-                accountIdentity(row, email: email, isEditingLabel: isEditingLabel)
-                if account.isBuiltIn {
-                    pillBadge("CLI login", help: "Uses the account your CLI is signed into")
-                }
-                if let original = duplicateLoginLabels[account.key] {
-                    // Detection only — the user decides which record to keep; Headroom
-                    // never merges or removes duplicate rows on its own.
-                    pillBadge(
-                        "Same login as \(original)",
-                        help: "This row is signed in to the same Claude account as \(original). You can remove one without signing out of the other.",
-                        accessibilityLabel: "\(store.desktopAccountName(for: account)) uses the same login as \(original)"
-                    )
-                }
-                Spacer(minLength: 8)
-                // R2C11: the status stays in the trailing column whichever silhouette the row
-                // takes. Only the *buttons* drop to a second line when there are two of them.
-                // Moving the status with them meant two never-signed-in rows in one list
-                // printed the same state in two different places, which reads as two states.
-                SettingsAccountWaitPill(store: store, account: account, status: status,
-                    waitingForClaudeCode: capabilityRow == .waitingForClaudeCode,
-                    showsStatus: !presentation.hidesAccountStatus(isSetupState: status.isSetupState),
-                    level: loadingLevel)
-                if row.isRemembered {
-                    // U8 (R7): the popover's tag, as this row's status line. It is not fetch
-                    // state, so it shows while the provider's switch is off too.
-                    if let text = AccountsSettingsInteractions.rememberedStatus(
-                        lastReadAt: lastReadAt, snapshot: snapshot, now: Date()
-                    ) {
-                        rememberedStatusLabel(text)
+        let source = accountSource(for: row)
+        let rawPlan = snapshot.exportedPlanLabel
+        let showsCredits = account.providerID == .antigravity
+            && (rawPlan?.hasSuffix(" credit") == true || rawPlan?.hasSuffix(" credits") == true)
+        let plan = showsCredits ? nil : PlanLabelPresentation.displayName(rawPlan, provider: account.providerID)
+        let planName = plan.map { value in
+            let name = providerName(account.providerID)
+            return value.localizedCaseInsensitiveContains(name) ? value : "\(name) \(value)"
+        }
+        let showsStatus = !presentation.hidesAccountStatus(isSetupState: status.isSetupState)
+            && (status != .connected || capabilityRow != .standard)
+        return VStack(alignment: .leading, spacing: 5) {
+            AccountsColumns(showsBadge: showsBadge) {
+                accountIdentity(row, email: email, path: source.path, isEditingLabel: isEditingLabel)
+            } source: {
+                metadataText(source.label)
+            } plan: {
+                metadataText(planName ?? "")
+            } version: {
+                Text(store.observedCLIVersions[row.key] ?? "")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } badge: {
+                if let badge = store.menuBarBadge(for: row.key), !row.isRemembered {
+                    AccountMenuBarBadgeField(value: badge, accountLabel: account.label) {
+                        store.setMenuBarBadge($0, for: account.key)
                     }
-                } else if !presentation.hidesAccountStatus(isSetupState: status.isSetupState) {
-                    accountStatus(
-                        capabilityRow,
-                        snapshot: snapshot,
-                        status: status,
-                        setupFailure: setupFailure,
-                        setupSentence: setupSentence,
-                        account: account
-                    )
                 }
-                if offersRecovery, !usesSecondLine, capability == nil, removalState == nil {
-                    recoveryButtons(
-                        for: account,
-                        status: status,
-                        setupState: setupState,
-                        recoveryActions: recoveryActions
-                    )
-                }
-                removalActions(
-                    for: row,
-                    removalState: removalState,
-                    setupState: setupState
-                )
+            } actions: {
+                accountMenu(row, setupState: setupState)
             }
-            if usesSecondLine {
-                HStack(spacing: 8) {
-                    Spacer(minLength: 8)
-                    recoveryButtons(
-                        for: account,
-                        status: status,
-                        setupState: setupState,
-                        recoveryActions: recoveryActions
-                    )
+            if row.isRemembered {
+                if let text = AccountsSettingsInteractions.rememberedStatus(
+                    lastReadAt: lastReadAt, snapshot: snapshot, now: Date()
+                ) {
+                    rememberedStatusLabel(text)
+                        .padding(.horizontal, 10)
                 }
-                .padding(.leading, 6)
+            } else if showsStatus || status.isSetupState || recoveryActions != nil {
+                HStack(spacing: 6) {
+                    SettingsAccountWaitPill(
+                        store: store, account: account, status: status,
+                        waitingForClaudeCode: capabilityRow == .waitingForClaudeCode,
+                        showsStatus: showsStatus, level: loadingLevel
+                    )
+                    if showsStatus {
+                        accountStatus(
+                            capabilityRow, status: status, setupFailure: setupFailure,
+                            setupSentence: setupSentence, account: account
+                        )
+                    }
+                    Spacer(minLength: 4)
+                    if removalState == nil, capability == nil {
+                        recoveryButtons(
+                            for: account, status: status, setupState: setupState,
+                            recoveryActions: recoveryActions
+                        )
+                    }
+                    removalRecovery(for: row, removalState: removalState, setupState: setupState)
+                }
+                .padding(.horizontal, 10)
             }
         }
-        // 16pt + the field's 6pt inner pad lands the label text at the 22pt provider-
-        // name alignment axis.
-        .padding(.leading, 16)
-        // R11: dimmed, never disabled — "off" means "not fetched", so every management
-        // control in the row still works. Matches the disabled-swatch step in
-        // `MeterStyleTile`.
-        .opacity(presentation.dimsAccountRows ? 0.45 : 1)
-        // RM1: the subscription switch's scope is `.movement`, so the dim carries its own
-        // crossfade and keeps it under Reduce Motion.
-        .animation(
-            HeadroomMotion.resolved(HeadroomMotion.settle, .crossfade, reduceMotion: reduceMotion),
-            value: presentation.dimsAccountRows
-        )
+        .padding(.vertical, 8)
+        .opacity(presentation.dimsAccountRows && !status.isSetupState ? 0.62 : 1)
         .disabled(removalState == .removing)
         .onAppear { SetupSessions.announceFailureIfNeeded(for: account) }
         .onChange(of: setupState) {
@@ -558,69 +525,69 @@ struct AccountsSettingsTile: View {
         }
     }
 
-    @ViewBuilder private func accountIdentity(
-        _ row: DisplayAccount,
-        email: String?,
-        isEditingLabel: Bool
+    private func accountSource(for row: DisplayAccount) -> (label: String, path: String?) {
+        let account = row.account
+        if let home = account.borrowedHome {
+            return (home.source.isT3 ? "T3 Code" : "CLI", home.path.abbreviated(userHome: NSHomeDirectory()))
+        }
+        if row.isRemembered { return ("CLI", nil) }
+        if !account.isBuiltIn {
+            let path = AccountStorage.accountDirectoryURL(for: account).path
+            return ("Separate", (path as NSString).abbreviatingWithTildeInPath)
+        }
+        if account.providerID == .antigravity, store.antigravitySourcePreference == .autoPreferT3,
+           let install = t3Sources.antigravity {
+            return ("T3 Code", (install.dataDirectory.path as NSString).abbreviatingWithTildeInPath)
+        }
+        let path = AccountsSettingsInteractions.defaultCLIPath(for: account.providerID)
+        let usesT3Claude = account.providerID == .claude && store.tracksT3Claude && t3Sources.claudeName != nil
+        return (usesT3Claude ? "T3 Code" : "CLI", path)
+    }
+
+    private func metadataText(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help(value)
+    }
+
+    private func accountIdentity(
+        _ row: DisplayAccount, email: String?, path: String?, isEditingLabel: Bool
     ) -> some View {
         let account = row.account
-        VStack(alignment: .leading, spacing: 1) {
+        let name = store.desktopAccountName(for: account)
+        return VStack(alignment: .leading, spacing: 2) {
             if store.useEmailAsAccountName, let email {
                 Text(email)
-                    .font(.system(size: 13))
+                    .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
-                    .truncationMode(.tail)
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .frame(maxWidth: 158, alignment: .leading)
                     .help(email)
-                    .accessibilityLabel("\(email) account name")
             } else {
-                // Quiet at rest, but the affordance reveals on approach: a hover/focus fill
-                // marks the label as editable (impeccable audit P1 — a plain field that
-                // renders identically to static text hides the rename feature entirely).
                 TextField("Account name", text: labelBinding(for: account))
                     .textFieldStyle(.plain)
-                    .font(.system(size: 13))
+                    .font(.system(size: 12, weight: .semibold))
                     .focused($focusedLabel, equals: account.key)
-                    .onSubmit { commitLabel(for: row) }
-                    .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(
-                        Color.primary.opacity(isEditingLabel ? 0.06 : 0),
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    )
-                    // R2M10/S3A: the fill's whole job is to reveal on approach, and it was the
-                    // one hover in the app that snapped both ways — the only one outside a
-                    // button style. Opacity only, so it keeps its timing under Reduce Motion.
-                    .animation(
-                        HeadroomMotion.resolved(
-                            isEditingLabel ? HeadroomMotion.hoverIn : HeadroomMotion.hoverOut,
-                            .crossfade,
-                            reduceMotion: reduceMotion
-                        ),
-                        value: isEditingLabel
-                    )
+                    .onSubmit { commitLabel(for: row); focusedLabel = nil }
+                    .background(Color.primary.opacity(isEditingLabel ? 0.06 : 0),
+                                in: RoundedRectangle(cornerRadius: 4))
                     .onHover { hovering in
                         hoveredLabel = hovering ? account.key : (hoveredLabel == account.key ? nil : hoveredLabel)
                     }
-                    .frame(maxWidth: 158, alignment: .leading)
                     .help("Click to rename this account")
-                    .accessibilityLabel("\(store.desktopAccountName(for: account)) account name")
-                if let email {
-                    // Under the (renameable) name, not beside it: the label is the user's
-                    // word for the account and the address is what it actually resolves to,
-                    // so managing accounts here means verifying one against the other. The
-                    // 6pt inset + 158pt cap match the field above, so both sit on one text
-                    // axis and a long address never shoves the status column around.
-                    Text(email)
-                        .font(SettingsType.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .padding(.horizontal, 6)
-                        .frame(maxWidth: 158, alignment: .leading)
-                        .help(email)
-                        .accessibilityLabel("Signed in as \(email)")
-                }
+                    .accessibilityLabel("Account name for \(name)")
+                if let email { metadataText(email) }
+            }
+            if let path {
+                Text(path)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(path)
+            }
+            if let original = duplicateLoginLabels[account.key] {
+                metadataText("Same login as \(original)")
             }
         }
     }
@@ -642,7 +609,6 @@ struct AccountsSettingsTile: View {
 
     @ViewBuilder private func accountStatus(
         _ capabilityRow: AccountsSettingsInteractions.CapabilityRowPresentation,
-        snapshot: UsageSnapshot,
         status: AccountStatus,
         setupFailure: String?,
         setupSentence: String?,
@@ -650,7 +616,6 @@ struct AccountsSettingsTile: View {
     ) -> some View {
         capabilityStatusLabel(
             capabilityRow,
-            snapshot: snapshot,
             fallbackStatus: status,
             setupFailure: setupFailure,
             setupSentence: setupSentence,
@@ -685,11 +650,13 @@ struct AccountsSettingsTile: View {
             .controlSize(.small)
             .accessibilityLabel("Try signing in again for \(store.desktopAccountName(for: account))")
         case .outcomeRecovery:
-            outcomeRecoveryButtons(
-                for: account,
-                status: status,
-                recoveryActions: recoveryActions
-            )
+            if account.borrowedHome == nil || recoveryActions != nil {
+                outcomeRecoveryButtons(
+                    for: account,
+                    status: status,
+                    recoveryActions: recoveryActions
+                )
+            }
         }
     }
 
@@ -751,158 +718,82 @@ struct AccountsSettingsTile: View {
         }
     }
 
-    @ViewBuilder private func removalActions(
-        for row: DisplayAccount,
-        removalState: AccountRemovalState?,
-        setupState: SetupSessionState
-    ) -> some View {
+    private func accountMenu(_ row: DisplayAccount, setupState: SetupSessionState) -> some View {
         let account = row.account
-        // The trash slot is always laid out — hidden (not absent) on built-in rows —
-        // so status text shares one right anchor down the whole list (audit P2).
-            if let stopWaitingAccount = settingsStopWaitingAccount(
-                account,
-                removalState: removalState,
-                setupState: setupState
-            ) {
-                StopWaitingButton(
-                    account: stopWaitingAccount,
-                    onConfirmationPresented: { removalOrigin = stopWaitingAccount.key },
-                    onStop: { AccountsSettingsInteractions.stopWaiting(for: $0, in: store) },
-                    onDismiss: restoreRemovalFocus
-                )
-                .focused($focusedRemovalAction, equals: account.key)
-            } else if removalState == .failed {
-                Button("Retry") {
-                    Task { @MainActor in
-                        _ = await AccountsSettingsInteractions.removeAccount(row, from: store)
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .accessibilityLabel("Retry removal of \(store.desktopAccountName(for: account))")
-                .focused($focusedRemovalAction, equals: account.key)
-                Button("Cancel") {
-                    store.cancelAccountRemoval(account.key)
-                    removalOrigin = account.key
-                    restoreRemovalFocus()
-                }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
-                    .accessibilityLabel("Cancel removal of \(store.desktopAccountName(for: account))")
-            } else {
-                if account.isBuiltIn {
-                    let builtInActions = AccountsSettingsInteractions.builtInRowActions(for: account, in: store)
-                    let promotion = AccountsSettingsInteractions.promotionState(for: account, in: store)
-                    switch (builtInActions, promotion) {
-                    case (.resetOnly, _):
-                        Button { requestReset(account) } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .font(SettingsType.help)
-                                .frame(width: 22, height: 22)
-                        }
-                        .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
-                        .foregroundStyle(.secondary)
-                        .help("Sign out and set up this account again")
-                        .accessibilityLabel("Sign out and set up \(store.desktopAccountName(for: account)) again")
-                        .focused($focusedRemovalAction, equals: account.key)
-                    case (.resetAndStopTracking, .primary):
-                        Menu {
-                            Button("Sign Out & Set Up Again") { requestReset(account) }
-                            Divider()
-                            Button("Stop Tracking") {
-                                removalOrigin = account.key
-                                removalCandidate = row
-                            }
-                        } label: {
-                            AccountActionsMenuGlyph()
-                        }
-                        .accountActionsMenuChrome()
-                        .help("Account actions")
-                        .accessibilityLabel("Actions for \(store.desktopAccountName(for: account))")
-                        .focused($focusedRemovalAction, equals: account.key)
-                    case (.resetAndStopTracking, .available):
-                        Menu {
-                            Button("Make Main") { makeMain(account) }
-                            Divider()
-                            Button("Sign Out & Set Up Again") { requestReset(account) }
-                            Divider()
-                            Button("Stop Tracking") {
-                                removalOrigin = account.key
-                                removalCandidate = row
-                            }
-                        } label: {
-                            AccountActionsMenuGlyph()
-                        }
-                        .accountActionsMenuChrome()
-                        .help("Account actions")
-                        .accessibilityLabel("Actions for \(store.desktopAccountName(for: account)), including Make Main")
-                        .focused($focusedRemovalAction, equals: account.key)
-                    case (.unavailable, _), (.resetAndStopTracking, .unavailable):
-                        Color.clear
-                            .frame(width: 22, height: 22)
-                            .accessibilityHidden(true)
-                    }
-                } else {
-                    if AccountsSettingsInteractions.promotionState(for: row, in: store) == .available {
-                        Menu {
-                            Button("Make Main") { makeMain(account) }
-                            Divider()
-                            // R2B1: the act deletes this account's sign-in on the Mac, and its
-                            // own confirmation is already `.destructive` — the menu item that
-                            // opens it should look like what it opens. (Stop Tracking stays
-                            // plain: it hides a row and deletes nothing.)
-                            Button("Remove Account", role: .destructive) {
-                                removalOrigin = account.key
-                                removalCandidate = row
-                            }
-                        } label: {
-                            AccountActionsMenuGlyph()
-                        }
-                        .accountActionsMenuChrome()
-                        .help("Account actions")
-                        .accessibilityLabel("Actions for \(store.desktopAccountName(for: account)), including Make Main")
-                        .focused($focusedRemovalAction, equals: account.key)
-                    } else {
-                        Button {
-                            removalOrigin = account.key
-                            removalCandidate = row
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(SettingsType.help)
-                                .frame(width: 22, height: 22)
-                        }
-                        .buttonStyle(HoverButtonStyle(horizontalPadding: 2, verticalPadding: 2))
-                        .foregroundStyle(.secondary)
-                        .help("Remove this account")
-                        .accessibilityLabel("Remove \(store.desktopAccountName(for: account))")
-                        .disabled(removalState == .removing)
-                        .focused($focusedRemovalAction, equals: account.key)
-                    }
+        let ownsLogin = AccountsSettingsInteractions.removalIsDestructive(for: row)
+        let canReset = account.isBuiltIn && store.canResetBuiltInAccount(for: account.providerID)
+            && accountSource(for: row).label == "CLI"
+        let needsReset = if case .stale(let reason) = store.snapshot(for: row.key).freshness {
+            reason.isPermanent
+        } else {
+            false
+        }
+        let merged = AccountsSettingsInteractions.mergedBuiltIn(for: account.providerID, in: store)
+        let showsMerged = merged.map { store.displayProjection(for: account.providerID).mergeMap[$0.key] == row.key } ?? false
+        return Menu {
+            if AccountsSettingsInteractions.promotionState(for: row, in: store) == .available {
+                Button("Make Main") { makeMain(account) }
+            }
+            if canReset && needsReset {
+                Button("Sign Out & Set Up Again") { requestReset(account) }
+            }
+            if showsMerged, let merged {
+                Button("Stop Tracking Default CLI") {
+                    stopTracking(DisplayAccount(account: merged, kind: .engine))
                 }
             }
-    }
-
-    /// R2C21: the `•••` glyph, drawn to the same spec as the row's `arrow.clockwise` and
-    /// `trash` — 11pt **regular**, not semibold. One stroke weight per icon set; the menus
-    /// were the only heavier glyph in the column, which read as emphasis they don't carry.
-    fileprivate struct AccountActionsMenuGlyph: View {
-        var body: some View {
+            Button(AccountsSettingsInteractions.removalActionTitle(for: row), role: ownsLogin ? .destructive : nil) {
+                if ownsLogin {
+                    removalOrigin = row.key
+                    removalCandidate = row
+                } else {
+                    stopTracking(row)
+                }
+            }
+        } label: {
             Image(systemName: "ellipsis")
                 .font(SettingsType.help)
                 .frame(width: 22, height: 22)
         }
+        .accountActionsMenuChrome()
+        .focused($focusedRemovalAction, equals: account.key)
+        .accessibilityLabel("Actions for \(store.desktopAccountName(for: account))")
+        .disabled(setupRowRecovery(for: setupState) == .sessionOnly && SetupSessions.hasActiveHandoff(for: account))
     }
 
-    /// The row-tag capsule shared by "CLI login" and "Same login as X". Tokens live in
-    /// `SettingsPillBadge` so the Menu Bar pane's "Off" tag renders the same badge.
-    private func pillBadge(
-        _ text: String,
-        help helpText: String,
-        accessibilityLabel: String? = nil
+    private func stopTracking(_ row: DisplayAccount) {
+        commitLabel(for: row)
+        Task { @MainActor in
+            let result = await AccountsSettingsInteractions.stopTrackingSource(row, in: store)
+            if result != .removed && result != .setupActive {
+                sourceActionError = "Headroom couldn’t stop tracking this source. Try again."
+            }
+        }
+    }
+
+    @ViewBuilder private func removalRecovery(
+        for row: DisplayAccount, removalState: AccountRemovalState?, setupState: SetupSessionState
     ) -> some View {
-        SettingsPillBadge(text: text)
-            .help(helpText)
-            .accessibilityLabel(accessibilityLabel ?? text)
+        let account = row.account
+        if let stopWaitingAccount = settingsStopWaitingAccount(account, removalState: removalState, setupState: setupState) {
+            StopWaitingButton(
+                account: stopWaitingAccount,
+                onConfirmationPresented: { removalOrigin = account.key },
+                onStop: { AccountsSettingsInteractions.stopWaiting(for: $0, in: store) },
+                onDismiss: restoreRemovalFocus
+            )
+        } else if removalState == .failed {
+            Button("Retry") {
+                Task { @MainActor in
+                    _ = await AccountsSettingsInteractions.removeAccount(row, from: store)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button("Cancel") { store.cancelAccountRemoval(account.key) }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+        }
     }
 
     /// Nil for an account with no known address yet — a row can render before its first
@@ -916,7 +807,6 @@ struct AccountsSettingsTile: View {
 
     @ViewBuilder private func capabilityStatusLabel(
         _ presentation: AccountsSettingsInteractions.CapabilityRowPresentation,
-        snapshot: UsageSnapshot,
         fallbackStatus: AccountStatus,
         setupFailure: String?,
         setupSentence: String?,
@@ -941,22 +831,9 @@ struct AccountsSettingsTile: View {
                 .font(SettingsType.help)
                 .foregroundStyle(.secondary)
         case .retainedUsage:
-            HStack(spacing: 7) {
-                // KTD6.2: the popover row's integer; a row it would hide shows no figure here either.
-                ForEach(Array(snapshot.windows.prefix(2).enumerated()), id: \.offset) { _, window in
-                    Text("\(window.kind.compactName) \(store.usagePercentageMode.displayedPercentage(for: window).map { "\($0)%" } ?? "—")")
-                }
-            }
-            .font(SettingsType.help.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .opacity(0.68)
-            .accessibilityLabel(
-                "Last known usage. " + snapshot.windows.prefix(2).map { window in
-                    store.usagePercentageMode.displayedPercentage(for: window).map {
-                        "\(window.kind.spokenName) \($0) percent \(store.usagePercentageMode.term)"
-                    } ?? "\(window.kind.spokenName) not available"
-                }.joined(separator: ", ")
-            )
+            Text("Last reading retained")
+                .font(SettingsType.help)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -975,8 +852,6 @@ struct AccountsSettingsTile: View {
             // which is the opposite state.
             if let setupWaitingTitle {
                 Text(setupWaitingTitle).font(SettingsType.help).foregroundStyle(.secondary)
-            } else {
-                SettingsSuccessStatus(text: "Connected")
             }
         case .fetching:
             Text("Fetching…")
@@ -1056,20 +931,14 @@ struct AccountsSettingsTile: View {
             if blockedByOpenHandoff { self = .setupActive; return }
             if blocked { self = .blocked; return }
             if setupFailed { self = .setupFailed; return }
+            if waiting { self = .waiting; return }
             switch snapshot.freshness {
             case .live:
                 self = .connected
             case .pending:
-                // Review #6 (2026-09-19 sign-in plan): a reset blanks the row to `.pending`
-                // and an exit-signalled handoff runs no check until Terminal closes, so an
-                // open session has to outrank the blank reading here.
-                self = waiting ? .waiting : .fetching
+                self = .fetching
             case .stale(let reason):
-                if reason.isPermanent {
-                    self = waiting ? .waiting : .needsSignIn
-                } else {
-                    self = .stale
-                }
+                self = reason.isPermanent ? .needsSignIn : .stale
             }
         }
 
@@ -1091,15 +960,18 @@ struct AccountsSettingsTile: View {
 
     /// Create the account and immediately open its official-CLI sign-in so the add
     /// flow is one gesture: click Add → Terminal opens → sign in → row goes live.
-    private func addAccount(for providerID: ProviderID) {
-        _ = withAnimation(
+    private func addAccount(for providerID: ProviderID) -> Bool {
+        withAnimation(
             HeadroomMotion.resolved(HeadroomMotion.reorder, .movement, reduceMotion: reduceMotion)
         ) {
             AccountsSettingsInteractions.addAccount(
                 for: providerID,
                 to: store,
-                openSetup: openSetup(for:)
-            )
+                openSetup: { account in
+                    enableProvider(providerID)
+                    openSetup(for: account)
+                }
+            ) != nil
         }
     }
 
@@ -1139,7 +1011,7 @@ struct AccountsSettingsTile: View {
     /// R12: the ⌘W / pane-switch backstop for focus-loss commit.
     private func commitPendingLabels() {
         guard !labelDrafts.isEmpty else { return }
-        for providerID in store.registeredProviderOrder {
+        for providerID in providerOrder {
             for row in AccountsSettingsInteractions.pendingLabelCommits(
                 drafts: labelDrafts,
                 rows: store.displayAccounts(for: providerID)
@@ -1219,6 +1091,36 @@ struct AccountsSettingsTile: View {
     }
 }
 
+private struct AccountMenuBarBadgeField: View {
+    let value: String
+    let accountLabel: String
+    let onCommit: (String?) -> Void
+    @State private var draft = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        TextField("Badge", text: $draft)
+            .font(SettingsType.help.monospaced())
+            .multilineTextAlignment(.center)
+            .frame(width: 36)
+            .controlSize(.small)
+            .focused($editing)
+            .help("Menu bar badge. Clear it to use the account’s default.")
+            .accessibilityLabel("Menu bar badge for \(accountLabel)")
+            .onAppear { draft = value }
+            .onChange(of: value) { _, value in if !editing { draft = value } }
+            .onChange(of: editing) { _, editing in if !editing { commit() } }
+            .onSubmit { editing = false }
+            .onDisappear { if editing { commit() } }
+    }
+
+    private func commit() {
+        let edited = MenuBarAccountBadge.sanitize(draft)
+        if edited != value { onCommit(edited) }
+        draft = edited ?? value
+    }
+}
+
 private extension View {
     /// R2C21: one control language in the Accounts action column. The `•••` menus get the
     /// same chrome as the `arrow.clockwise` and `trash` glyphs beside them — `.button` menu
@@ -1232,5 +1134,421 @@ private extension View {
             .foregroundStyle(.secondary)
             .menuIndicator(.hidden)
             .fixedSize()
+    }
+}
+
+private struct AccountsColumns<Identity: View, Source: View, Plan: View, Version: View, Badge: View, Actions: View>: View {
+    let showsBadge: Bool
+    @ViewBuilder let identity: () -> Identity
+    @ViewBuilder let source: () -> Source
+    @ViewBuilder let plan: () -> Plan
+    @ViewBuilder let version: () -> Version
+    @ViewBuilder let badge: () -> Badge
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        HStack(spacing: 7) {
+            identity().frame(maxWidth: .infinity, alignment: .leading)
+            source().frame(width: 47, alignment: .leading)
+            plan().frame(width: 102, alignment: .leading)
+            version()
+                .frame(width: 64, alignment: .leading)
+                .padding(.trailing, showsBadge ? 0 : 43)
+            if showsBadge {
+                badge().frame(width: 36)
+            }
+            actions().frame(width: 26)
+        }
+        .padding(.horizontal, 10)
+    }
+}
+
+private struct AccountSourceSheetRequest: Identifiable {
+    let id: ProviderID
+}
+
+private struct SharedT3AccountSources: Sendable {
+    var claudeName: String?
+    var antigravity: T3AntigravityInstall?
+
+    @MainActor static func discover() async -> Self {
+        guard !AppComposition.usesInertAntigravity() else { return Self() }
+        return await Task.detached(priority: .utility) {
+            let installation = T3Installation()
+            return Self(claudeName: installation.claudeInstanceName(), antigravity: installation.antigravity())
+        }.value
+    }
+}
+
+private struct AddAccountSourceSheet: View {
+    private enum Step { case choose, t3, cli, separate }
+    @Environment(\.dismiss) private var dismiss
+    let providerID: ProviderID
+    let displayName: String
+    let store: UsageStore
+    @Binding var t3Sources: SharedT3AccountSources
+    let enableProvider: () -> Void
+    let addSeparateLogin: () -> Bool
+    @State private var step = Step.choose
+    @State private var status: String?
+    @State private var busy = false
+    @State private var folderPath = ""
+    @State private var folderLabel = ""
+
+    private var defaultPath: String { AccountsSettingsInteractions.defaultCLIPath(for: providerID) ?? "" }
+    private var builtIn: ProviderAccount? { store.accounts(for: providerID).first(where: \.isBuiltIn) }
+    private var showsT3: Bool { [.codex, .claude, .antigravity].contains(providerID) }
+    private var sharesBuiltIn: Bool { providerID == .claude || providerID == .antigravity }
+    private var tracksSharedT3: Bool {
+        if providerID == .claude { return store.tracksT3Claude && t3Sources.claudeName != nil }
+        return providerID == .antigravity && store.antigravitySourcePreference == .autoPreferT3 && t3Sources.antigravity != nil
+    }
+    private var tracksDefault: Bool { builtIn != nil && !tracksSharedT3 }
+    private var canChangeBuiltIn: Bool {
+        builtIn.map { !SetupSessions.hasActiveHandoff(for: $0) } ?? true
+    }
+    private var title: String {
+        switch step {
+        case .choose: "Add \(displayName) source"
+        case .t3: "T3 Code · \(displayName)"
+        case .cli: "Existing CLI · \(displayName)"
+        case .separate: "Separate \(displayName) login"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if step != .choose {
+                Button {
+                    navigate(to: .choose)
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(busy)
+            }
+            Text(title).font(.system(size: 15, weight: .semibold))
+            switch step {
+            case .choose: choices
+            case .t3: t3Selector
+            case .cli: existingCLI
+            case .separate: separateLogin
+            }
+            if let status {
+                SettingsHelpText(text: status)
+            }
+            footer
+        }
+        .padding(18)
+        .frame(width: 390)
+    }
+
+    private var choices: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SettingsHelpText(text: "Choose where Headroom should read \(displayName) usage from.")
+            VStack(spacing: 0) {
+                if showsT3 {
+                    choice("T3 Code", detail: "Choose from discovered T3 Code logins", icon: "macwindow", destination: .t3)
+                    Divider()
+                }
+                choice("Existing CLI", detail: "Default \(defaultPath) or another CLI folder", icon: "folder", destination: .cli)
+                Divider()
+                choice("Separate login", detail: "Sign in to a Headroom-managed home via CLI", icon: "terminal", destination: .separate)
+            }
+            .accountSettingsInset(radius: 10)
+        }
+    }
+
+    private func choice(_ title: String, detail: String, icon: String, destination: Step) -> some View {
+        Button {
+            navigate(to: destination)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .frame(width: 28, height: 28)
+                    .accountSettingsInset(radius: 7)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.system(size: 12, weight: .semibold))
+                    SettingsHelpText(text: detail)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AccountSourceOptionStyle())
+    }
+
+    private var t3Selector: some View {
+        let homes = providerID == .codex ? store.discoveredT3CodexAccounts() : []
+        return VStack(alignment: .leading, spacing: 10) {
+            SettingsHelpText(text: "Select a T3 Code login to start or stop tracking it.")
+            let catalog =
+                VStack(spacing: 0) {
+                    if providerID == .codex, !homes.isEmpty {
+                        ForEach(homes) { account in
+                            if account.id != homes.first?.id { Divider() }
+                            let tracked = store.accounts(for: .codex).contains { $0.key == account.key }
+                            let path = account.borrowedHome?.path.abbreviated(userHome: NSHomeDirectory()) ?? ""
+                            let plan = PlanLabelPresentation.displayName(store.snapshot(for: account.key).planLabel, provider: .codex)
+                            trackingChoice(plan.map { "\(account.label) · Codex \($0)" } ?? account.label,
+                                           path: path, tracked: tracked) {
+                                toggleT3Codex(account, tracked: tracked)
+                            }
+                            .disabled(busy || (!tracked && !store.canAddAccount(for: .codex)))
+                        }
+                    } else if providerID == .claude, let name = t3Sources.claudeName {
+                        sharedT3Choice(name, path: defaultPath)
+                    } else if providerID == .antigravity, let install = t3Sources.antigravity {
+                        sharedT3Choice("Antigravity", path: (install.dataDirectory.path as NSString).abbreviatingWithTildeInPath)
+                    } else {
+                        SettingsHelpText(text: "No T3 Code \(displayName) logins found.")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                    }
+                }
+            if providerID == .codex, homes.count > 5 {
+                ScrollView { catalog }
+                    .frame(height: 250)
+                    .accountSettingsInset(radius: 10)
+            } else {
+                catalog.accountSettingsInset(radius: 10)
+            }
+            if providerID == .claude, t3Sources.claudeName != nil {
+                SettingsHelpText(text: "T3 Code and Terminal share the same ~/.claude login.")
+            }
+        }
+    }
+
+    private func sharedT3Choice(_ name: String, path: String) -> some View {
+        trackingChoice(name, path: path, tracked: builtIn != nil && tracksSharedT3) {
+            if tracksSharedT3, let builtIn {
+                stop(builtIn)
+            } else {
+                activateBuiltIn(useT3: true)
+            }
+        }
+        .disabled(busy || !canChangeBuiltIn)
+    }
+
+    private var existingCLI: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SettingsHelpText(text: "Track an existing CLI login without signing in again.")
+            trackingChoice("Default CLI", path: defaultPath, tracked: tracksDefault) {
+                if tracksDefault, let builtIn {
+                    stop(builtIn)
+                } else {
+                    activateBuiltIn(useT3: false)
+                }
+            }
+            .disabled(busy || !canChangeBuiltIn)
+            .accountSettingsInset(radius: 10)
+
+            Text("Or track another CLI config folder")
+                .font(SettingsType.help)
+                .foregroundStyle(.secondary)
+            HStack {
+                TextField("~/path/to/config-home", text: $folderPath)
+                    .accessibilityLabel("CLI config folder path")
+                    .onChange(of: folderPath) { status = nil }
+                Button("Choose Folder…", action: chooseFolder)
+            }
+            TextField("Label (optional)", text: $folderLabel)
+            if providerID != .codex {
+                SettingsHelpText(text: "Headroom supports only the default \(displayName) CLI folder here.")
+            } else if !store.canAddAccount(for: providerID) {
+                SettingsHelpText(text: "Stop tracking an account to add another folder.")
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private func trackingChoice(_ title: String, path: String, tracked: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 12, weight: .semibold))
+                    Text(path)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(path)
+                }
+                Spacer(minLength: 4)
+                Text(tracked ? "Tracking ✓" : "Add")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(tracked ? Color.green : Color.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(tracked ? Color.green.opacity(0.12) : Color.primary.opacity(0.07), in: Capsule())
+                    .fixedSize()
+            }
+            .padding(10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AccountSourceOptionStyle())
+        .accessibilityHint(tracked ? "Stop tracking this login" : "Track this login")
+    }
+
+    private var separateLogin: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if store.accountCapacity(for: providerID) == 1 {
+                SettingsHelpText(text: "\(displayName) supports one CLI account. Use Existing CLI to track that login.")
+            } else if !store.canAddAccount(for: providerID) {
+                SettingsHelpText(text: "Stop tracking an account to make room for a separate login.")
+            } else {
+                SettingsHelpText(text: "Headroom creates an isolated config home and opens Terminal so you can sign in through the official \(displayName) CLI.")
+                if let note = AccountsSettingsInteractions.providerGroupNote(for: providerID) {
+                    SettingsHelpText(text: note)
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if step == .t3 {
+                Button("Rescan", systemImage: "arrow.clockwise", action: rescan).disabled(busy)
+            }
+            Spacer()
+            if step == .t3 {
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            } else if step == .cli {
+                Button("Done", role: .cancel) { dismiss() }
+                Button("Add Folder", action: addFolder)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(busy || providerID != .codex || !store.canAddAccount(for: providerID)
+                              || folderPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } else {
+                Button("Cancel", role: .cancel) { dismiss() }
+                if step == .separate, store.accountCapacity(for: providerID) > 1, store.canAddAccount(for: providerID) {
+                    Button("Add Separate Login") {
+                        if addSeparateLogin() { dismiss() }
+                        else { status = "Headroom couldn’t create a separate login. Try again." }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+    }
+
+    private func navigate(to destination: Step) {
+        status = nil
+        step = destination
+    }
+
+    private func rescan() {
+        busy = true
+        Task { @MainActor in
+            let summary = providerID == .codex ? store.rescanBorrowedHomes() : nil
+            t3Sources = await SharedT3AccountSources.discover()
+            busy = false
+            if let summary, !summary.read {
+                status = "Couldn’t read T3 Code settings. Kept your current accounts."
+            } else {
+                status = "Rescanned T3 Code settings."
+            }
+        }
+    }
+
+    private func toggleT3Codex(_ account: ProviderAccount, tracked: Bool) {
+        if tracked {
+            stop(account)
+        } else if store.restoreBorrowedAccount(account.key) {
+            enableProvider()
+            store.refreshAccountNow(account.key)
+            status = nil
+        } else {
+            status = BorrowedHomeRejection.atCapacity.message
+        }
+    }
+
+    private func activateBuiltIn(useT3: Bool) {
+        guard canChangeBuiltIn else { return }
+        if sharesBuiltIn {
+            if providerID == .claude { store.setTracksT3Claude(useT3) }
+            else { store.setAntigravitySourcePreference(useT3 ? .autoPreferT3 : .systemCLI) }
+        }
+        if providerID == .codex {
+            store.setTracksCLIDefaultAlongsideT3(true)
+        } else if builtIn == nil {
+            store.resumeTrackingBuiltInAccount(for: providerID)
+        }
+        guard let builtIn else {
+            status = "Headroom couldn’t start tracking this login."
+            return
+        }
+        enableProvider()
+        store.refreshAccountNow(builtIn.key)
+        status = nil
+    }
+
+    private func stop(_ account: ProviderAccount) {
+        busy = true
+        Task { @MainActor in
+            let row = DisplayAccount(account: account, kind: .engine)
+            let result = await AccountsSettingsInteractions.stopTrackingSource(row, in: store)
+            busy = false
+            switch result {
+            case .removed: status = nil
+            case .setupActive: status = "Finish or stop the sign-in in progress, then try again."
+            default: status = "Headroom couldn’t stop tracking this source. Try again."
+            }
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.showsHiddenFiles = true
+        panel.prompt = "Choose Folder"
+        if panel.runModal() == .OK, let url = panel.url {
+            folderPath = (url.path as NSString).abbreviatingWithTildeInPath
+        }
+    }
+
+    private func addFolder() {
+        let path = (folderPath.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else {
+            status = "Enter an absolute path or choose a folder."
+            return
+        }
+        switch store.addExternalCodexHome(at: URL(fileURLWithPath: path, isDirectory: true), label: folderLabel) {
+        case .success(let account):
+            enableProvider()
+            store.refreshAccountNow(account.key)
+            dismiss()
+        case .failure(let reason):
+            status = reason.message
+        }
+    }
+}
+
+private struct AccountSourceOptionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.primary.opacity(isEnabled && (hovering || configuration.isPressed) ? 0.06 : 0))
+            .opacity(isEnabled ? 1 : 0.55)
+            .onHover { hovering = $0 }
+    }
+}
+
+private extension View {
+    func accountSettingsInset(radius: CGFloat) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return self
+            .background(Color.primary.opacity(0.035), in: shape)
+            .clipShape(shape)
+            .overlay { shape.strokeBorder(Color.primary.opacity(0.13), lineWidth: 1).allowsHitTesting(false) }
     }
 }

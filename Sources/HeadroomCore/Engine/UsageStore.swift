@@ -1,73 +1,6 @@
 import Foundation
 import Observation
 
-/// Compact, self-contained menu bar summary (R5): the tightest live window plus its
-/// provider identity, so the bar means something without opening the popover.
-public struct MenuBarSummary: Sendable, Equatable {
-    public let text: String            // e.g. "12%"
-    public let providerID: ProviderID? // which provider the number is about
-    public let detail: String?         // e.g. "Claude 5h"
-    public let percentageMode: UsagePercentageMode?
-    public let isNeutral: Bool         // true when no live data yet
-    /// Health of the shown window — tints the glyph by urgency, not brand (UI-03).
-    public let severity: UsageSeverity
-    /// Any provider is permanently stale (needs the user to re-auth in its CLI) — the
-    /// glyph shows a warning dot so a dead provider isn't invisible in the menu bar.
-    public let needsAttention: Bool
-
-    public init(
-        text: String,
-        providerID: ProviderID?,
-        detail: String?,
-        isNeutral: Bool,
-        percentageMode: UsagePercentageMode? = nil,
-        severity: UsageSeverity = .healthy,
-        needsAttention: Bool = false
-    ) {
-        self.text = text
-        self.providerID = providerID
-        self.detail = detail
-        self.isNeutral = isNeutral
-        self.percentageMode = percentageMode
-        self.severity = severity
-        self.needsAttention = needsAttention
-    }
-
-    public static let neutral = MenuBarSummary(text: "—", providerID: nil, detail: nil, isNeutral: true)
-
-    /// Copy of this summary with the menu-bar attention flag set — lets the neutral
-    /// (no-live-data) case still surface a needs-reauth provider.
-    func withAttention(_ flag: Bool) -> MenuBarSummary {
-        MenuBarSummary(text: text, providerID: providerID, detail: detail,
-                       isNeutral: isNeutral, percentageMode: percentageMode,
-                       severity: severity, needsAttention: flag)
-    }
-}
-
-/// One compact status unit for the menu bar. Automatic mode renders one summary;
-/// an explicit provider selection renders one meter per provider.
-public struct MenuBarMeter: Sendable, Equatable {
-    public let summary: MenuBarSummary
-    /// 0...1 fill for the vessel, or nil for the static decorative level.
-    public let fill: Double?
-    /// KTD13: nil fill also means signed out or decorative; only pending means ghost.
-    public let awaitingFirstReading: Bool
-    /// U8 distinguishes a fresh first result from a stale result carrying retained windows.
-    public let isLiveReading: Bool
-    /// Explicit provider pills use this to avoid a first-reading print on Make Main.
-    /// Automatic mode has one stable rendering identity and no single source account.
-    public let sourceAccountKey: AccountKey?
-
-    public init(summary: MenuBarSummary, fill: Double?, awaitingFirstReading: Bool = false,
-                isLiveReading: Bool = false, sourceAccountKey: AccountKey? = nil) {
-        self.summary = summary
-        self.fill = fill
-        self.awaitingFirstReading = awaitingFirstReading
-        self.isLiveReading = isLiveReading
-        self.sourceAccountKey = sourceAccountKey
-    }
-}
-
 private struct ResolvedMenuBarWindow {
     let id: ProviderID
     let window: UsageWindow
@@ -105,6 +38,12 @@ public final class UsageStore {
     public internal(set) var accountsByProvider: [ProviderID: [ProviderAccount]]
     public private(set) var apiSpendSnapshots: [ProviderID: APISpendSnapshot]
     public private(set) var showMenuBarPercentage: Bool
+    public private(set) var menuBarIconStyle: MenuBarIconStyle
+    public private(set) var showAllProviderAccountsInMenuBar: Bool
+    public private(set) var antigravitySourcePreference: AntigravitySourcePreference
+    internal var menuBarBadgeOverrides: [AccountKey: String]
+    public internal(set) var borrowedHomeScanSummary: BorrowedHomeScanSummary?
+    public internal(set) var tracksCLIDefaultAlongsideT3: Bool
     public private(set) var usagePercentageMode: UsagePercentageMode
     /// G1A: account-title ink, mirrored the same way `meterStyle` is. The menu bar and
     /// widgets carry no title ink; the phone's display block does (iPhone parity KTD11).
@@ -197,7 +136,8 @@ public final class UsageStore {
 
     var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
-    private let preferences: Preferences
+    let preferences: Preferences
+    let borrowedHomes: BorrowedHomeEnvironment?
     let accountRegistry: AccountRegistry?
     let accountStorage: any AccountStorageManaging
     let continuityCache: (any UsageContinuityCaching)?
@@ -273,6 +213,20 @@ public final class UsageStore {
     /// order would demote a provider whose built-in was stop-tracked (code-review
     /// finding); this keeps settings/popover/widget provider order stable.
     private let composedProviderOrder: [ProviderID]
+    let composedAccountCapacities: [ProviderID: Int]
+    public private(set) var tracksT3Claude: Bool
+    public internal(set) var observedCLIVersions: [AccountKey: String] = [:]
+
+    /// Explicitly stopped CLI sources remain available to Accounts even at zero rows.
+    public var accountSettingsProviderIDs: Set<ProviderID> {
+        Set(composedProviderOrder).union(registeredProviderOrder)
+    }
+
+    public func setTracksT3Claude(_ enabled: Bool) {
+        guard tracksT3Claude != enabled else { return }
+        preferences.tracksT3Claude = enabled
+        tracksT3Claude = enabled
+    }
 
     public init(
         providers: [any UsageProvider],
@@ -281,6 +235,7 @@ public final class UsageStore {
         accounts: [ProviderAccount]? = nil,
         accountRegistry: AccountRegistry? = nil,
         accountStorage: any AccountStorageManaging = DefaultAccountStorage(),
+        borrowedHomes: BorrowedHomeEnvironment? = nil,
         providerFactory: (@MainActor (ProviderAccount) -> any UsageProvider)? = nil,
         continuityCache: (any UsageContinuityCaching)? = nil,
         defaultLoginRecords: (any DefaultLoginRecordStoring)? = nil,
@@ -297,6 +252,7 @@ public final class UsageStore {
         self.preferences = preferences
         self.accountRegistry = accountRegistry
         self.accountStorage = accountStorage
+        self.borrowedHomes = borrowedHomes
         self.providerFactory = providerFactory
         self.continuityCache = continuityCache
         self.defaultLoginRecordStore = defaultLoginRecords
@@ -307,7 +263,18 @@ public final class UsageStore {
         self.now = now
         self.widgetExporter = widgetExporter
         self.phoneSyncExporter = phoneSyncExporter
-        self.displayNames = Dictionary(providers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        var configuredProviders = providers
+        if let accountRegistry, let providerFactory {
+            let live = Set(providers.map(\.id))
+            for id in accountRegistry.stoppedCLISources.subtracting(live).sorted(by: { $0.raw < $1.raw }) {
+                configuredProviders.append(providerFactory(.builtIn(for: id)))
+            }
+        }
+        self.composedAccountCapacities = Dictionary(
+            configuredProviders.map { ($0.id, $0.accountCapacity) }, uniquingKeysWith: { first, _ in first }
+        )
+        self.tracksT3Claude = preferences.tracksT3Claude
+        self.displayNames = Dictionary(configuredProviders.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
         self.apiSpendDisplayNames = Dictionary(
             apiSpendProviders.map { ($0.id, $0.displayName) },
             uniquingKeysWith: { first, _ in first }
@@ -333,11 +300,21 @@ public final class UsageStore {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        self.accountsByProvider = Self.accountsIndex(providers: providers, accounts: accounts, registry: accountRegistry)
+        let accountIndex = Self.accountsIndex(providers: providers, accounts: accounts, registry: accountRegistry)
+        self.accountsByProvider = accountIndex
         self.apiSpendSnapshots = Dictionary(uniqueKeysWithValues: apiSpendProviders.map {
             ($0.id, .pending(providerID: $0.id, displayName: $0.displayName, periodLabel: preferences.apiSpendPeriod.label))
         })
         self.showMenuBarPercentage = preferences.showMenuBarPercentage
+        self.menuBarIconStyle = preferences.menuBarIconStyle
+        self.showAllProviderAccountsInMenuBar = preferences.showAllProviderAccountsInMenuBar
+        self.antigravitySourcePreference = preferences.antigravitySourcePreference
+        self.tracksCLIDefaultAlongsideT3 = accountRegistry?.tracksCLIDefaultAlongsideT3 ?? false
+        var badges = preferences.menuBarAccountBadges
+        for row in accountIndex[.codex] ?? [] where row.borrowedHome != nil {
+            badges[row.key] = accountRegistry?.borrowedMenuBarBadge(for: row.id)
+        }
+        self.menuBarBadgeOverrides = badges
         self.usagePercentageMode = preferences.usagePercentageMode
         self.accountTitleInk = preferences.accountTitleInk
         self.accountLayout = preferences.accountLayout
@@ -345,7 +322,7 @@ public final class UsageStore {
         self.useEmailAsAccountName = preferences.useEmailAsAccountName
         self.meterStyle = preferences.meterStyle
         let registeredProviderIDs = providers.map(\.id).uniqued()
-        self.composedProviderOrder = registeredProviderIDs
+        self.composedProviderOrder = configuredProviders.map(\.id).uniqued()
         self.menuBarFillSource = preferences.menuBarFillSource.filtered(to: registeredProviderIDs)
         self.savedMenuBarProviderOrder = preferences.menuBarProviderOrder
         if let saved = preferences.widgetPriorityProviders {
@@ -377,7 +354,7 @@ public final class UsageStore {
         for id in registeredProviderOrder { refreshDisplayMerge(for: id, exports: false) }
     }
 
-    private static func restoredSnapshot(
+    static func restoredSnapshot(
         _ cached: UsageSnapshot?,
         for providerID: ProviderID,
         after restorationDate: Date
@@ -751,7 +728,7 @@ public final class UsageStore {
     /// chose that the latest data does not carry is listed with no window, so the picker
     /// can still show it. One entry means there is nothing to choose.
     public func menuBarWindowOptions(for id: ProviderID) -> [MenuBarWindowOption] {
-        let windows = menuBarCandidateWindows(for: id)
+        let windows = menuBarCandidateWindows(from: snapshot(for: id))
         var options = windows.map { window in
             MenuBarWindowOption(choice: .window(id: window.kind.persistentID), window: window)
         }
@@ -776,10 +753,10 @@ public final class UsageStore {
     /// The main account's windows a pill may follow. Codex's Spark counters and Antigravity's
     /// 5-hour rows join only while the popover shows them, so the pill never follows a limit
     /// the popover hides.
-    private func menuBarCandidateWindows(for id: ProviderID) -> [UsageWindow] {
+    private func menuBarCandidateWindows(from snapshot: UsageSnapshot) -> [UsageWindow] {
         AntigravityFiveHourWindows.visibleSnapshot(
             filterCodexSparkCounters(
-                from: snapshot(for: id),
+                from: snapshot,
                 shouldShow: showCodexSparkCountersInApp
             ),
             showsFiveHourWindows: showsAntigravityFiveHourWindows
@@ -898,7 +875,15 @@ public final class UsageStore {
             )]
         }
 
-        let meters = selectedMenuBarProviders.map { providerMenuBarMeter(for: $0) }
+        let meters = selectedMenuBarProviders.flatMap { id in
+            let rows = displayAccounts(for: id).filter { !$0.isRemembered }
+            guard showAllProviderAccountsInMenuBar, rows.count > 1 else {
+                return [providerMenuBarMeter(for: id)]
+            }
+            return rows.map { row in
+                providerMenuBarMeter(for: id, account: row.account, badge: menuBarBadge(for: row.key))
+            }
+        }
         return meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
     }
 
@@ -997,6 +982,7 @@ public final class UsageStore {
     }
 
     private func performRefreshAll(origin: UserRefreshOrigin) async {
+        if borrowedHomes != nil { rescanBorrowedHomes() }
         if origin != .setupCheck { visibleRefreshOperationDepth += 1 }
         defer {
             if origin != .setupCheck {
@@ -1172,6 +1158,10 @@ public final class UsageStore {
         // to neither account for certain. Refused here, before `merge`, so it never
         // reaches the snapshot, the continuity cache or a setup session.
         if result.discard != nil { return false }
+        if let version = result.cliVersion, observedCLIVersions[key] != version,
+           acceptsResult(for: key, attachmentGeneration: attachmentGeneration) {
+            observedCLIVersions[key] = version
+        }
         let isCapabilityFailure = result.capability.map { $0 != .available } == true
         if isCapabilityFailure {
             // A provider-wide discovery failure says nothing about this account. Keep a
@@ -1481,41 +1471,62 @@ public final class UsageStore {
             .min { $0.window.percentRemaining < $1.window.percentRemaining }
     }
 
-    public func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {
-        let needsAttention = providerNeedsAttention(id)
-        guard let resolved = menuBarWindow(for: id) else {
-            let name = displayNames[id] ?? id.raw
-            return MenuBarMeter(
-                summary: MenuBarSummary(
-                    text: "—",
-                    providerID: id,
-                    detail: "\(name) \(menuBarWindowChoice(for: id).menuBarTerm)",
-                    isNeutral: true,
-                    needsAttention: needsAttention
-                ),
-                fill: nil,
-                awaitingFirstReading: snapshot(for: id).freshness == .pending,
-                isLiveReading: snapshot(for: id).freshness == .live,
-                sourceAccountKey: primaryKey(for: id)
-            )
-        }
+    public func setMenuBarIconStyle(_ style: MenuBarIconStyle) {
+        preferences.menuBarIconStyle = style
+        menuBarIconStyle = style
+    }
 
-        let reading = UsageMeterReading(window: resolved.window)
+    public func setShowAllProviderAccountsInMenuBar(_ enabled: Bool) {
+        preferences.showAllProviderAccountsInMenuBar = enabled
+        showAllProviderAccountsInMenuBar = enabled
+    }
+
+    public func setAntigravitySourcePreference(_ preference: AntigravitySourcePreference) {
+        guard preference != antigravitySourcePreference else { return }
+        observedCLIVersions[AccountKey(providerID: .antigravity, accountID: .primary)] = nil
+        preferences.antigravitySourcePreference = preference
+        antigravitySourcePreference = preference
+        guard let key = displayPrimaryKey(for: .antigravity) else { return }
+        invalidateUsageForAccountReset(key)
+        // Selecting a source does not clear that home's sticky sign-out.
+        scheduler.requestPriority(key, origin: .sourceSelection)
+        scheduler.dispatchDue(for: .antigravity)
+    }
+
+    public func providerMenuBarMeter(for id: ProviderID) -> MenuBarMeter {
+        providerMenuBarMeter(for: id, account: nil, badge: nil)
+    }
+
+    private func providerMenuBarMeter(
+        for id: ProviderID, account: ProviderAccount?, badge: String?
+    ) -> MenuBarMeter {
         let name = displayNames[id] ?? id.raw
+        let title = account.map { "\(name) \($0.label)" } ?? name
+        let snapshot = account.map { self.snapshot(for: $0.key) } ?? self.snapshot(for: id)
+        let key = account?.key ?? primaryKey(for: id)
+        let needsAttention: Bool
+        if account == nil {
+            needsAttention = providerNeedsAttention(id)
+        } else if case .stale(let reason) = snapshot.freshness {
+            needsAttention = reason.isPermanent
+        } else {
+            needsAttention = false
+        }
+        let resolved = menuBarWindow(for: id, snapshot: snapshot)
+        let reading = resolved.map { UsageMeterReading(window: $0.window) }
+        let term = resolved?.menuBarTerm ?? menuBarWindowChoice(for: id).menuBarTerm
         return MenuBarMeter(
             summary: MenuBarSummary(
-                text: menuBarText(reading),
-                providerID: id,
-                detail: "\(name) \(resolved.menuBarTerm)",
-                isNeutral: false,
-                percentageMode: usagePercentageMode,
-                severity: reading.severity ?? resolved.window.severity,
+                text: reading.map(menuBarText) ?? "—", providerID: id, detail: "\(title) \(term)",
+                isNeutral: reading == nil, percentageMode: reading == nil ? nil : usagePercentageMode,
+                severity: reading?.severity ?? resolved?.window.severity ?? .healthy,
                 needsAttention: needsAttention
             ),
-            fill: reading.fraction(for: usagePercentageMode),
-            awaitingFirstReading: snapshot(for: id).freshness == .pending,
-            isLiveReading: snapshot(for: id).freshness == .live,
-            sourceAccountKey: primaryKey(for: id)
+            fill: reading?.fraction(for: usagePercentageMode),
+            awaitingFirstReading: snapshot.freshness == .pending, isLiveReading: snapshot.freshness == .live,
+            sourceAccountKey: key,
+            glyph: MenuBarGlyph.kind(style: menuBarIconStyle, providerID: id, isAutomaticSummary: false),
+            badge: badge
         )
     }
 
@@ -1537,11 +1548,12 @@ public final class UsageStore {
     /// closest-to-limit window while keeping the saved choice, so the pill returns to it
     /// automatically. An `.unavailable` retained row has no percentage to show, so it is
     /// neither chosen nor closest.
-    private func menuBarWindow(for id: ProviderID) -> ResolvedMenuBarWindow? {
+    private func menuBarWindow(for id: ProviderID, snapshot: UsageSnapshot? = nil) -> ResolvedMenuBarWindow? {
         guard providerOrder.contains(id) else { return nil }
-        guard snapshot(for: id).freshness != .pending else { return nil }
+        let snapshot = snapshot ?? self.snapshot(for: id)
+        guard snapshot.freshness != .pending else { return nil }
 
-        let windows = menuBarCandidateWindows(for: id).filter { !$0.freshness.isUnavailable }
+        let windows = menuBarCandidateWindows(from: snapshot).filter { !$0.freshness.isUnavailable }
         let choice = menuBarWindowChoice(for: id)
         let window = windows.first(where: { choice.matches($0.kind) })
             ?? windows.min(by: { $0.percentRemaining < $1.percentRemaining })
