@@ -69,3 +69,12 @@ the UI design are done (`design/05-*`). Build it as one feature branch after M1.
 - **Upstreaming:** M0.1 (shadow homes / app-server transport) could be useful upstream. Undecided.
 - **Fork `main`** is still at upstream 1.8. It can be fast-forwarded to upstream or ignored; `t3/dev`
   is the fork's working branch.
+
+## Offline UI capture
+
+While online, run `/Applications/Headroom.app/Contents/MacOS/Headroom --capture-demo`.
+The capture stays on this Mac in `~/Library/Application Support/Headroom/DevCapture/`.
+It can contain account emails and usage. Keep it out of Git.
+
+Quit Headroom, then run `open -a /Applications/Headroom.app --args --demo captured`.
+To replay another local capture, use `--demo "captured=/path/to/capture.json"`.

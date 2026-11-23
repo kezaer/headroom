@@ -536,8 +536,8 @@ struct AccountsSettingsTile: View {
             return ("Separate", (path as NSString).abbreviatingWithTildeInPath)
         }
         if account.providerID == .antigravity, store.antigravitySourcePreference == .autoPreferT3,
-           let install = t3Sources.antigravity {
-            return ("T3 Code", (install.dataDirectory.path as NSString).abbreviatingWithTildeInPath)
+           let path = t3Sources.antigravityPath {
+            return ("T3 Code", path)
         }
         let path = AccountsSettingsInteractions.defaultCLIPath(for: account.providerID)
         let usesT3Claude = account.providerID == .claude && store.tracksT3Claude && t3Sources.claudeName != nil
@@ -1169,13 +1169,20 @@ private struct AccountSourceSheetRequest: Identifiable {
 
 private struct SharedT3AccountSources: Sendable {
     var claudeName: String?
-    var antigravity: T3AntigravityInstall?
+    var antigravityPath: String?
 
     @MainActor static func discover() async -> Self {
+        if let capture = AppComposition.capturedDemo {
+            return Self(claudeName: capture.hasT3Claude ? "Claude" : nil,
+                        antigravityPath: capture.hasT3Antigravity ? "/demo-capture/antigravity" : nil)
+        }
         guard !AppComposition.usesInertAntigravity() else { return Self() }
         return await Task.detached(priority: .utility) {
             let installation = T3Installation()
-            return Self(claudeName: installation.claudeInstanceName(), antigravity: installation.antigravity())
+            let antigravity = installation.antigravity().map {
+                ($0.dataDirectory.path as NSString).abbreviatingWithTildeInPath
+            }
+            return Self(claudeName: installation.claudeInstanceName(), antigravityPath: antigravity)
         }.value
     }
 }
@@ -1201,7 +1208,7 @@ private struct AddAccountSourceSheet: View {
     private var sharesBuiltIn: Bool { providerID == .claude || providerID == .antigravity }
     private var tracksSharedT3: Bool {
         if providerID == .claude { return store.tracksT3Claude && t3Sources.claudeName != nil }
-        return providerID == .antigravity && store.antigravitySourcePreference == .autoPreferT3 && t3Sources.antigravity != nil
+        return providerID == .antigravity && store.antigravitySourcePreference == .autoPreferT3 && t3Sources.antigravityPath != nil
     }
     private var tracksDefault: Bool { builtIn != nil && !tracksSharedT3 }
     private var canChangeBuiltIn: Bool {
@@ -1303,8 +1310,8 @@ private struct AddAccountSourceSheet: View {
                         }
                     } else if providerID == .claude, let name = t3Sources.claudeName {
                         sharedT3Choice(name, path: defaultPath)
-                    } else if providerID == .antigravity, let install = t3Sources.antigravity {
-                        sharedT3Choice("Antigravity", path: (install.dataDirectory.path as NSString).abbreviatingWithTildeInPath)
+                    } else if providerID == .antigravity, let path = t3Sources.antigravityPath {
+                        sharedT3Choice("Antigravity", path: path)
                     } else {
                         SettingsHelpText(text: "No T3 Code \(displayName) logins found.")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1444,6 +1451,10 @@ private struct AddAccountSourceSheet: View {
     }
 
     private func rescan() {
+        if store.isReplayingDemoCapture {
+            status = "Using captured T3 Code logins."
+            return
+        }
         busy = true
         Task { @MainActor in
             let summary = providerID == .codex ? store.rescanBorrowedHomes() : nil
