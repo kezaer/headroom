@@ -71,7 +71,7 @@ extension AccountsSettingsTile {
             AccountsColumns(showsBadge: showsBadge) {
                 accountIdentity(row, email: email, path: source.path, isEditingLabel: isEditingLabel)
             } source: {
-                metadataText(source.label)
+                metadataText(source.kind.rowLabel)
             } plan: {
                 metadataText(planName ?? "")
             } version: {
@@ -86,7 +86,7 @@ extension AccountsSettingsTile {
                     }
                 }
             } actions: {
-                accountMenu(row, setupState: setupState)
+                accountMenu(row, source: source.kind, setupState: setupState)
             }
             if row.isRemembered {
                 if let text = AccountsSettingsInteractions.rememberedStatus(
@@ -129,23 +129,21 @@ extension AccountsSettingsTile {
         }
     }
 
-    func accountSource(for row: DisplayAccount) -> (label: String, path: String?) {
+    private func accountSource(for row: DisplayAccount) -> (kind: AccountSourceKind, path: String?) {
         let account = row.account
         if let home = account.borrowedHome {
-            return (home.source.isT3 ? "T3 Code" : "CLI", home.path.abbreviated(userHome: NSHomeDirectory()))
+            return (home.source.isT3 ? .t3Code : .externalCLI, home.path.abbreviated(userHome: NSHomeDirectory()))
         }
-        if row.isRemembered { return ("CLI", nil) }
+        if row.isRemembered { return (.existingCLI, nil) }
         if !account.isBuiltIn {
             let path = AccountStorage.accountDirectoryURL(for: account).path
-            return ("Separate", (path as NSString).abbreviatingWithTildeInPath)
+            return (.separateLogin, (path as NSString).abbreviatingWithTildeInPath)
         }
-        if account.providerID == .antigravity, store.antigravitySourcePreference == .autoPreferT3,
-           let path = t3Sources.antigravityPath {
-            return ("T3 Code", path)
+        let kind = t3Sources.builtInSource(for: account.providerID, in: store)
+        if account.providerID == .antigravity, kind == .t3Code {
+            return (kind, t3Sources.antigravityPath)
         }
-        let path = AccountsSettingsInteractions.defaultCLIPath(for: account.providerID)
-        let usesT3Claude = account.providerID == .claude && store.tracksT3Claude && t3Sources.claudeName != nil
-        return (usesT3Claude ? "T3 Code" : "CLI", path)
+        return (kind, AccountsSettingsInteractions.defaultCLIPath(for: account.providerID))
     }
 
     private func metadataText(_ value: String) -> some View {
@@ -220,5 +218,15 @@ extension AccountsSettingsTile {
     }
     private func isWaitingForSetup(_ account: ProviderAccount) -> Bool {
         SetupSessions.isWaiting(for: account)
+    }
+}
+
+private extension AccountSourceKind {
+    var rowLabel: String {
+        switch self {
+        case .t3Code: "T3 Code"
+        case .existingCLI, .externalCLI: "CLI"
+        case .separateLogin: "Separate"
+        }
     }
 }

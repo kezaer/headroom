@@ -5,9 +5,7 @@ import Foundation
 public struct DemoCapture: Codable, Equatable, Sendable {
     public static let currentVersion = 1
 
-    public enum Source: String, Codable, Sendable {
-        case t3Code, existingCLI, externalCLI, separateLogin
-    }
+    public typealias Source = AccountSourceKind
 
     public struct Account: Codable, Equatable, Sendable {
         public let provider: ProviderID
@@ -162,10 +160,8 @@ public struct DemoCapture: Codable, Equatable, Sendable {
         case .borrowed(let home): return home.source.isT3 ? .t3Code : .externalCLI
         case .headroomOwned: return .separateLogin
         case .cliDefault:
-            let sharesClaude = account.providerID == .claude && store.tracksT3Claude && hasT3Claude
-            let sharesAntigravity = account.providerID == .antigravity && hasT3Antigravity
-                && store.antigravitySourcePreference == .autoPreferT3
-            return sharesClaude || sharesAntigravity ? .t3Code : .existingCLI
+            return store.builtInAccountSource(for: account.providerID, hasT3Claude: hasT3Claude,
+                                             hasT3Antigravity: hasT3Antigravity)
         }
     }
 

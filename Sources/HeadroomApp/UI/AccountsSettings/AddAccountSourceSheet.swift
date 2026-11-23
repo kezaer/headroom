@@ -10,6 +10,11 @@ struct SharedT3AccountSources: Sendable {
     var claudeName: String?
     var antigravityPath: String?
 
+    @MainActor func builtInSource(for providerID: ProviderID, in store: UsageStore) -> AccountSourceKind {
+        store.builtInAccountSource(for: providerID, hasT3Claude: claudeName != nil,
+                                   hasT3Antigravity: antigravityPath != nil)
+    }
+
     @MainActor static func discover() async -> Self {
         if let capture = AppComposition.capturedDemo {
             return Self(claudeName: capture.hasT3Claude ? "Claude" : nil,
@@ -45,11 +50,9 @@ struct AddAccountSourceSheet: View {
     private var builtIn: ProviderAccount? { store.accounts(for: providerID).first(where: \.isBuiltIn) }
     private var showsT3: Bool { [.codex, .claude, .antigravity].contains(providerID) }
     private var sharesBuiltIn: Bool { providerID == .claude || providerID == .antigravity }
-    private var tracksSharedT3: Bool {
-        if providerID == .claude { return store.tracksT3Claude && t3Sources.claudeName != nil }
-        return providerID == .antigravity && store.antigravitySourcePreference == .autoPreferT3 && t3Sources.antigravityPath != nil
-    }
-    private var tracksDefault: Bool { builtIn != nil && !tracksSharedT3 }
+    private var builtInSource: AccountSourceKind { t3Sources.builtInSource(for: providerID, in: store) }
+    private var tracksSharedT3: Bool { builtInSource == .t3Code }
+    private var tracksDefault: Bool { builtIn != nil && builtInSource == .existingCLI }
     private var canChangeBuiltIn: Bool {
         builtIn.map { !SetupSessions.hasActiveHandoff(for: $0) } ?? true
     }

@@ -89,6 +89,8 @@ extension AccountsSettingsTile {
                 .padding(.leading, 16)
                 .transition(HeadroomMotion.fade(HeadroomMotion.settle, reduceMotion: reduceMotion))
             }
+            // Settings counts all list rows so badges can be edited before they're shown.
+            // UsageStore.menuBarMeters shows badges when the user displays multiple tracked accounts.
             let showsBadge = rows.count > 1
             VStack(spacing: 0) {
                 if rows.isEmpty {

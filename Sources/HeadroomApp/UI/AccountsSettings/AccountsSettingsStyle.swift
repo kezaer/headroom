@@ -1,6 +1,11 @@
 import SwiftUI
 import HeadroomCore
 
+private enum AccountsColumnMetrics {
+    static let badgeWidth: CGFloat = 36
+    static let spacing: CGFloat = 7
+}
+
 struct AccountMenuBarBadgeField: View {
     let value: String
     let accountLabel: String
@@ -12,7 +17,7 @@ struct AccountMenuBarBadgeField: View {
         TextField("Badge", text: $draft)
             .font(SettingsType.help.monospaced())
             .multilineTextAlignment(.center)
-            .frame(width: 36)
+            .frame(width: AccountsColumnMetrics.badgeWidth)
             .controlSize(.small)
             .focused($editing)
             .help("Menu bar badge. Clear it to use the account’s default.")
@@ -57,15 +62,15 @@ struct AccountsColumns<Identity: View, Source: View, Plan: View, Version: View, 
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: AccountsColumnMetrics.spacing) {
             identity().frame(maxWidth: .infinity, alignment: .leading)
             source().frame(width: 47, alignment: .leading)
             plan().frame(width: 102, alignment: .leading)
             version()
                 .frame(width: 64, alignment: .leading)
-                .padding(.trailing, showsBadge ? 0 : 43)
+                .padding(.trailing, showsBadge ? 0 : AccountsColumnMetrics.badgeWidth + AccountsColumnMetrics.spacing)
             if showsBadge {
-                badge().frame(width: 36)
+                badge().frame(width: AccountsColumnMetrics.badgeWidth)
             }
             actions().frame(width: 26)
         }

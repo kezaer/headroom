@@ -23,11 +23,11 @@ func settingsStopWaitingAccount(
 }
 
 extension AccountsSettingsTile {
-    func accountMenu(_ row: DisplayAccount, setupState: SetupSessionState) -> some View {
+    func accountMenu(_ row: DisplayAccount, source: AccountSourceKind, setupState: SetupSessionState) -> some View {
         let account = row.account
         let ownsLogin = AccountsSettingsInteractions.removalIsDestructive(for: row)
         let canReset = account.isBuiltIn && store.canResetBuiltInAccount(for: account.providerID)
-            && accountSource(for: row).label == "CLI"
+            && source == .existingCLI
         let needsReset = if case .stale(let reason) = store.snapshot(for: row.key).freshness {
             reason.isPermanent
         } else {

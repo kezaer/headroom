@@ -32,6 +32,11 @@ public enum AccountOrigin: Sendable, Hashable {
     case borrowed(BorrowedHome)
 }
 
+/// The source presented to the user for an account.
+public enum AccountSourceKind: String, Codable, Sendable {
+    case t3Code, existingCLI, externalCLI, separateLogin
+}
+
 /// The filesystem boundary resolves symlinks before creating this value.
 public struct CanonicalHomePath: Sendable, Hashable, Codable, CustomStringConvertible {
     public let rawPath: String

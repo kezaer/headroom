@@ -224,6 +224,15 @@ public final class UsageStore {
         Set(composedProviderOrder).union(registeredProviderOrder)
     }
 
+    public func builtInAccountSource(
+        for providerID: ProviderID, hasT3Claude: Bool, hasT3Antigravity: Bool
+    ) -> AccountSourceKind {
+        let sharesClaude = providerID == .claude && tracksT3Claude && hasT3Claude
+        let sharesAntigravity = providerID == .antigravity && hasT3Antigravity
+            && antigravitySourcePreference == .autoPreferT3
+        return sharesClaude || sharesAntigravity ? .t3Code : .existingCLI
+    }
+
     public func setTracksT3Claude(_ enabled: Bool) {
         guard tracksT3Claude != enabled else { return }
         preferences.tracksT3Claude = enabled
@@ -881,6 +890,8 @@ public final class UsageStore {
 
         let meters = selectedMenuBarProviders.flatMap { id in
             let rows = displayAccounts(for: id).filter { !$0.isRemembered }
+            // AccountsSettingsTile.providerGroup counts all Settings rows for badge editing.
+            // Menu bar badges distinguish tracked accounts when their meters are shown together.
             guard showAllProviderAccountsInMenuBar, rows.count > 1 else {
                 return [providerMenuBarMeter(for: id)]
             }
