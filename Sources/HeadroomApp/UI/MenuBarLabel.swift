@@ -34,11 +34,13 @@ struct MenuBarLabel: View {
     /// Providers whose pill sloshes (`UsageStore.menuBarUpdatingProviders`). Only the real
     /// status item passes any; the Settings specimens stay still.
     var updatingProviders: Set<ProviderID> = []
+    var updatingAccounts: Set<AccountKey> = []
     var automatic = false
     /// Appearance is independent: Settings follows the live palette but always stays still.
     var motionEnabled = false
     var sourceAccounts: [ProviderID: AccountKey] = [:]
     var probeEndTimes: [ProviderID: Date] = [:]
+    var accountProbeEndTimes: [AccountKey: Date] = [:]
     /// The status item always draws `.standard`; a narrow Settings pill card passes `.compact`.
     var metrics: MenuBarPillMetrics = .standard
 
@@ -67,7 +69,8 @@ struct MenuBarLabel: View {
                 guard input.enabled else { slosh.suspend(); return }
                 slosh.update(meters: input.meters, automatic: input.automatic, updating: input.updating,
                              reduceMotion: input.reduceMotion, sourceAccounts: input.sources,
-                             probeEndTimes: input.ends, clockEnabled: input.pinnedDate == nil, at: input.pinnedDate ?? Date())
+                             probeEndTimes: input.ends, updatingAccounts: input.updatingAccounts,
+                             accountProbeEndTimes: input.accountEnds, clockEnabled: input.pinnedDate == nil, at: input.pinnedDate ?? Date())
             }
             .onDisappear { slosh.suspend() }
     }
@@ -77,14 +80,17 @@ struct MenuBarLabel: View {
         let automatic: Bool
         let enabled: Bool
         let updating: Set<ProviderID>
+        let updatingAccounts: Set<AccountKey>
         let reduceMotion: Bool
         let sources: [ProviderID: AccountKey]
         let ends: [ProviderID: Date]
+        let accountEnds: [AccountKey: Date]
         let pinnedDate: Date?
     }
     private var motionInput: MotionInput {
         MotionInput(meters: meters, automatic: automatic, enabled: motionEnabled,
-                    updating: updatingProviders, reduceMotion: reduceMotion, sources: sourceAccounts, ends: probeEndTimes, pinnedDate: pinnedDate)
+                    updating: updatingProviders, updatingAccounts: updatingAccounts, reduceMotion: reduceMotion,
+                    sources: sourceAccounts, ends: probeEndTimes, accountEnds: accountProbeEndTimes, pinnedDate: pinnedDate)
     }
 
     /// Read inside `body` so SwiftUI's observation tracking re-renders the image the moment
@@ -117,12 +123,14 @@ struct MenuBarStatusLabel: View {
             // specimens follow that same palette with their motion explicitly disabled.
             appearance: .menuBar,
             updatingProviders: store.menuBarUpdatingProviders,
+            updatingAccounts: store.probingAccounts,
             automatic: store.menuBarFillSource.providerIDs == nil,
             motionEnabled: true,
             sourceAccounts: sources,
             probeEndTimes: Dictionary(uniqueKeysWithValues: sources.compactMap { provider, key in
                 ends[key].map { (provider, $0) }
-            })
+            }),
+            accountProbeEndTimes: ends
         )
     }
 }
@@ -253,8 +261,10 @@ struct MenuBarPillMetrics: Equatable, Sendable {
     )
 
     /// The widest plate this pill can draw: a single meter showing "100%", or the bare vessel.
-    func widestPillWidth(showsPercentage: Bool) -> CGFloat {
-        let vessel = CGFloat(MenuBarLabelGeometry.vesselWidth)
+    func widestPillWidth(
+        showsPercentage: Bool, glyphWidth: CGFloat = CGFloat(MenuBarLabelGeometry.vesselWidth)
+    ) -> CGFloat {
+        let vessel = ceil(glyphWidth)
         let text = showsPercentage ? vesselTextGap + widestNumeralWidth : 0
         return 2 * plateHorizontalPadding + vessel + text
     }
@@ -273,7 +283,10 @@ enum MenuBarLabelRenderer {
     // measured image width and the drawn positions cannot disagree (they did: the attention
     // dot's 3pt overhang was drawn but never measured, clipping it on the trailing mark).
     private static let height = CGFloat(MenuBarLabelGeometry.height)
-    private static let vesselWidth = CGFloat(MenuBarLabelGeometry.vesselWidth)
+    // The badge sits on the lower corner, clear of the 5pt top attention dot.
+    private static let badgeFont = NSFont.monospacedSystemFont(ofSize: 7, weight: .semibold)
+    private static let badgePadding: CGFloat = 2
+    private static let badgeHeight: CGFloat = 9
     private static let font = NSFont.monospacedDigitSystemFont(ofSize: MenuBarPillMetrics.standard.numeralSize, weight: .medium)
     private static let compactFont = NSFont.monospacedDigitSystemFont(ofSize: MenuBarPillMetrics.compact.numeralSize, weight: .medium)
 
@@ -295,15 +308,21 @@ enum MenuBarLabelRenderer {
     ) -> MenuBarLabelRenderResult {
         let numeralFont = font(for: metrics)
         let visibleMeters = meters.isEmpty ? [MenuBarMeter(summary: .neutral, fill: nil)] : meters
-        let measured = visibleMeters.map { meter -> (meter: MenuBarMeter, textSize: NSSize?) in
-            guard showsPercentage, !meter.summary.isNeutral else { return (meter, nil) }
-            return (meter, (meter.summary.text as NSString).size(withAttributes: [.font: numeralFont]))
+        let measured = visibleMeters.map { meter in
+            let textSize = showsPercentage && !meter.summary.isNeutral
+                ? (meter.summary.text as NSString).size(withAttributes: [.font: numeralFont]) : nil
+            let badgeWidth = meter.badge.map {
+                ceil(($0 as NSString).size(withAttributes: [.font: badgeFont]).width) + 2 * badgePadding
+            }
+            return (meter: meter, textSize: textSize, badgeWidth: badgeWidth)
         }
         let layout = MenuBarLabelGeometry.layout(
             items: measured.map {
                 MenuBarLabelGeometry.Item(
                     textWidth: $0.textSize.map { Double(ceil($0.width)) },
-                    needsAttention: $0.meter.summary.needsAttention
+                    needsAttention: $0.meter.summary.needsAttention,
+                    glyphWidth: MenuBarGlyph.width(of: $0.meter.glyph),
+                    cornerBadgeWidth: $0.badgeWidth.map { Double($0) }
                 )
             },
             showsPercentage: showsPercentage,
@@ -315,23 +334,25 @@ enum MenuBarLabelRenderer {
         ) { bounds in
             for (item, placement) in zip(measured, layout.placements) {
                 let x = bounds.minX + CGFloat(placement.vesselX)
-                let vessel = VesselGlyph.menuBarImage(
-                    fill: item.meter.fill,
-                    severity: item.meter.summary.severity,
-                    isNeutral: item.meter.summary.isNeutral,
-                    palette: palette,
-                    wavePhase: presentations[MenuBarSlosh.key(for: item.meter, automatic: automatic)]?.wavePhase,
-                    ink: presentations[MenuBarSlosh.key(for: item.meter, automatic: automatic)]?.ink
-                        ?? MenuBarSlosh.staticPresentation(for: item.meter).ink
+                let key = MenuBarSlosh.key(for: item.meter, automatic: automatic)
+                let glyph = MenuBarGlyphImage.image(
+                    for: item.meter, palette: palette,
+                    presentation: presentations[key] ?? MenuBarSlosh.staticPresentation(for: item.meter)
                 )
-                vessel.draw(in: NSRect(x: x, y: 0, width: vesselWidth, height: height))
+                glyph.draw(in: NSRect(
+                    x: x, y: (height - glyph.size.height) / 2,
+                    width: CGFloat(placement.glyphWidth), height: glyph.size.height
+                ))
+                if let badge = item.meter.badge, let width = item.badgeWidth, let badgeX = placement.cornerBadgeX {
+                    drawBadge(badge, x: bounds.minX + CGFloat(badgeX), width: width, palette: palette)
+                }
                 if item.meter.summary.needsAttention {
                     // The dot is a graphic mark, not ink, so it stays on the severity fill
                     // tier — critical red in whichever appearance the menu bar is (L1A).
                     let diameter = CGFloat(MenuBarLabelGeometry.attentionDotDiameter)
                     palette.liquid(for: .critical).menuBarColor.setFill()
                     NSBezierPath(ovalIn: NSRect(
-                        x: x + vesselWidth - CGFloat(MenuBarLabelGeometry.attentionDotInset),
+                        x: x + CGFloat(placement.glyphWidth - MenuBarLabelGeometry.attentionDotInset),
                         y: height - diameter,
                         width: diameter,
                         height: diameter
@@ -359,6 +380,17 @@ enum MenuBarLabelRenderer {
             image: image,
             accessibilityLabel: accessibilityLabel,
             tooltip: accessibilityLabel
+        )
+    }
+
+    private static func drawBadge(_ badge: String, x: CGFloat, width: CGFloat, palette: MenuBarPalette) {
+        let rect = NSRect(x: x, y: 0, width: width, height: badgeHeight)
+        palette.ink.color.menuBarColor.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: badgeHeight / 2, yRadius: badgeHeight / 2).fill()
+        let textColor = palette.isDarkMenuBar ? HeadroomRGBColor.black : .white
+        (badge as NSString).draw(
+            at: NSPoint(x: x + badgePadding, y: (badgeHeight - badgeFont.ascender + badgeFont.descender) / 2),
+            withAttributes: [.font: badgeFont, .foregroundColor: textColor.menuBarColor]
         )
     }
 

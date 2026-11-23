@@ -520,6 +520,13 @@ struct AccountsSettingsTile: View {
                         accessibilityLabel: "\(store.desktopAccountName(for: account)) uses the same login as \(original)"
                     )
                 }
+                if !row.isRemembered,
+                   store.displayAccounts(for: account.providerID).filter({ !$0.isRemembered }).count > 1,
+                   let badge = store.menuBarBadge(for: account.key) {
+                    AccountMenuBarBadgeField(value: badge, accountLabel: account.label) {
+                        store.setMenuBarBadge($0, for: account.key)
+                    }
+                }
                 Spacer(minLength: 8)
                 // R2C11: the status stays in the trailing column whichever silhouette the row
                 // takes. Only the *buttons* drop to a second line when there are two of them.
@@ -1278,6 +1285,36 @@ struct AccountsSettingsTile: View {
             await Task.yield()
             focusedRemovalAction = key
         }
+    }
+}
+
+private struct AccountMenuBarBadgeField: View {
+    let value: String
+    let accountLabel: String
+    let onCommit: (String?) -> Void
+    @State private var draft = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        TextField("Badge", text: $draft)
+            .font(SettingsType.help.monospaced())
+            .multilineTextAlignment(.center)
+            .frame(width: 36)
+            .controlSize(.small)
+            .focused($editing)
+            .help("Menu bar badge. Clear it to use the account’s default.")
+            .accessibilityLabel("Menu bar badge for \(accountLabel)")
+            .onAppear { draft = value }
+            .onChange(of: value) { _, value in if !editing { draft = value } }
+            .onChange(of: editing) { _, editing in if !editing { commit() } }
+            .onSubmit { editing = false }
+            .onDisappear { if editing { commit() } }
+    }
+
+    private func commit() {
+        let edited = MenuBarAccountBadge.sanitize(draft)
+        if edited != value { onCommit(edited) }
+        draft = edited ?? value
     }
 }
 

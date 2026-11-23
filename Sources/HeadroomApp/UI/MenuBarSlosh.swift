@@ -11,7 +11,7 @@ import HeadroomCore
 final class MenuBarSlosh {
     nonisolated static let frameCount = LoadingMotionConstants.sloshFrameCount
 
-    enum MeterKey: Hashable { case provider(ProviderID), automatic }
+    enum MeterKey: Hashable { case provider(ProviderID), account(AccountKey), automatic }
     struct Presentation: Equatable {
         var ink: VesselGlyph.Ink = .solid
         var wavePhase: Int?
@@ -24,8 +24,8 @@ final class MenuBarSlosh {
     init(autoTick: Bool = true) { self.autoTick = autoTick }
     deinit { ticker?.cancel() }
 
-    private var updating: Set<ProviderID> = []
-    private var endedAt: [ProviderID: Date] = [:]
+    private var updating: Set<MeterKey> = []
+    private var endedAt: [MeterKey: Date] = [:]
     private var printStarts: [MeterKey: Date] = [:]
     private var reduceMotion = false
     @ObservationIgnored private var previous: [MeterKey: MenuBarMeter] = [:]
@@ -47,23 +47,35 @@ final class MenuBarSlosh {
 
     func update(meters: [MenuBarMeter], automatic: Bool, updating next: Set<ProviderID>,
                 reduceMotion: Bool, sourceAccounts: [ProviderID: AccountKey] = [:],
-                probeEndTimes: [ProviderID: Date] = [:], clockEnabled: Bool = true, at now: Date) {
-        let changedSources = Set(meters.compactMap { meter -> ProviderID? in
+                probeEndTimes: [ProviderID: Date] = [:], updatingAccounts: Set<AccountKey> = [],
+                accountProbeEndTimes: [AccountKey: Date] = [:], clockEnabled: Bool = true, at now: Date) {
+        let changedSources = Set(meters.compactMap { meter -> MeterKey? in
             guard let provider = meter.summary.providerID,
                   let old = previous[Self.key(for: meter, automatic: automatic)],
                   old.sourceAccountKey != meter.sourceAccountKey else { return nil }
-            return provider
+            return .provider(provider)
         }).union(sourceAccounts.compactMap { provider, source in
-            previousSources[provider].map { $0 != source ? provider : nil } ?? nil
+            previousSources[provider].map { $0 != source ? .provider(provider) : nil } ?? nil
         })
+        let candidates = Set(next.map(MeterKey.provider)).union(updatingAccounts.map(MeterKey.account))
         let visible = automatic && meters.contains(where: \.awaitingFirstReading)
-            ? next.union(updating).union(endedAt.keys) : Set(meters.compactMap { $0.summary.providerID })
-        let next = next.intersection(visible)
+            ? Set(next.map(MeterKey.provider)).union(updating).union(endedAt.keys)
+            : Set(meters.flatMap { meter in
+                if automatic { return meter.summary.providerID.map { [MeterKey.provider($0)] } ?? [] }
+                return [Self.key(for: meter, automatic: false)]
+            })
+        let next = candidates.intersection(visible)
         endedAt = endedAt.filter { visible.contains($0.key) && !changedSources.contains($0.key) }
-        for provider in updating.subtracting(next) where visible.contains(provider) && !changedSources.contains(provider) {
-            endedAt[provider] = probeEndTimes[provider] ?? now
+        for key in updating.subtracting(next) where visible.contains(key) && !changedSources.contains(key) {
+            let ended: Date?
+            switch key {
+            case .provider(let provider): ended = probeEndTimes[provider]
+            case .account(let account): ended = accountProbeEndTimes[account]
+            case .automatic: ended = nil
+            }
+            endedAt[key] = ended ?? now
         }
-        for provider in next { endedAt.removeValue(forKey: provider) }
+        for key in next { endedAt.removeValue(forKey: key) }
         updating = next
         self.reduceMotion = reduceMotion
         var observations: [MeterKey: MenuBarMeter] = [:]
@@ -124,10 +136,14 @@ final class MenuBarSlosh {
                 result.ink = reduceMotion ? .crossfade(frame: frame) : .printing(frame: frame)
             }
         }
-        let providers: Set<ProviderID> = automatic && meter.awaitingFirstReading
-            ? updating.union(endedAt.keys)
-            : Set(meter.summary.providerID.map { [$0] } ?? [])
-        if providers.contains(where: { LoadingMotionClock.isSloshing(active: updating.contains($0),
+        let keys: Set<MeterKey>
+        if automatic {
+            keys = meter.awaitingFirstReading ? updating.union(endedAt.keys)
+                : Set(meter.summary.providerID.map { [MeterKey.provider($0)] } ?? [])
+        } else {
+            keys = [Self.key(for: meter, automatic: false)]
+        }
+        if keys.contains(where: { LoadingMotionClock.isSloshing(active: updating.contains($0),
                                 endedAt: endedAt[$0], now: now, reduceMotion: reduceMotion) }) {
             result.wavePhase = LoadingMotionClock.sloshPhase(at: now)
         }
@@ -139,6 +155,8 @@ final class MenuBarSlosh {
     }
 
     static func key(for meter: MenuBarMeter, automatic: Bool) -> MeterKey {
-        automatic ? .automatic : meter.summary.providerID.map(MeterKey.provider) ?? .automatic
+        if automatic { return .automatic }
+        if meter.badge != nil, let account = meter.sourceAccountKey { return .account(account) }
+        return meter.summary.providerID.map(MeterKey.provider) ?? .automatic
     }
 }

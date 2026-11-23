@@ -40,6 +40,9 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         static let antigravitySignedOut = "antigravitySignedOut"
         static let antigravitySourcePreference = "antigravitySourcePreference"
         static let antigravitySignedOutHomes = "antigravitySignedOutHomes.v1"
+        static let menuBarIconStyle = "menuBarIconStyle"
+        static let showAllProviderAccountsInMenuBar = "showAllProviderAccountsInMenuBar"
+        static let menuBarAccountBadges = "menuBarAccountBadges.v1"
         static let syncToIPhoneEnabled = "syncToIPhoneEnabled"
         static let apiSpendPeriod = "apiSpendPeriod"
         static let settingsPane = "settingsPane"
@@ -314,6 +317,29 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
     public var antigravitySignedOutHomes: Set<String> {
         get { Set(defaults.stringArray(forKey: Key.antigravitySignedOutHomes) ?? []) }
         nonmutating set { defaults.set(newValue.sorted(), forKey: Key.antigravitySignedOutHomes) }
+    }
+
+    public var menuBarIconStyle: MenuBarIconStyle {
+        get {
+            defaults.string(forKey: Key.menuBarIconStyle)
+                .flatMap(MenuBarIconStyle.init(rawValue:)) ?? .providerIcons
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.menuBarIconStyle) }
+    }
+
+    public var showAllProviderAccountsInMenuBar: Bool {
+        get { (defaults.object(forKey: Key.showAllProviderAccountsInMenuBar) as? Bool) ?? true }
+        nonmutating set { defaults.set(newValue, forKey: Key.showAllProviderAccountsInMenuBar) }
+    }
+
+    public var menuBarAccountBadges: [AccountKey: String] {
+        get {
+            guard let data = defaults.data(forKey: Key.menuBarAccountBadges) else { return [:] }
+            return (try? JSONDecoder().decode([AccountKey: String].self, from: data)) ?? [:]
+        }
+        nonmutating set {
+            defaults.set(try? JSONEncoder().encode(newValue), forKey: Key.menuBarAccountBadges)
+        }
     }
 
     public var syncToIPhoneEnabled: Bool {

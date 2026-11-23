@@ -17,7 +17,8 @@ import Foundation
 /// without a status item.
 public enum MenuBarLabelGeometry {
     public static let height: Double = 18
-    public static let vesselWidth: Double = 11
+    public static let vesselWidth = MenuBarGlyph.capsuleWidth
+    public static let cornerBadgeOverlap: Double = 6
     public static let vesselTextGap: Double = 7
     public static let meterGapWithPercentage: Double = 16
     public static let meterGapIconOnly: Double = 8
@@ -29,10 +30,17 @@ public enum MenuBarLabelGeometry {
     /// The part of a meter this layout cannot derive on its own: whether it draws a
     /// percentage (and how wide that text measured) and whether it carries the attention dot.
     public struct Item: Sendable, Equatable {
+        public let glyphWidth: Double
+        public let cornerBadgeWidth: Double?
         public let textWidth: Double?
         public let needsAttention: Bool
 
-        public init(textWidth: Double?, needsAttention: Bool) {
+        public init(
+            textWidth: Double?, needsAttention: Bool,
+            glyphWidth: Double = vesselWidth, cornerBadgeWidth: Double? = nil
+        ) {
+            self.glyphWidth = glyphWidth
+            self.cornerBadgeWidth = cornerBadgeWidth
             self.textWidth = textWidth
             self.needsAttention = needsAttention
         }
@@ -43,10 +51,17 @@ public enum MenuBarLabelGeometry {
         public let vesselX: Double
         /// Leading edge of the percentage, when the meter draws one.
         public let textX: Double?
+        public let glyphWidth: Double
+        public let cornerBadgeX: Double?
 
-        public init(vesselX: Double, textX: Double?) {
+        public init(
+            vesselX: Double, textX: Double?,
+            glyphWidth: Double = vesselWidth, cornerBadgeX: Double? = nil
+        ) {
             self.vesselX = vesselX
             self.textX = textX
+            self.glyphWidth = glyphWidth
+            self.cornerBadgeX = cornerBadgeX
         }
     }
 
@@ -69,8 +84,8 @@ public enum MenuBarLabelGeometry {
     }
 
     /// The trailing edge of `item`'s attention dot, measured from the vessel's leading edge.
-    public static func attentionDotTrailingEdge(vesselX: Double) -> Double {
-        vesselX + vesselWidth - attentionDotInset + attentionDotDiameter
+    public static func attentionDotTrailingEdge(vesselX: Double, glyphWidth: Double = vesselWidth) -> Double {
+        vesselX + glyphWidth - attentionDotInset + attentionDotDiameter
     }
 
     /// `vesselTextGap` is overridable only for the Settings pill card's compact step; the
@@ -85,24 +100,32 @@ public enum MenuBarLabelGeometry {
         for item in items {
             if cursor > 0 { cursor += gap }
             let vesselX = cursor
-            cursor += vesselWidth
+            cursor += item.glyphWidth
+            let badgeX = item.cornerBadgeWidth.map { width in
+                cursor - min(width, cornerBadgeOverlap)
+            }
+            if let badgeX, let width = item.cornerBadgeWidth {
+                cursor = max(cursor, badgeX + width)
+            }
             var textX: Double?
             if let textWidth = item.textWidth {
                 cursor += vesselTextGap
                 textX = cursor
                 cursor += textWidth
             }
-            placements.append(Placement(vesselX: vesselX, textX: textX))
+            placements.append(Placement(
+                vesselX: vesselX, textX: textX, glyphWidth: item.glyphWidth, cornerBadgeX: badgeX
+            ))
             extent = max(extent, cursor)
             if item.needsAttention {
-                extent = max(extent, attentionDotTrailingEdge(vesselX: vesselX))
+                extent = max(extent, attentionDotTrailingEdge(vesselX: vesselX, glyphWidth: item.glyphWidth))
             }
         }
 
         return Layout(
             placements: placements,
             contentWidth: extent,
-            imageWidth: max(vesselWidth, extent.rounded(.up))
+            imageWidth: items.isEmpty ? vesselWidth : extent.rounded(.up)
         )
     }
 }

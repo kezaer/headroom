@@ -181,11 +181,13 @@ struct BorrowedHomesTests {
         #expect(!registry.accounts(for: .codex).contains { $0.isBuiltIn })
         #expect(!registry.isBuiltInHidden(for: .codex))
         registry.renameAccount(pro100.key, to: "My plan")
+        registry.setBorrowedMenuBarBadge("A", for: pro100.id)
         registry.removeAccount(pro100.key)
         let updated = T3CodexHome(instanceID: "a", displayName: "New name", path: first.path, binaryPath: "/new/codex")
         #expect(cache.record(.found([updated, second])))
         #expect(registry.accounts(for: .codex).map(\.label) == ["Pro200"])
         #expect(registry.hiddenBorrowedAccounts(for: .codex).map(\.label) == ["My plan"])
+        #expect(registry.borrowedMenuBarBadge(for: pro100.id) == "A")
         #expect(registry.restoreBorrowedAccount(pro100.key))
         registry.setTracksCLIDefaultAlongsideT3(true)
         #expect(registry.accounts(for: .codex).contains { $0.isBuiltIn })
@@ -251,7 +253,7 @@ struct BorrowedHomesTests {
         #expect(store.hiddenBorrowedAccounts(for: .codex).map(\.key) == [key])
     }
 
-    @Test @MainActor func manualFolderCanBecomeT3WithSameKeyAndContinuity() async throws {
+    @Test @MainActor func manualFolderCanBecomeT3WithSameKeyBadgeAndContinuity() async throws {
         let defaults = try makeDefaults()
         let folder = try fixtureDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -271,6 +273,10 @@ struct BorrowedHomesTests {
         )
         let account = try store.addExternalCodexHome(at: folder, label: "Pro100").get()
         #expect(account.borrowedHome?.source == .manual)
+        #expect(store.menuBarMeters.map(\.badge) == ["M", "100"])
+        #expect(store.menuBarMeters.map(\.glyph) == [.providerMark(.codex), .providerMark(.codex)])
+        store.setMenuBarBadge(" 2k! ", for: account.key)
+        #expect(store.menuBarBadge(for: account.key) == "2K")
         #expect(store.addExternalCodexHome(at: folder, label: nil) == .failure(.alreadyTracked(account.key)))
         await store.waitForAccountProbesToFinish()
         let reading = UsageSnapshot.live(.codex, windows: [
@@ -285,8 +291,13 @@ struct BorrowedHomesTests {
         } == [.manual, .t3Instance(instanceID: "x", displayName: "Changed")])
         #expect(store.accounts(for: .codex).map(\.label) == ["Pro100"])
         #expect(store.snapshot(for: account.key) == reading)
+        #expect(store.menuBarBadge(for: account.key) == "2K")
         store.setTracksCLIDefaultAlongsideT3(true)
         #expect(store.accounts(for: .codex).count == 2)
+        store.setShowAllProviderAccountsInMenuBar(false)
+        #expect(store.menuBarMeters.count == 1)
+        store.setMenuBarIconStyle(.capsules)
+        #expect(store.menuBarMeters.first?.glyph == .capsule)
         #expect(await store.removeAccount(account.key) == .removed)
         #expect(FileManager.default.fileExists(atPath: witness.path))
         settings.scan = .found([])
@@ -295,6 +306,7 @@ struct BorrowedHomesTests {
         let reacquired = try store.addExternalCodexHome(at: folder, label: "Folder").get()
         #expect(await store.removeAccount(reacquired.key) == .removed)
         #expect(FileManager.default.fileExists(atPath: witness.path))
+        #expect(store.menuBarBadge(for: reacquired.key) == nil)
         await store.waitForAccountProbesToFinish()
     }
 

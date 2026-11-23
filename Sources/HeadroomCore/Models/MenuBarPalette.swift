@@ -51,6 +51,13 @@ public struct MenuBarPalette: Sendable, Equatable {
         HeadroomSeverityColorValues.fill(for: severity, dark: isDarkMenuBar, increasedContrast: false)
     }
 
+    public func markTrack(for severity: UsageSeverity, isNeutral: Bool) -> HeadroomTint {
+        if !isNeutral, severity == .critical {
+            return HeadroomTint(color: liquid(for: .critical), opacity: isDarkMenuBar ? 0.30 : 0.26)
+        }
+        return HeadroomTint(color: ink.color, opacity: isDarkMenuBar ? 0.28 : 0.24)
+    }
+
     /// A severity rendered as *ink* — the percentage numeral when the window is low or
     /// critical, and the numeral beside a provider that needs sign-in. This is the text tier,
     /// which parts from the fill tier at critical because the fill red fails at numeral size.

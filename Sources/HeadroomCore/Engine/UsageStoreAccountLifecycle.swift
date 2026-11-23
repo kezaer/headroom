@@ -408,6 +408,11 @@ extension UsageStore {
         bankedResetAcknowledgements?.purge(for: key)
         notificationCoordinator?.purge(for: key)
         continuityCache?.remove(for: key)
+        if let account = accounts(for: key.providerID).first(where: { $0.key == key }),
+           account.borrowedHome == nil, !account.isBuiltIn {
+            setMenuBarBadge(nil, for: key)
+        }
+        menuBarBadgeOverrides.removeValue(forKey: key)
         deferringRememberedRowExport { defaultLoginDidClear(key, removed: key.accountID != .primary) }
         removingAccounts.remove(key)
         accountRemovalStates.removeValue(forKey: key)
@@ -521,6 +526,27 @@ extension UsageStore {
         if reconcileAccounts(for: .codex) { dispatchDueNow(for: .codex) }
     }
 
+    public func menuBarBadge(for key: AccountKey) -> String? {
+        guard accounts(for: key.providerID).contains(where: { $0.key == key }) else { return nil }
+        if let value = menuBarBadgeOverrides[key] { return value }
+        let order = accountRegistry?.storedOrderAccounts(for: key.providerID) ?? accounts(for: key.providerID)
+        guard let index = order.firstIndex(where: { $0.key == key }) else { return nil }
+        return MenuBarAccountBadge.defaultBadge(for: order[index].label, index: index)
+    }
+
+    public func setMenuBarBadge(_ badge: String?, for key: AccountKey) {
+        guard let row = accounts(for: key.providerID).first(where: { $0.key == key }) else { return }
+        let badge = MenuBarAccountBadge.sanitize(badge)
+        if row.borrowedHome != nil {
+            accountRegistry?.setBorrowedMenuBarBadge(badge, for: key.accountID)
+        } else {
+            var badges = preferences.menuBarAccountBadges
+            badges[key] = badge
+            preferences.menuBarAccountBadges = badges
+        }
+        menuBarBadgeOverrides[key] = badge
+    }
+
     @discardableResult
     func reconcileAccounts(for providerID: ProviderID) -> Bool {
         guard let accountRegistry, let providerFactory, accountSettingsProviderIDs.contains(providerID) else { return false }
@@ -545,6 +571,9 @@ extension UsageStore {
                     cached[account.key], for: providerID, after: now()
                 )
                 setupCoordinator?.markReinstated(account.key)
+            }
+            if account.borrowedHome != nil {
+                menuBarBadgeOverrides[account.key] = accountRegistry.borrowedMenuBarBadge(for: account.id)
             }
         }
         accountsByProvider[providerID] = desired

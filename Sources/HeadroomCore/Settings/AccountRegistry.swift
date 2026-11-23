@@ -390,4 +390,15 @@ extension AccountRegistry {
         saveBorrowedDecisions(decisions)
         return true
     }
+
+    public func borrowedMenuBarBadge(for id: AccountID) -> String? {
+        borrowedDecisions().menuBarBadges[id]
+    }
+
+    public func setBorrowedMenuBarBadge(_ badge: String?, for id: AccountID) {
+        var decisions = borrowedDecisions()
+        guard decisions.menuBarBadges[id] != badge else { return }
+        decisions.menuBarBadges[id] = badge
+        saveBorrowedDecisions(decisions)
+    }
 }

@@ -92,10 +92,13 @@ enum PillShelfModel {
     /// drag, the × button and the VoiceOver move actions, and its header keeps only the mark.
     /// Decided by width only, never by the values on screen, so a card never changes form when
     /// a reading changes.
-    static func cardGeometry(cardWidth: CGFloat, showsPercentage: Bool) -> PillCardGeometry {
+    static func cardGeometry(
+        cardWidth: CGFloat, showsPercentage: Bool, iconStyle: MenuBarIconStyle = .capsules
+    ) -> PillCardGeometry {
         let showsName = cardWidth >= nameFloor
+        let glyphWidth = CGFloat(MenuBarGlyph.maximumWidth(for: iconStyle))
         for pill in [MenuBarPillMetrics.standard, .compact]
-        where pill.widestPillWidth(showsPercentage: showsPercentage) + 2 * caretReserve <= cardWidth {
+        where pill.widestPillWidth(showsPercentage: showsPercentage, glyphWidth: glyphWidth) + 2 * caretReserve <= cardWidth {
             return PillCardGeometry(pill: pill, showsCarets: true, showsName: showsName)
         }
         return PillCardGeometry(pill: .compact, showsCarets: false, showsName: showsName)
@@ -250,6 +253,7 @@ struct MenuBarPillArranger<Card: View>: View {
     let notShownHelp: String
     /// Whether the pills draw percentages; with the card width it picks the card geometry.
     let showsPercentage: Bool
+    var iconStyle: MenuBarIconStyle = .capsules
     let onCommit: (PillShelfCommit) -> Void
     /// Draws a card in the form of the given row. A dropped card takes its drop row's form
     /// the moment it is let go, so it morphs while it lands (PS8). Every card shares the one
@@ -293,7 +297,7 @@ struct MenuBarPillArranger<Card: View>: View {
     private var pitch: CGFloat { cardWidth + PillShelfModel.spacing }
 
     private var cardGeometry: PillCardGeometry {
-        PillShelfModel.cardGeometry(cardWidth: cardWidth, showsPercentage: showsPercentage)
+        PillShelfModel.cardGeometry(cardWidth: cardWidth, showsPercentage: showsPercentage, iconStyle: iconStyle)
     }
 
     private var slots: [ProviderID: PillShelfSlot] {

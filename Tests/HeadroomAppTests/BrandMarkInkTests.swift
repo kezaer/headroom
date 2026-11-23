@@ -33,6 +33,7 @@ struct BrandMarkInkTests {
         var top: Double
         var bottom: Double
         var aspect: Double
+        var coverage: Double
     }
 
     private static func inkBox(of name: String) throws -> InkBox {
@@ -52,8 +53,12 @@ struct BrandMarkInkTests {
         let data = try #require(rep.bitmapData)
         let stride = rep.bytesPerRow
         var minX = side, maxX = -1, minY = side, maxY = -1
+        var alphaSum = 0
         for y in 0..<side {
-            for x in 0..<side where data[y * stride + x * 4 + 3] > 25 {
+            for x in 0..<side {
+                let alpha = data[y * stride + x * 4 + 3]
+                alphaSum += Int(alpha)
+                guard alpha > 25 else { continue }
                 minX = min(minX, x); maxX = max(maxX, x)
                 minY = min(minY, y); maxY = max(maxY, y)
             }
@@ -65,7 +70,8 @@ struct BrandMarkInkTests {
             right: (f - Double(maxX + 1)) / f,
             top: Double(minY) / f,
             bottom: (f - Double(maxY + 1)) / f,
-            aspect: svg.size.height > 0 ? svg.size.width / svg.size.height : .nan
+            aspect: svg.size.height > 0 ? svg.size.width / svg.size.height : .nan,
+            coverage: Double(alphaSum) / (f * f * 255)
         )
     }
 
@@ -76,6 +82,18 @@ struct BrandMarkInkTests {
         #expect(box.right < 0.01, "\(name) trailing margin \(box.right)")
         #expect(box.top < 0.01, "\(name) top margin \(box.top)")
         #expect(box.bottom < 0.01, "\(name) bottom margin \(box.bottom)")
+    }
+
+    @Test func codexUsesTheSameBlossomInBothBundles() throws {
+        let blossom = try Self.inkBox(of: "codex-color")
+        #expect(abs(blossom.coverage - 0.369) < 0.01)
+        let app = Self.brandIconsDirectory.appendingPathComponent("codex-color.svg")
+        let shared = Self.brandIconsDirectory.deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("HeadroomSharedResources/BrandIcons.xcassets/CodexBrandIcon.imageset/codex-color.svg")
+        let appBytes = try Data(contentsOf: app)
+        let sharedBytes = try Data(contentsOf: shared)
+        #expect(appBytes == sharedBytes)
     }
 
     /// Grok and Cursor ship a light/dark pair. Both are the same path with a different fill,

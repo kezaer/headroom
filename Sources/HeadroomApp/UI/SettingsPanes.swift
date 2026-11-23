@@ -315,7 +315,7 @@ struct MenuBarSettingsPane: View {
                 ScrollView(.vertical) {
                     SettingsTile("Your Pills") {
                         arranger
-                        SettingsHelpText(text: "Uses each provider’s main account. Removing a pill keeps its account connected.")
+                        iconOptions
                         if !isAuto {
                             Button("Use one automatic summary pill instead…") {
                                 animatingPills { store.setMenuBarFillSource(.auto) }
@@ -347,7 +347,7 @@ struct MenuBarSettingsPane: View {
             HStack(alignment: .firstTextBaseline) {
                 SettingsGroupLabel("Menu bar preview")
                 Spacer(minLength: 8)
-                Text(store.menuBarFillSource == .auto ? "Automatic summary" : selected.count == 1 ? "1 pill" : "\(selected.count) pills")
+                Text(store.menuBarFillSource == .auto ? "Automatic summary" : store.menuBarMeters.count == 1 ? "1 pill" : "\(store.menuBarMeters.count) pills")
                     .font(SettingsType.help)
                     .foregroundStyle(.secondary)
             }
@@ -440,6 +440,24 @@ struct MenuBarSettingsPane: View {
                      fill: Double(value) / 100)
     }
 
+    private var iconOptions: some View {
+        VStack(alignment: .leading, spacing: SettingsMetrics.withinGroup) {
+            Picker("Pill icon", selection: Binding(get: { store.menuBarIconStyle }, set: store.setMenuBarIconStyle)) {
+                Text("Provider icons").tag(MenuBarIconStyle.providerIcons)
+                Text("Capsules").tag(MenuBarIconStyle.capsules)
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 220)
+            SettingsSwitchRow(
+                title: "Show all accounts for selected providers",
+                isOn: Binding(
+                    get: { store.showAllProviderAccountsInMenuBar },
+                    set: store.setShowAllProviderAccountsInMenuBar
+                )
+            )
+        }
+    }
+
     private var arranger: some View {
         VStack(alignment: .leading, spacing: SettingsMetrics.withinGroup) {
             VStack(alignment: .leading, spacing: SettingsMetrics.labelToControl) {
@@ -461,6 +479,7 @@ struct MenuBarSettingsPane: View {
                     ? "Each value sets what the summary follows for that provider."
                     : "Drag one up, or press +.",
                 showsPercentage: store.showMenuBarPercentage,
+                iconStyle: store.menuBarIconStyle,
                 onCommit: commit,
                 card: { id, presentation, geometry in providerCard(id, presentation: presentation, geometry: geometry) }
             )
