@@ -1,0 +1,220 @@
+// =============================================================================
+// Synthesized Architecture Sketch — Headroom × T3 Shadow Homes
+// Base: Candidate 2 ("borrowed homes") + Grafts from Candidate 1, Cross-Judge & User Decisions
+// =============================================================================
+//
+// MODULE MAP
+//
+// HeadroomCore/Models (Foundation-only — compiled into macOS, iOS, Widgets)
+//   Account.swift                 [edit] AccountOrigin, BorrowedHome, BorrowedHomeSource,
+//                                        CanonicalHomePath, AccountID.borrowedHome(_:),
+//                                        ProviderAccount.origin (computed isBuiltIn)
+//   AccountRowPolicy.swift        [new]  Pure per-origin Settings policy (badge, removal copy, path)
+//   MenuBarGlyph.swift            [new]  MenuBarIconStyle, MenuBarGlyphKind, MenuBarAccountBadge,
+//                                        MenuBarGlyph.size(of:) (clamped ≤15.5pt -> ceil ≤16pt)
+//   MenuBarLabelGeometry.swift    [edit] Per-item glyphWidth + cornerBadgeWidth + trailing overhang
+//   MenuBarPalette.swift          [edit] markTrack(for:isNeutral:) (neutral + critical-tinted track)
+//   BrandColorValues.swift        [edit] Update Codex mark aspect/coverage for OpenAI round blossom
+//   ProviderSetup.swift           [edit] codexSignedOutInT3, codexSignedOutInFolder,
+//                                        codexAppServerUnsupported, codexAPIKeyHome,
+//                                        antigravitySignedOutInT3
+//
+// HeadroomCore/Settings (Foundation-only — compiled into macOS, iOS, Widgets)
+//   BorrowedHomes.swift           [new]  T3CodexHome, T3CodexScan, T3DiscoveryCache (t3CodexDiscovery.v1),
+//                                        BorrowedHomeDecisions (borrowedCodexHomes.v1 incl. menuBarBadges),
+//                                        BorrowedHomeRoster.resolve, BorrowedHomeRejection
+//   AccountRegistry.swift         [edit] PersistedAccount (Release 1.6.2 shape), merge BorrowedHomeRoster,
+//                                        route rename/remove by origin, badge storage, hidden/restore
+//   Preferences.swift             [edit] menuBarIconStyle (default .providerIcons),
+//                                        showAllProviderAccountsInMenuBar (default true),
+//                                        menuBarAccountBadges (for non-borrowed accounts),
+//                                        antigravitySourcePreference (.autoPreferT3 | .systemCLI),
+//                                        antigravitySignedOutHome (per-home sticky sign-out)
+//
+// HeadroomCore/Providers (macOS-only)
+//   T3Installation.swift          [new]  Single read-only view of ~/.t3 (settings.json + antigravity active.json
+//                                        + stat-only antigravity-oauth-token precondition)
+//   BorrowedHomePaths.swift       [new]  realpath canonicalize + validate folder; BorrowedHomeEnvironment
+//   CodexLimits.swift             [new]  Shared CodexLimitWindow / CodexLimitBucket / CodexWindowMapping
+//   CodexAppServerProvider.swift  [new]  Closed 4-message NDJSON exchange + before/after account/read bracket
+//                                        + CodexAppServerClassifier + CodexAppServerProvider (.serial lane)
+//   CodexProvider.swift           [edit] Reuse CodexWindowMapping for wham/usage buckets
+//   ProviderAccountConfiguration.swift [edit] codexTransport (.authFile | .appServer) derived from origin
+//   AccountStorage.swift          [edit] Compile-time gates: HeadroomOwnedHome & SetupCapableAccount
+//   AntigravityLaunch.swift       [new]  AntigravityLaunchPlan, AntigravitySignInHome, ProbeHomeLinker
+//                                        (atomic temp-symlink + rename, fail-closed), AntigravityLaunchResolver
+//   AntigravityUsageSource.swift  [edit] resolveLaunch, HOME override, per-home sticky signedOut
+//
+// HeadroomCore/Engine (macOS-only)
+//   UsageStore.swift              [edit] menuBarIconStyle, showAllProviderAccountsInMenuBar,
+//                                        antigravitySourcePreference, multi-account menuBarMeters + badges
+//   UsageStoreAccountLifecycle.swift [edit] reconcileAccounts (detach-without-purge on T3 absence,
+//                                        swapProvider on origin metadata change), addExternalCodexHome,
+//                                        rescanBorrowedHomes, restoreBorrowedAccount, setMenuBarBadge,
+//                                        setTracksCLIDefaultAlongsideT3
+//
+// HeadroomApp (macOS UI, Assets & Composition — surgical, verified against every caller)
+//   Resources/BrandIcons/codex-color.svg + HeadroomSharedResources/.../CodexBrandIcon.imageset/codex-color.svg
+//                                 [edit] OpenAI round blossom SVG (24×24 trimmed)
+//   HeadroomApp.swift             [edit] Launch T3 scan, makeCodexProvider switch on codexTransport,
+//                                        AntigravityLaunchResolver, --probe-codex --codex-home <path>
+//   UI/MenuBarGlyphImage.swift    [new]  Unified severity-filled renderer for .capsule and .providerMark
+//                                        (alpha mask + critical track + slosh + ghost + 4-frame print + corner badge)
+//   UI/MenuBarLabel.swift         [edit] Render meter.glyph + meter.badge via MenuBarLabelGeometry
+//   UI/MenuBarPillArranger.swift  [edit] Pass MenuBarGlyph.maximumWidth(for:) into MenuBarPillMetrics
+//   UI/SettingsRows.swift         [edit] MenuBarPreviewPill uses meter.glyph
+//   UI/SettingsPanes.swift        [edit] MenuBarSettingsPane: Icon style (Provider icons vs Capsules) +
+//                                        multi-account pills toggle
+//   UI/AccountsSettingsTile.swift [edit] Codex: T3 badges, Rescan T3, + Add Source... (T3 / Folder / Separate),
+//                                        editable menu-bar badge chip, Hidden restore, Also track ~/.codex;
+//                                        Antigravity: T3 Code (auto) / System agy CLI segmented picker
+//   UI/AccountsSettingsInteractions.swift [edit] Route copy/actions via AccountRowPolicy
+//   UI/SetupSessions.swift + UI/CodexSetupViews.swift [edit] Accept SetupCapableAccount; no ensureDirectories for borrowed
+// =============================================================================
+
+import Foundation
+
+#if false
+
+// 1. Models/Account.swift
+public enum AccountOrigin: Sendable, Hashable {
+    case cliDefault
+    case headroomOwned
+    case borrowed(BorrowedHome)
+}
+
+public struct CanonicalHomePath: Sendable, Hashable, Codable, CustomStringConvertible {
+    public let rawPath: String
+    public init?(trustedCanonical rawPath: String) { fatalError("not implemented") }
+    public var url: URL { URL(fileURLWithPath: rawPath, isDirectory: true) }
+    public func abbreviated(userHome: String) -> String { fatalError("not implemented") }
+    public var description: String { rawPath }
+}
+
+public enum BorrowedHomeSource: Sendable, Hashable, Codable {
+    case t3Instance(instanceID: String, displayName: String?)
+    case manual
+}
+
+public struct BorrowedHome: Sendable, Hashable, Codable {
+    public let path: CanonicalHomePath
+    public let source: BorrowedHomeSource
+    public let preferredExecutable: String?
+}
+
+extension AccountID {
+    /// Deterministic pure-Swift FNV-1a-64 ID: `"home-<16-hex>"`.
+    public static func borrowedHome(_ path: CanonicalHomePath) -> AccountID { fatalError("not implemented") }
+}
+
+// 2. Models/MenuBarGlyph.swift
+public enum MenuBarIconStyle: String, Sendable, CaseIterable, Identifiable, Codable {
+    case providerIcons
+    case capsules
+    public var id: String { rawValue }
+}
+
+public enum MenuBarGlyphKind: Sendable, Hashable {
+    case capsule
+    case providerMark(ProviderID)
+}
+
+public struct MenuBarGlyphSize: Sendable, Equatable {
+    public let width: Double
+    public let height: Double
+}
+
+public enum MenuBarGlyph {
+    public static let maxMarkDimension: Double = 15.5
+    public static let capsuleWidth: Double = 11.0
+
+    public static func kind(
+        style: MenuBarIconStyle,
+        providerID: ProviderID?,
+        isAutomaticSummary: Bool
+    ) -> MenuBarGlyphKind { fatalError("not implemented") }
+
+    /// Derived from `HeadroomBrandMark.inkAspect`, clamped so `max(width, height) <= 15.5`
+    /// and rounded up to whole/half points (width ceiling <= 16pt so compact cards fit 62pt).
+    public static func size(of kind: MenuBarGlyphKind) -> MenuBarGlyphSize { fatalError("not implemented") }
+    public static func width(of kind: MenuBarGlyphKind) -> Double { size(of: kind).width }
+    public static func maximumWidth(for style: MenuBarIconStyle) -> Double {
+        style == .capsules ? capsuleWidth : 16.0
+    }
+}
+
+/// Pure default + sanitization rules for editable short corner badges on multi-sub menu bar pills.
+/// Examples: "Pro100" -> "100", "Pro200" -> "200", "Work" -> "W", fallback -> "1", "2".
+public enum MenuBarAccountBadge {
+    public static let maxLength = 4
+    public static func sanitize(_ raw: String?) -> String? { fatalError("not implemented") }
+    public static func defaultBadge(for label: String, index: Int) -> String { fatalError("not implemented") }
+}
+
+// 3. Settings/Preferences.swift — Antigravity source selector
+public enum AntigravitySourcePreference: String, Sendable, CaseIterable, Identifiable, Codable {
+    case autoPreferT3
+    case systemCLI
+    public var id: String { rawValue }
+}
+
+// 4. Settings/BorrowedHomes.swift — Two single-writer stores + pure merge
+public struct T3CodexHome: Sendable, Hashable, Codable {
+    public let instanceID: String
+    public let displayName: String?
+    public let path: CanonicalHomePath
+    public let binaryPath: String?
+}
+
+public enum T3CodexScan: Sendable, Equatable {
+    case notInstalled
+    case found([T3CodexHome])
+    case unreadable
+}
+
+public struct BorrowedHomeDecisions: Sendable, Equatable, Codable {
+    public struct ManualHome: Sendable, Equatable, Codable {
+        public let path: CanonicalHomePath
+        public let addedAt: Date
+    }
+    public var manualHomes: [ManualHome] = []
+    public var labels: [AccountID: String] = [:]
+    public var menuBarBadges: [AccountID: String] = [:]
+    public var hidden: Set<AccountID> = []
+    public var tracksCLIDefaultAlongsideT3 = false
+}
+
+// 5. Providers/AccountStorage.swift — Compile-time safety gates
+public struct HeadroomOwnedHome: Sendable, Hashable {
+    public let account: ProviderAccount
+    public init?(_ account: ProviderAccount) {
+        guard account.origin == .headroomOwned else { return nil }
+        self.account = account
+    }
+}
+
+public enum SetupCapableAccount: Sendable, Hashable {
+    case cliDefault(ProviderAccount)
+    case owned(HeadroomOwnedHome)
+    public init?(_ account: ProviderAccount) { fatalError("not implemented") }
+    public var account: ProviderAccount { fatalError("not implemented") }
+}
+
+// 6. Providers/CodexAppServerProvider.swift — Closed 4-message JSON-RPC protocol
+enum CodexAppServerMessage: CaseIterable, Sendable {
+    case initialize      // {clientInfo: {name: "headroom", version}}
+    case initialized     // notification
+    case accountRead     // {refreshToken: false}
+    case rateLimitsRead  // {excludeResetCreditDetails: true}
+}
+
+// 7. Providers/T3Installation.swift — Single read-only view of ~/.t3
+//    - scanCodexHomes() -> T3CodexScan
+//    - antigravity() -> T3AntigravityInstall? (requires executable + dataDir + stat-only oauth token fileExists)
+
+// 8. Engine/UsageStoreAccountLifecycle.swift — Non-purging detach for T3 absence
+//    - reconcileAccounts(for: .codex) detaches disappeared T3 rows WITHOUT purging continuity,
+//      UseItUpLedger, or banked-reset baselines (only explicit user Remove/Forget purges).
+//    - swapProvider(_ account:) replaces provider in place preserving snapshots/history.
+
+#endif

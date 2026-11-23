@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Accounts · Headroom Settings</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font:13px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,var(--font-sans,sans-serif);
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+}
+:root{
+  color-scheme:light dark;
+  --ink:var(--foreground,light-dark(#1d1e22,#f0f0f3));
+  --sub:var(--muted-foreground,light-dark(#63646c,#9a9ba5));
+  --faint:var(--muted-foreground,light-dark(#62636a,#afb0b9));
+  --tile:var(--card,light-dark(#fbfbfc,#25262a));
+  --surface:light-dark(#ffffff,#2b2c31);
+  --wash:var(--secondary,light-dark(#ededf0,#313238));
+  --line:var(--border,light-dark(#dedee2,#414247));
+  --line-strong:color-mix(in srgb,var(--ink) 16%,transparent);
+  --well:color-mix(in srgb,var(--ink) 4%,transparent);
+  --sheet:var(--popover,light-dark(#ffffff,#2c2d32));
+  --focus:var(--ring,light-dark(#3776c5,#86b3ff));
+  --accent-green:light-dark(#2e9e52,#37b25f);
+  --accent-green-hover:light-dark(#278946,#31a155);
+  --ok-ink:light-dark(#26733f,#8ad6a2);
+  --ok-bg:light-dark(#e3f3e8,#263b2d);
+  --danger:light-dark(#c62828,#ff8a80);
+}
+
+.shell{display:grid;grid-template-columns:clamp(155px,25%,210px) minmax(0,1fr);max-width:900px;margin:auto}aside{background:linear-gradient(145deg,color-mix(in srgb,var(--wash) 90%,#a7adb4),var(--wash) 68%);border-radius:var(--radius,12px);padding:13px 9px 18px;align-self:stretch}main{min-width:0;padding:32px 0 8px 20px}
+.lights{display:flex;gap:7px;margin:0 0 17px 7px}.lights i{width:10px;height:10px;border-radius:50%;box-shadow:inset 0 0 0 1px #0002;background:#ef6861}.lights i:nth-child(2){background:#ecbd50}.lights i:last-child{background:#64bd62}
+.identity{display:flex;align-items:center;gap:9px;margin:0 7px 18px}.identity svg{height:28px;width:28px;border-radius:7px}.identity strong{font-size:14px;letter-spacing:-.2px}.identity small{display:block;color:var(--sub);font-size:10px}
+.navgroup{font-size:10px;font-weight:600;color:var(--sub);margin:14px 8px 4px}.navrow{display:flex;align-items:center;gap:9px;padding:6px 8px;line-height:17px;border-radius:6px;font-size:12px}.navrow svg,.glyph{width:16px;height:16px;flex:none;display:inline-block;vertical-align:middle}.selected{background:color-mix(in srgb,var(--ink) 10%,transparent);font-weight:600}
+h1,h2,p{margin:0}
+h1{font-size:20px;letter-spacing:-.3px;line-height:28px;font-weight:650;margin-bottom:10px}
+.tile{
+  background:var(--tile);
+  border:1px solid var(--line);
+  border-radius:var(--radius,11px);
+  padding:16px;
+  box-shadow:inset 0 1px 0 #fff1,0 1px 2px #0001;
+}
+.intro{margin-bottom:12px;max-width:460px}
+.prefs{padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.prefs .sub{margin-top:4px}
+.prefs label{font-size:12px;font-weight:500}
+.sub{font-size:11.5px;color:var(--sub);line-height:1.45}
+
+.group+.group{margin-top:18px}
+.group.is-off .identity-col,.group.is-off .mark{color:var(--sub)}
+.bar,.spread,.bar-right{display:flex;align-items:center}
+.bar{gap:7px;min-height:26px;margin-bottom:7px}
+.bar-right{margin-left:auto;gap:8px}
+.mark{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex:none}
+.mark svg{display:block;width:15px;height:15px}
+.bar h2{font-size:13px;font-weight:650;letter-spacing:-.1px}
+.count{font-size:11px;color:var(--sub);font-variant-numeric:tabular-nums}
+.spread{justify-content:space-between;gap:10px}
+
+.provider-list{
+  border:1px solid var(--line);
+  border-radius:9px;
+  background:var(--well);
+  overflow:hidden;
+  transition:opacity .15s;
+}
+
+/* All providers share the same starting edges for identity, source, plan and CLI version. */
+.colhead,.account{
+  display:grid;
+  align-items:center;
+  column-gap:7px;
+  padding-inline:10px;
+}
+/* Keep all three metadata tracks aligned when the badge field appears. */
+.provider-list{container-type:inline-size}
+.colhead,.account,.colhead.has-badge,.account.has-badge{
+  --identity:clamp(125px,36cqi,220px);
+  grid-template-columns:var(--identity) 48px 83px minmax(0,1fr) 24px;
+}
+.colhead.has-badge,.account.has-badge{
+  grid-template-columns:var(--identity) 48px 83px minmax(0,1fr) 36px 24px;
+}
+.colhead{
+  padding-block:5px;
+  color:var(--sub);
+  font-size:10px;font-weight:550;
+  border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--ink) 2%,transparent);
+}
+.col-badge{text-align:center}
+.account{padding-block:9px;min-height:48px}
+.account+.account{border-top:1px solid var(--line)}
+.empty-row{padding:10px 12px;font-size:11.5px;color:var(--sub)}
+.meta{font-size:10.75px;color:color-mix(in srgb,var(--sub) 77%,var(--ink));white-space:nowrap}
+.source{font-weight:500}
+.version{font:10px/1.4 var(--font-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums}
+.identity-col{min-width:0}
+.editable{
+  display:block;
+  width:100%;min-width:2ch;max-width:100%;
+  font-size:12.5px;font-weight:600;line-height:1.3;
+  padding:1px 4px;margin-left:-4px;
+  color:var(--ink);border:0;background:transparent;border-radius:4px;
+  text-overflow:ellipsis;white-space:nowrap;overflow:hidden;
+}
+.editable:hover,.editable:focus{background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.email{
+  margin-top:1px;font-size:11px;color:var(--sub);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.path,code{font-family:var(--font-mono,ui-monospace,SFMono-Regular,monospace);font-size:10px}
+.path{
+  color:var(--faint);margin-top:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+.badge-cell{display:flex;justify-content:center}
+.badge{
+  text-align:center;
+  border:1px solid var(--line-strong);
+  border-radius:5px;
+  background:var(--surface);
+  width:36px;height:22px;padding:0 2px;
+  font:600 11px/20px var(--font-mono,ui-monospace,SFMono-Regular,monospace);
+}
+
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+.btn,.field{
+  border:1px solid var(--line-strong);
+  background:var(--surface);
+  border-radius:6px;
+  box-shadow:0 1px 1px #0001;
+}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  font-size:11.5px;font-weight:500;line-height:1;
+  height:24px;padding:0 9px;
+}
+.btn:hover{background:var(--wash)}
+.btn.lg{height:28px;padding:0 12px;font-size:12px;border-radius:7px}
+.btn.primary{background:var(--ink);color:var(--tile);border-color:transparent}
+.btn.primary:hover{opacity:.88;background:var(--ink)}
+.btn.destructive{color:var(--danger)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+button:disabled{cursor:default;opacity:.45}
+
+.switch{
+  appearance:none;margin:0;width:28px;height:16px;flex:none;
+  border-radius:12px;background:color-mix(in srgb,var(--ink) 22%,transparent);
+  position:relative;cursor:pointer;border:0;box-shadow:none;
+}
+.switch:before{
+  content:"";position:absolute;left:2px;top:2px;width:12px;height:12px;
+  background:#fff;border-radius:50%;box-shadow:0 1px 2px #0004;
+}
+.switch:checked{background:var(--accent-green)}
+.switch:checked:before{left:14px}
+
+.more{
+  background:transparent;border:0;box-shadow:none;
+  width:24px;height:24px;padding:0;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:5px;color:var(--sub);
+}
+.more:hover{background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink)}
+.more svg{width:15px;height:15px}
+.off-note{font-size:11px;color:var(--faint);margin-top:5px;padding-left:2px}
+
+/* Centered macOS sheet dialog (crisp concentric radii, even padding, proper backdrop) */
+dialog{
+  border:1px solid var(--line-strong);
+  background:var(--sheet);
+  color:var(--ink);
+  padding:18px;
+  border-radius:14px;
+  box-shadow:0 22px 54px rgba(0,0,0,.45),0 2px 8px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.06);
+  width:min(368px,calc(100% - 32px));
+  margin:auto;
+}
+dialog:focus{outline:none}
+dialog::backdrop{
+  background:rgba(0,0,0,.32);
+  backdrop-filter:blur(2px);
+}
+dialog.compact-menu{
+  padding:5px;
+  width:214px;
+  border-radius:10px;
+  margin:0;
+  box-shadow:0 12px 32px rgba(0,0,0,.38),0 1px 4px rgba(0,0,0,.2);
+}
+dialog.compact-menu::backdrop{background:transparent;backdrop-filter:none}
+
+.editable:read-only{cursor:default}
+.dlg-top{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+.back-btn{
+  border:0;background:transparent;box-shadow:none;
+  padding:3px 6px 3px 2px;margin-left:-4px;
+  color:var(--sub);display:inline-flex;align-items:center;gap:3px;
+  border-radius:6px;font-size:11.5px;font-weight:500;
+}
+.back-btn:hover{background:var(--well);color:var(--ink)}
+.back-btn svg{width:14px;height:14px}
+
+dialog h2{font-size:14.5px;font-weight:650;letter-spacing:-.2px;margin-bottom:4px}
+.dlg-desc{font-size:11.5px;color:var(--sub);line-height:1.45;margin-bottom:12px}
+
+/* Inset macOS option group inside sheets */
+.option-group{
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:var(--well);
+  overflow:hidden;
+}
+.choice{
+  width:100%;padding:11px 12px;
+  display:flex;align-items:center;gap:11px;
+  background:transparent;border:0;box-shadow:none;
+  text-align:left;font-size:12.5px;font-weight:550;
+  transition:background-color .12s;
+}
+.choice+.choice{border-top:1px solid var(--line)}
+.choice:hover:not(:disabled){background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.choice .ico{
+  width:28px;height:28px;border-radius:7px;flex:none;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--surface);border:1px solid var(--line);color:var(--ink);
+}
+.choice .ico svg{width:15px;height:15px}
+.choice small{display:block;color:var(--sub);font-size:11px;font-weight:400;margin-top:2px;line-height:1.35}
+.choice .arrow{margin-left:auto;color:var(--faint);flex:none}
+
+.pick-row{
+  width:100%;padding:10px 12px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:transparent;border:0;box-shadow:none;text-align:left;
+  transition:background-color .12s;
+}
+.pick-row+.pick-row{border-top:1px solid var(--line)}
+.pick-row:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.pick-row strong{display:block;font-size:12.5px;font-weight:600}
+.pick-row .path{display:block;margin-top:2px}
+
+.pill-state{
+  flex:none;font-size:11px;font-weight:550;
+  height:22px;padding:0 9px;border-radius:999px;
+  display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);
+}
+.pill-state.on{background:var(--ok-bg);color:var(--ok-ink);border-color:transparent}
+
+.menu-item{
+  width:100%;padding:7px 9px;
+  display:flex;align-items:center;gap:8px;
+  background:transparent;border:0;border-radius:6px;
+  text-align:left;font-size:12px;font-weight:500;
+}
+.menu-item:hover{background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.menu-item.destructive{color:var(--danger)}
+
+.field-group{margin-top:12px}
+.field-label{display:block;font-size:11.5px;font-weight:500;color:var(--sub);margin-bottom:6px}
+.field{
+  display:block;width:100%;height:30px;padding:0 10px;
+  font-size:12px;border-radius:7px;
+}
+.field+.field{margin-top:7px}
+.field::placeholder{color:var(--faint)}
+
+.cli-cmd{
+  display:block;background:var(--well);border:1px solid var(--line);
+  border-radius:8px;padding:9px 11px;font-size:11.5px;
+}
+.status-note{font-size:11px;color:var(--sub);margin-top:9px}
+
+.actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:16px}
+.actions.split{justify-content:space-between}
+.sr{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}
+
+@media(max-width:650px){
+  .shell{display:block}
+  aside{display:none}
+  main{padding:6px 0}
+}
+@container(max-width:459px){
+  .colhead{display:none}
+  .account,.account.has-badge{
+    grid-template-columns:55px 84px minmax(45px,1fr) auto 24px;
+    grid-template-areas:"id id id badge more" "source plan ver . .";
+    row-gap:6px;
+  }
+  .identity-col{grid-area:id}
+  .badge-cell{grid-area:badge}
+  .more{grid-area:more}
+  .source{grid-area:source}
+  .plan{grid-area:plan}
+  .version{grid-area:ver}
+}
+@media(max-width:400px){
+  .tile{padding:12px}
+}
+.option-group button:focus-visible{outline-offset:-3px}
+.mark svg:not([fill]){fill:currentColor}
+dialog{position:fixed;inset:0;max-height:calc(100% - 24px);overflow:auto}
+dialog.compact-menu{inset:auto;width:max-content;max-width:calc(100% - 20px)}
+.choice:active,.pick-row:active,.menu-item:active{background:var(--wash)}
+.pick-row>span:first-child{min-width:0}
+button:disabled:hover{background:inherit}
+@media(prefers-reduced-motion:no-preference){
+  .switch:before{transition:left .14s}
+  .switch,.btn{transition:background-color .14s}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside aria-label="Settings sidebar"><div class="lights" aria-hidden="true"><i></i><i></i><i></i></div><div class="identity"><svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0.1" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#33404f"/>
+      <stop offset="0.5" stop-color="#1a2330"/>
+      <stop offset="1" stop-color="#0b111a"/>
+    </linearGradient>
+    <linearGradient id="liquid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#93ffc6"/>
+      <stop offset="0.5" stop-color="#4bdd97"/>
+      <stop offset="1" stop-color="#1fac70"/>
+    </linearGradient>
+    <linearGradient id="topHi" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.98"/>
+      <stop offset="0.5" stop-color="#dfe8e6" stop-opacity="0.86"/>
+      <stop offset="1" stop-color="#b7c4c2" stop-opacity="0.82"/>
+    </linearGradient>
+    <radialGradient id="vig" cx="0.5" cy="0.95" r="0.85">
+      <stop offset="0.5" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.30"/>
+    </radialGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#topHi)"/>
+  <g filter="url(#glow)"><path d="M376 534.4 H648 V656 A136 136 0 0 1 376 656 Z" fill="url(#liquid)"/></g>
+  <rect x="376" y="527.4" width="272" height="13" rx="6.5" fill="#eafff4" opacity="0.42"/>
+  <rect x="346" y="202" width="332" height="620" rx="166"
+        fill="none" stroke="url(#wall)" stroke-width="22"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#vig)"/>
+</svg><div><strong>Headroom</strong><small>v1.8</small></div></div><div id="navigation"></div></aside>
+
+  <main>
+    <h1>Accounts</h1>
+    <div class="tile">
+      <p class="sub intro">Track several subscriptions side by side. Every account signs in through its official CLI in Terminal — Headroom never sees your credentials.</p>
+      <div class="prefs"><div class="spread">
+        <label for="emails">Use email addresses as account names</label>
+        <input type="checkbox" class="switch" role="switch" id="emails" aria-describedby="name-help"></div>
+        <p class="sub" id="name-help">Applies to every account, in the Mac app and on a synced iPhone or iPad. Saved names return when turned off, and are used whenever an email is unavailable.</p>
+      </div>
+      <div id="providers"></div>
+    </div>
+  </main>
+</div>
+
+<dialog id="sheet" aria-label="Account options"></dialog>
+<div id="announce" class="sr" role="status"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const announce=s=>$('#announce').textContent=s;
+
+const strokes={
+  general:'M2 4h4m4 0h8M2 10h10m4 0h2M2 16h3m4 0h9 M6 2v4m7 2v4m-7 2v4',
+  appearance:'M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm0 0v16 M7 5h3M4 8h6m-7 3h7m-5 3h5',
+  menu:'M3 3h14q1 0 1 1v12q0 1-1 1H3q-1 0-1-1V4q0-1 1-1Zm0 4h14',
+  widgets:'M2 2h6v6H2zM12 2h6v6h-6zM2 12h6v6H2zM12 12h6v6h-6z',
+  bell:'M4 14c2-2 1-5 2-8 2-4 6-4 8 0 1 3 0 6 2 8l1 1H3Zm4 3q2 2 4 0',
+  person:'M13.4 5.5a3.4 3.4 0 1 1-6.8 0 3.4 3.4 0 0 1 6.8 0ZM3 17c0-6.8 14-6.8 14 0v.6H3Z',
+  key:'M12 2a4.5 4.5 0 0 0-4 6.6L2 15v3h3v-2h2v-2l3.5-3.5A4.5 4.5 0 1 0 12 2Zm2 3h.1',
+  folder:'M2 5h6l2 2h8v10H2Z',
+  terminal:'M2 3h16v14H2ZM5 7l3 3-3 3m5 0h4',
+  t3:'M2 4h16v12H2Zm0 4h16M6 11h2m3 0h3',
+  more:'M4 10h.1m5.9 0h.1m5.9 0h.1',
+  arrow:'m8 5 5 5-5 5',
+  back:'m12 5-5 5 5 5',
+  refresh:'M16 10a6 6 0 1 1-1.7-4.2M16 4v3.5h-3.5',
+  check:'m4 10.5 4 4 8-8.5'
+};
+const icon=id=>'<svg aria-hidden="true" class="glyph" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="'+(id==='more'?3.2:id==='check'?2.6:1.6)+'" stroke-linecap="round" stroke-linejoin="round"><path d="'+strokes[id]+'"/></svg>';
+
+const logos={
+  claude:'<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z" fill="#D97757"/></svg>',
+  codex:'<svg fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>',
+  antigravity:'<svg fill="currentColor" fill-rule="evenodd" viewBox="0 1 24 22.1087" xmlns="http://www.w3.org/2000/svg"><path d="M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"/></svg>',
+  grok:'<svg fill="currentColor" fill-rule="evenodd" viewBox="0 0.5039 24 23.0332" xmlns="http://www.w3.org/2000/svg"><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"/></svg>',
+  cursor:'<svg fill="currentColor" fill-rule="evenodd" viewBox="1.4707 0 21.0586 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.106 5.68L12.5.135a.998.998 0 00-.998 0L1.893 5.68a.84.84 0 00-.419.726v11.186c0 .3.16.577.42.727l9.607 5.547a.999.999 0 00.998 0l9.608-5.547a.84.84 0 00.42-.727V6.407a.84.84 0 00-.42-.726zm-.603 1.176L12.228 22.92c-.063.108-.228.064-.228-.061V12.34a.59.59 0 00-.295-.51l-9.11-5.26c-.107-.062-.063-.228.062-.228h18.55c.264 0 .428.286.296.514z"/></svg>',
+  copilot:'<svg fill="currentColor" viewBox="0 1.985 24 20.03" xmlns="http://www.w3.org/2000/svg"><path d="M23.922 16.992c-.861 1.495-5.859 5.023-11.922 5.023-6.063 0-11.061-3.528-11.922-5.023A.641.641 0 0 1 0 16.736v-2.869a.841.841 0 0 1 .053-.22c.372-.935 1.347-2.292 2.605-2.656.167-.429.414-1.055.644-1.517a10.195 10.195 0 0 1-.052-1.086c0-1.331.282-2.499 1.132-3.368.397-.406.89-.717 1.474-.952 1.399-1.136 3.392-2.093 6.122-2.093 2.731 0 4.767.957 6.166 2.093.584.235 1.077.546 1.474.952.85.869 1.132 2.037 1.132 3.368 0 .368-.014.733-.052 1.086.23.462.477 1.088.644 1.517 1.258.364 2.233 1.721 2.605 2.656a.832.832 0 0 1 .053.22v2.869a.641.641 0 0 1-.078.256ZM12.172 11h-.344a4.323 4.323 0 0 1-.355.508C10.703 12.455 9.555 13 7.965 13c-1.725 0-2.989-.359-3.782-1.259a2.005 2.005 0 0 1-.085-.104L4 11.741v6.585c1.435.779 4.514 2.179 8 2.179 3.486 0 6.565-1.4 8-2.179v-6.585l-.098-.104s-.033.045-.085.104c-.793.9-2.057 1.259-3.782 1.259-1.59 0-2.738-.545-3.508-1.492a4.323 4.323 0 0 1-.355-.508h-.016.016Zm.641-2.935c.136 1.057.403 1.913.878 2.497.442.544 1.134.938 2.344.938 1.573 0 2.292-.337 2.657-.751.384-.435.558-1.15.558-2.361 0-1.14-.243-1.847-.705-2.319-.477-.488-1.319-.862-2.824-1.025-1.487-.161-2.192.138-2.533.529-.269.307-.437.808-.438 1.578v.021c0 .265.021.562.063.893Zm-1.626 0c.042-.331.063-.628.063-.894v-.02c-.001-.77-.169-1.271-.438-1.578-.341-.391-1.046-.69-2.533-.529-1.505.163-2.347.537-2.824 1.025-.462.472-.705 1.179-.705 2.319 0 1.211.175 1.926.558 2.361.365.414 1.084.751 2.657.751 1.21 0 1.902-.394 2.344-.938.475-.584.742-1.44.878-2.497Z"/><path d="M14.5 14.25a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Zm-5 0a1 1 0 0 1 1 1v2a1 1 0 0 1-2 0v-2a1 1 0 0 1 1-1Z"/></svg>',
+  opencode:'<svg fill="currentColor" viewBox="0 0 240 300" xmlns="http://www.w3.org/2000/svg"><path d="M180 240H60V120H180V240Z" opacity="0.28"/><path d="M180 60H60V240H180V60ZM240 300H0V0H240V300Z"/></svg>'
+};
+
+for(const [title,items] of [
+  ['App',[['General','general'],['Appearance','appearance'],['Menu Bar','menu'],['Widgets & iPhone','widgets'],['Notifications','bell']]],
+  ['Sources',[['Accounts','person'],['API Spend','key']]]
+]){
+  $('#navigation').insertAdjacentHTML('beforeend',
+    '<p class="navgroup">'+title+'</p>'+
+    items.map(([l,sym])=>'<div class="navrow '+(l==='Accounts'?'selected':'')+'">'+icon(sym)+l+'</div>').join('')
+  );
+}
+
+const state={
+  useEmail:false,
+  providers:[
+    {
+      id:'codex', name:'Codex', capacity:5, enabled:true, hasT3:true,
+      defaultCliPath:'~/.codex', defaultVersion:'v0.171.0', cliCmd:'codex login',
+      t3Catalog:[
+        {id:'codex-100',name:'100',email:'you@example.com',plan:'Codex Pro Lite',version:'v0.171.0',badge:'100',path:'~/.codex-t3/pro100'},
+        {id:'codex-200',name:'200',email:'second@example.com',plan:'Codex Pro',version:'v0.171.0',badge:'200',path:'~/.codex-t3/pro200'}
+      ],
+      accounts:[
+        {id:'codex-100',name:'100',email:'you@example.com',plan:'Codex Pro Lite',version:'v0.171.0',badge:'100',path:'~/.codex-t3/pro100',type:'t3'},
+        {id:'codex-200',name:'200',email:'second@example.com',plan:'Codex Pro',version:'v0.171.0',badge:'200',path:'~/.codex-t3/pro200',type:'t3'}
+      ]
+    },
+    {
+      id:'claude', name:'Claude', capacity:5, enabled:true, hasT3:true,
+      defaultCliPath:'~/.claude', defaultVersion:'v2.1.3', cliCmd:'claude login',
+      t3Catalog:[
+        {id:'claude-t3',name:'Claude (T3)',email:'you@example.com',plan:'Claude Max',version:'v2.1.3',badge:'T3',path:'~/.claude'}
+      ],
+      accounts:[
+        {id:'claude-cli',name:'Personal',email:'you@example.com',plan:'Claude Max',version:'v2.1.3',badge:'1',path:'~/.claude',type:'cli'}
+      ]
+    },
+    {
+      id:'antigravity', name:'Antigravity', capacity:5, enabled:true, hasT3:true,
+      defaultCliPath:'~/.gemini', defaultVersion:'v1.5.13', cliCmd:'agy login',
+      t3Catalog:[
+        {id:'agy-t3',name:'Antigravity',email:'second@example.com',plan:'Antigravity Ultra',version:'v1.5.13',badge:'T3',path:'~/.t3/userdata/providers/antigravity/…'}
+      ],
+      accounts:[
+        {id:'agy-t3',name:'Antigravity',email:'second@example.com',plan:'Antigravity Ultra',version:'v1.5.13',badge:'T3',path:'~/.t3/userdata/providers/antigravity/…',type:'t3'}
+      ]
+    },
+    {
+      id:'grok', name:'Grok', capacity:5, enabled:false, hasT3:false,
+      defaultCliPath:'~/.grok', defaultVersion:'', cliCmd:'grok login',
+      t3Catalog:[],
+      accounts:[
+        {id:'grok-cli',name:'Default',email:'',plan:'',version:'',badge:'1',path:'~/.grok',type:'cli'}
+      ]
+    },
+    {
+      id:'cursor', name:'Cursor', capacity:1, enabled:false, hasT3:false,
+      defaultCliPath:'~/.cursor', defaultVersion:'', cliCmd:'cursor-agent login',
+      t3Catalog:[],
+      accounts:[
+        {id:'cursor-cli',name:'Default',email:'',plan:'',version:'',badge:'1',path:'~/.cursor',type:'cli'}
+      ]
+    },
+    {
+      id:'copilot', name:'GitHub Copilot', capacity:1, enabled:false, hasT3:false,
+      defaultCliPath:'~/.config/gh', defaultVersion:'', cliCmd:'gh auth login',
+      t3Catalog:[],
+      accounts:[
+        {id:'copilot-cli',name:'Default',email:'',plan:'',version:'',badge:'1',path:'~/.config/gh',type:'cli'}
+      ]
+    },
+    {
+      id:'opencode', name:'OpenCode', capacity:5, enabled:false, hasT3:false,
+      defaultCliPath:'~/.local/share/opencode', defaultVersion:'', cliCmd:'opencode auth login',
+      t3Catalog:[],
+      accounts:[
+        {id:'opencode-cli',name:'Default',email:'',plan:'',version:'',badge:'1',path:'~/.local/share/opencode',type:'cli'}
+      ]
+    }
+  ]
+};
+
+const sourceLabel={t3:'T3 Code',cli:'CLI',external:'CLI',owned:'Separate'};
+const dlg=$('#sheet');
+let anchor=null, ctx=null, keyboardInput=false;
+document.addEventListener('keydown',()=>keyboardInput=true,true);
+document.addEventListener('pointerdown',()=>keyboardInput=false,true);
+dlg.addEventListener('close',()=>{
+  if(dlg.open||!anchor)return;
+  const pid=anchor.dataset.add||anchor.dataset.more.split(':')[0];
+  const target=anchor.isConnected?anchor:document.querySelector('[data-add="'+pid+'"]');
+  target?.focus({preventScroll:true});
+});
+
+function draw(){
+  $('#providers').innerHTML=state.providers.map(p=>{
+    const list=p.accounts;
+    const showBadges=list.length>1;
+    const counter='<span class="count">'+list.length+' of '+p.capacity+'</span>';
+
+    const colhead=showBadges ? `<div class="colhead has-badge">
+      <span>Account</span><span>Source</span><span>Plan</span><span>Version</span>
+      <span class="col-badge">Badge</span>
+    </div>` : '';
+    const rowsHtml=list.map(a=>{
+      const shown=(state.useEmail&&a.email)||a.name;
+      const emailLine=(a.email&&!state.useEmail)?'<div class="email" title="'+esc(a.email)+'">'+esc(a.email)+'</div>':'';
+      const pathLine=a.path?'<div class="path" title="'+esc(a.path)+'">'+esc(a.path)+'</div>':'';
+      const badgeCell=showBadges
+        ?'<div class="badge-cell"><input class="badge" data-p="'+p.id+'" data-a="'+a.id+'" aria-label="Menu bar badge for '+esc(a.name)+'" maxlength="3" value="'+esc(a.badge)+'" placeholder="—"></div>'
+        :'';
+
+      return '<div class="account '+(showBadges?'has-badge':'')+'" data-p="'+p.id+'" data-a="'+a.id+'">'+
+        '<div class="identity-col">'+
+          '<input class="editable" data-p="'+p.id+'" data-a="'+a.id+'" aria-label="Account name for '+esc(a.name)+'" maxlength="40" value="'+esc(shown)+'" '+(state.useEmail&&a.email?'readonly':'')+'>'+
+          emailLine+
+          pathLine+
+        '</div>'+
+        '<span class="meta source">'+esc(sourceLabel[a.type])+'</span>'+
+        '<span class="meta plan">'+esc(a.plan)+'</span>'+
+        '<span class="meta version">'+esc(a.version)+'</span>'+
+        badgeCell+
+        '<button class="more" data-more="'+p.id+':'+a.id+'" aria-label="Options for '+esc(a.name)+'" aria-haspopup="dialog">'+icon('more')+'</button>'+
+      '</div>';
+    }).join('');
+
+    return '<section class="group '+(p.enabled?'':'is-off')+'" data-provider="'+p.id+'">'+
+      '<header class="bar">'+
+        '<span class="mark">'+logos[p.id]+'</span>'+
+        '<h2>'+esc(p.name)+'</h2>'+
+        counter+
+        '<div class="bar-right">'+
+          '<button class="btn" data-add="'+p.id+'">+ Add Source…</button>'+
+          '<input type="checkbox" class="switch" role="switch" data-toggle="'+p.id+'" aria-label="Enable '+esc(p.name)+'" '+(p.enabled?'checked':'')+'>'+
+        '</div>'+
+      '</header>'+
+      '<div class="provider-list">'+
+        colhead+
+        (rowsHtml||'<div class="empty-row">Not tracking any '+esc(p.name)+' accounts. Use <strong>+ Add Source…</strong> to add one.</div>')+
+      '</div>'+
+      (!p.enabled?'<p class="off-note">Turn on to fetch '+esc(p.name)+' usage in the menu bar and popover.</p>':'')+
+    '</section>';
+  }).join('');
+}
+
+function positionCompactMenu(){
+  if(!dlg.open||!dlg.classList.contains('compact-menu')||!anchor)return;
+  const a=anchor.getBoundingClientRect(),b=dlg.getBoundingClientRect();
+  const top=a.bottom+b.height+16<=innerHeight?a.bottom+5:a.top-b.height-5;
+  dlg.style.left=Math.max(10,Math.min(innerWidth-b.width-10,a.right-b.width))+'px';
+  dlg.style.top=Math.max(10,Math.min(innerHeight-b.height-10,top))+'px';
+}
+
+function openDialog(title,body,small=false,backOp=''){
+  dlg.classList.toggle('compact-menu',small);
+  dlg.style.left='';dlg.style.top='';
+  dlg.setAttribute('aria-label',title);
+  const head=small?'':(
+    (backOp?'<div class="dlg-top"><button class="back-btn" data-op="'+backOp+'">'+icon('back')+'Back</button></div>':'')+
+    '<h2>'+esc(title)+'</h2>'
+  );
+  dlg.innerHTML=head+body;
+  dlg.setAttribute('tabindex','-1');
+  if(!dlg.open)dlg.showModal();
+  if(keyboardInput)dlg.querySelector('button:not(:disabled)')?.focus({preventScroll:true});
+  else dlg.focus({preventScroll:true});
+  if(small) positionCompactMenu();
+}
+const btn=(label,op,cls='btn lg')=>'<button class="'+cls+'" data-op="'+op+'">'+esc(label)+'</button>';
+
+function openAddSource(pid){
+  const p=state.providers.find(x=>x.id===pid);
+  const items=[];
+  if(p.hasT3){
+    items.push(
+      '<button class="choice" data-op="pick-t3:'+p.id+'">'+
+        '<span class="ico">'+icon('t3')+'</span>'+
+        '<span>T3 Code<small>Choose from discovered T3 Code '+esc(p.name)+' logins</small></span>'+
+        '<span class="arrow">'+icon('arrow')+'</span>'+
+      '</button>'
+    );
+  }
+  items.push(
+    '<button class="choice" data-op="pick-cli:'+p.id+'">'+
+      '<span class="ico">'+icon('folder')+'</span>'+
+      '<span>Existing CLI<small>Default '+esc(p.defaultCliPath)+' or another CLI folder</small></span>'+
+      '<span class="arrow">'+icon('arrow')+'</span>'+
+    '</button>'
+  );
+  items.push(
+    '<button class="choice" data-op="pick-owned:'+p.id+'">'+
+      '<span class="ico">'+icon('terminal')+'</span>'+
+      '<span>Separate login<small>Sign in to a Headroom-managed home via CLI</small></span>'+
+      '<span class="arrow">'+icon('arrow')+'</span>'+
+    '</button>'
+  );
+  openDialog(
+    'Add '+p.name+' source',
+    '<p class="dlg-desc">Choose where Headroom should read '+esc(p.name)+' usage from.</p>'+
+    '<div class="option-group">'+items.join('')+'</div>'+
+    '<div class="actions">'+btn('Cancel','close')+'</div>'
+  );
+}
+
+function openT3Selector(pid,statusMsg=''){
+  const p=state.providers.find(x=>x.id===pid);
+  const list=p.t3Catalog.map(item=>{
+    const tracked=p.accounts.some(a=>a.id===item.id);
+    return '<button class="pick-row" aria-pressed="'+tracked+'" '+(!tracked&&p.accounts.length>=p.capacity?'disabled':'')+' data-op="toggle-t3:'+p.id+':'+item.id+'">'+
+      '<span><strong>'+esc(item.name)+(item.plan?' · '+esc(item.plan):'')+'</strong><span class="path">'+esc(item.path)+'</span></span>'+
+      '<span class="pill-state '+(tracked?'on':'')+'">'+(tracked?'Tracking ✓':'Add')+'</span>'+
+    '</button>';
+  }).join('');
+  openDialog(
+    'T3 Code · '+p.name,
+    '<p class="dlg-desc">Click a T3 Code login to track or stop tracking it.</p>'+
+    '<div class="option-group">'+list+'</div>'+
+    (statusMsg?'<p class="status-note" role="status">'+esc(statusMsg)+'</p>':'')+
+    '<div class="actions split">'+
+      '<button class="btn lg" data-op="rescan:'+p.id+'">'+icon('refresh')+'Rescan</button>'+
+      btn('Done','close','btn lg primary')+
+    '</div>',
+    false,
+    'open-add:'+p.id
+  );
+}
+
+/* Identical Existing CLI dialog for ALL providers */
+function openExistingCli(pid){
+  const p=state.providers.find(x=>x.id===pid);
+  const cliId=p.id+'-cli';
+  const tracked=p.accounts.some(a=>a.id===cliId);
+  openDialog(
+    'Existing CLI · '+p.name,
+    '<p class="dlg-desc">Track an existing CLI login read-only without signing in again.</p>'+
+    '<div class="option-group">'+
+      '<button class="pick-row" aria-pressed="'+tracked+'" data-op="toggle-cli:'+p.id+'">'+
+        '<span><strong>Default CLI</strong><span class="path">'+esc(p.defaultCliPath)+'</span></span>'+
+        '<span class="pill-state '+(tracked?'on':'')+'">'+(tracked?'Tracking ✓':'Add')+'</span>'+
+      '</button>'+
+    '</div>'+
+    '<div class="field-group">'+
+      '<label class="field-label" for="folder-path">Or track another CLI config folder</label>'+
+      '<input class="field" id="folder-path" placeholder="~/path/to/config-home">'+
+      '<input class="field" id="folder-lbl" aria-label="Folder label (optional)" placeholder="Label (optional)">'+
+    '</div>'+
+    '<div class="actions">'+
+      btn('Cancel','close')+
+      btn('Add Folder','attach-folder:'+p.id,'btn lg primary')+
+    '</div>',
+    false,
+    'open-add:'+p.id
+  );
+  updateFolderAction();
+  const defaultAction=dlg.querySelector('[data-op^="toggle-cli:"]');
+  if(!tracked && p.accounts.length>=p.capacity)defaultAction.disabled=true;
+  if(p.accounts.length>=p.capacity){
+    $('#folder-path').disabled=true;$('#folder-lbl').disabled=true;
+    dlg.querySelector('.field-group').insertAdjacentHTML('beforeend','<p class="status-note">Stop tracking an account to add another folder.</p>');
+  }
+}
+
+function updateFolderAction(){
+  const path=$('#folder-path');
+  if(!path)return;
+  const action=dlg.querySelector('[data-op^="attach-folder:"]');
+  const p=state.providers.find(item=>item.id===action.dataset.op.split(':')[1]);
+  action.disabled=!path.value.trim()||p.accounts.length>=p.capacity;
+}
+dlg.addEventListener('input',e=>{
+  if(e.target.id==='folder-path'){e.target.setCustomValidity('');updateFolderAction()}
+});
+function openSeparateLogin(pid){
+  const p=state.providers.find(x=>x.id===pid);
+  const full=p.accounts.length>=p.capacity;
+  openDialog(
+    'Separate '+p.name+' login',
+    (full
+      ?'<p class="dlg-desc">'+(p.capacity===1?esc(p.name)+' CLI supports one login at a time. Stop tracking the current account to add a separate login.':'All '+p.capacity+' account slots are in use. Stop tracking an account to add a separate login.')+'</p>'
+      :'<p class="dlg-desc">Headroom creates an isolated config home and opens Terminal so you can sign in through the official '+esc(p.name)+' CLI.</p><code class="cli-cmd">'+esc(p.cliCmd)+'</code>')+
+    '<div class="actions">'+btn('Cancel','close')+(full?'':btn('Add Separate Login','create-owned:'+p.id,'btn lg primary'))+'</div>',
+    false,
+    'open-add:'+p.id
+  );
+}
+
+function openRowMenu(p,a){
+  ctx={p,a};
+  if(a.type==='owned'){
+    openDialog('Options for '+a.name,'<button class="menu-item destructive" data-op="confirm-remove">Sign Out & Stop Tracking</button>',true);
+  } else {
+    openDialog('Options for '+a.name,'<button class="menu-item" data-op="stop">Stop Tracking</button>',true);
+  }
+}
+
+$('#emails').onchange=e=>{state.useEmail=e.target.checked;draw()};
+
+$('#providers').addEventListener('keydown',e=>{
+  if(e.key==='Enter' && e.target.matches('.editable,.badge'))e.target.blur();
+});
+$('#providers').addEventListener('change',e=>{
+  const t=e.target;
+  if(t.matches('[data-toggle]')){
+    state.providers.find(x=>x.id===t.dataset.toggle).enabled=t.checked;
+    draw();document.querySelector('[data-toggle="'+t.dataset.toggle+'"]').focus({preventScroll:true});return;
+  }
+  if(t.matches('.editable')){
+    const p=state.providers.find(x=>x.id===t.dataset.p);
+    const a=p.accounts.find(x=>x.id===t.dataset.a);
+    a.name=t.value.trim()||a.name;
+    t.value=a.name;
+    t.setAttribute('aria-label','Account name for '+a.name);
+    t.closest('.account').querySelector('.more').setAttribute('aria-label','Options for '+a.name);
+    const badge=t.closest('.account').querySelector('.badge');
+    if(badge)badge.setAttribute('aria-label','Menu bar badge for '+a.name);
+    return;
+  }
+  if(t.matches('.badge')){
+    const p=state.providers.find(x=>x.id===t.dataset.p);
+    const a=p.accounts.find(x=>x.id===t.dataset.a);
+    a.badge=t.value.trim();t.value=a.badge;return;
+  }
+});
+
+$('#providers').addEventListener('click',e=>{
+  const add=e.target.closest('[data-add]');
+  if(add){anchor=add;openAddSource(add.dataset.add);return}
+  const more=e.target.closest('[data-more]');
+  if(more){
+    anchor=more;
+    const [pid,aid]=more.dataset.more.split(':');
+    const p=state.providers.find(x=>x.id===pid);
+    openRowMenu(p,p.accounts.find(x=>x.id===aid));
+  }
+});
+
+dlg.addEventListener('click',e=>{
+  if(e.target===dlg){
+    const b=dlg.getBoundingClientRect();
+    if(e.clientX<b.left||e.clientX>b.right||e.clientY<b.top||e.clientY>b.bottom) dlg.close();
+    return;
+  }
+  const el=e.target.closest('[data-op]');
+  if(!el)return;
+  const op=el.dataset.op;
+  if(op==='close'){dlg.close();return}
+  if(op.startsWith('open-add:')){openAddSource(op.slice(9));return}
+  if(op.startsWith('pick-t3:')){openT3Selector(op.slice(8));return}
+  if(op.startsWith('pick-cli:')){openExistingCli(op.slice(9));return}
+  if(op.startsWith('pick-owned:')){openSeparateLogin(op.slice(11));return}
+  if(op.startsWith('rescan:')){
+    const pid=op.slice(7);
+    const p=state.providers.find(x=>x.id===pid);
+    openT3Selector(pid,'Scanned ~/.t3/userdata/settings.json · Found '+p.t3Catalog.length+' T3 Code '+(p.t3Catalog.length===1?'home.':'homes.'));
+    return;
+  }
+  if(op.startsWith('toggle-t3:')){
+    const [,pid,tid]=op.split(':');
+    const p=state.providers.find(x=>x.id===pid);
+    const idx=p.accounts.findIndex(a=>a.id===tid);
+    if(idx>=0){p.accounts.splice(idx,1);draw();openT3Selector(pid,'Stopped tracking.');}
+    else if(p.accounts.length<p.capacity){
+      const src=p.t3Catalog.find(x=>x.id===tid);
+      p.accounts.push({...src,type:'t3'});p.enabled=true;draw();openT3Selector(pid,'Added '+src.name+'.');
+    }
+    return;
+  }
+  if(op.startsWith('toggle-cli:')){
+    const pid=op.slice(11);
+    const p=state.providers.find(x=>x.id===pid);
+    const cliId=p.id+'-cli';
+    const idx=p.accounts.findIndex(a=>a.id===cliId);
+    if(idx>=0){p.accounts.splice(idx,1);}
+    else if(p.accounts.length<p.capacity){
+      p.accounts.push({id:cliId,name:'Default CLI',email:'',plan:'',version:p.defaultVersion,badge:'CLI',path:p.defaultCliPath,type:'cli'});
+      p.enabled=true;
+    }
+    draw();openExistingCli(pid);return;
+  }
+  if(op.startsWith('attach-folder:')){
+    const pid=op.slice(14);
+    const p=state.providers.find(x=>x.id===pid);
+    const path=$('#folder-path').value.trim();
+    if(!path||p.accounts.length>=p.capacity)return;
+    if(p.accounts.some(a=>a.path===path)){
+      $('#folder-path').setCustomValidity('This folder is already tracked.');
+      $('#folder-path').reportValidity();return;
+    }
+    const label=$('#folder-lbl').value.trim()||path.split('/').pop();
+    p.accounts.push({id:'ext-'+Date.now(),name:label,email:'',plan:'',version:p.defaultVersion,badge:label.slice(0,3).toUpperCase(),path,type:'external'});
+    p.enabled=true;dlg.close();draw();return;
+  }
+  if(op.startsWith('create-owned:')){
+    const pid=op.slice(13);
+    const p=state.providers.find(x=>x.id===pid);
+    if(p.accounts.length>=p.capacity)return;
+    let n=p.accounts.length+1;
+    while(p.accounts.some(account=>account.name==='Account '+n))n++;
+    p.accounts.push({id:pid+'-own-'+Date.now(),name:'Account '+n,email:'',plan:'',version:p.defaultVersion,badge:String(n),path:'Headroom-managed home',type:'owned'});
+    p.enabled=true;dlg.close();draw();return;
+  }
+  if(op==='stop'&&ctx){
+    ctx.p.accounts=ctx.p.accounts.filter(x=>x!==ctx.a);
+    dlg.close();draw();announce('Stopped tracking '+ctx.a.name);return;
+  }
+  if(op==='confirm-remove'&&ctx){
+    openDialog('Sign out & stop tracking '+ctx.a.name+'?',
+      '<p class="dlg-desc">Signs out and removes the Headroom-managed login folder for this account.</p>'+
+      '<div class="actions">'+btn('Cancel','close')+btn('Sign Out & Stop Tracking','do-remove','btn lg destructive')+'</div>'
+    );
+    return;
+  }
+  if(op==='do-remove'&&ctx){
+    ctx.p.accounts=ctx.p.accounts.filter(x=>x!==ctx.a);dlg.close();draw();return;
+  }
+});
+
+draw();
+window.addEventListener('resize',positionCompactMenu);
+document.addEventListener('scroll',positionCompactMenu,true);
+</script>
+</body>
+</html>
