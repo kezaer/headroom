@@ -522,7 +522,7 @@ enum SetupSessions {
         }
         switch recoveryRoute(for: action) {
         case .documentation(let url), .privacyGuidance(let url):
-            NSWorkspace.shared.open(url)
+            if store?.isReplayingDemoCapture != true { NSWorkspace.shared.open(url) }
         case .setup(.standard):
             openSetup(for: account, onRetry: onRetry)
         case .workspaceTrust:

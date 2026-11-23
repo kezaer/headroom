@@ -593,7 +593,8 @@ extension DemoFixture {
         freshness: Freshness = .live,
         builtIn: Bool = false,
         capability: ProviderCapabilityState? = nil,
-        probeDuration: TimeInterval? = nil
+        probeDuration: TimeInterval? = nil,
+        cliVersion: String? = nil
     ) -> (account: ProviderAccount, provider: any UsageProvider) {
         let accountID: AccountID = builtIn ? .primary : AccountID(id)
         let account = ProviderAccount(id: accountID, providerID: providerID, label: label, isBuiltIn: builtIn)
@@ -641,7 +642,8 @@ extension DemoFixture {
     public static func generatedAccounts(
         provider providerID: ProviderID,
         count: Int,
-        probeDuration: TimeInterval? = nil
+        probeDuration: TimeInterval? = nil,
+        cliVersion: String? = nil
     ) -> [(account: ProviderAccount, provider: any UsageProvider)] {
         let plans = ["Max", "Pro", "Team", "Plus", "Prolite"]
         return (0..<count).map { index -> (account: ProviderAccount, provider: any UsageProvider) in
@@ -1118,6 +1120,7 @@ extension DemoFixture {
         case notRequested                     // `--demo` absent
         case singleAccount                    // bare `--demo` (screenshot fixtures, unchanged)
         case multiAccount(MultiAccountScenario)
+        case captured(path: String?)
         case invalid(String)                  // `--demo <unknown-token>`
     }
 
@@ -1128,6 +1131,10 @@ extension DemoFixture {
         guard let flagIndex = arguments.firstIndex(of: "--demo") else { return .notRequested }
         let next = arguments.indices.contains(flagIndex + 1) ? arguments[flagIndex + 1] : nil
         guard let token = next, !token.hasPrefix("-") else { return .singleAccount }
+        if token == "captured" { return .captured(path: nil) }
+        if token.hasPrefix("captured="), token.count > "captured=".count {
+            return .captured(path: String(token.dropFirst("captured=".count)))
+        }
         if let scenario = MultiAccountScenario(rawValue: token) { return .multiAccount(scenario) }
         return .invalid(token)
     }
@@ -1176,6 +1183,7 @@ public struct DemoUsageProvider: UsageProvider {
     public let displayName: String
     private let snapshot: UsageSnapshot
     private let capability: ProviderCapabilityState?
+    private let cliVersion: String?
     /// R15: a simulated probe cost so the envelope demo exercises the measured duty-cycle
     /// gate (KTD4); nil returns the fixture instantly, as every other scenario expects.
     private let probeDuration: TimeInterval?
@@ -1196,7 +1204,8 @@ public struct DemoUsageProvider: UsageProvider {
         snapshot: UsageSnapshot,
         accountID: AccountID = .primary,
         capability: ProviderCapabilityState? = nil,
-        probeDuration: TimeInterval? = nil
+        probeDuration: TimeInterval? = nil,
+        cliVersion: String? = nil
     ) {
         self.id = id
         self.accountID = accountID
@@ -1204,6 +1213,7 @@ public struct DemoUsageProvider: UsageProvider {
         self.snapshot = snapshot
         self.capability = capability
         self.probeDuration = probeDuration
+        self.cliVersion = cliVersion
     }
 
     /// The fixture itself, instantly: tests enumerate every scenario's providers this way.
@@ -1213,7 +1223,7 @@ public struct DemoUsageProvider: UsageProvider {
         if let probeDuration, probeDuration > 0 {
             try? await Task.sleep(for: .seconds(probeDuration))
         }
-        return UsageProviderFetchResult(snapshot: snapshot, capability: capability)
+        return UsageProviderFetchResult(snapshot: snapshot, capability: capability, cliVersion: cliVersion)
     }
 }
 

@@ -251,6 +251,10 @@ public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
         defaults.set(choice.rawValue, forKey: Key.menuBarWindowSource(id))
     }
 
+    func setInheritedMenuBarWindow(_ rawValue: String?) {
+        defaults.set(rawValue, forKey: Key.legacyMenuBarWindowSource)
+    }
+
     public var widgetsEnabled: Bool {
         get {
             guard defaults.object(forKey: Key.widgetsEnabled) != nil else { return true }

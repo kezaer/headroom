@@ -16,6 +16,17 @@ import HeadroomCore
 @main
 enum Entry {
     static func main() {
+        if case .captured = DemoFixture.scenarioRequest() {
+            guard AppComposition.capturedDemo != nil else {
+                FileHandle.standardError.write(Data("Could not load the Headroom demo capture. Run --capture-demo while online.\n".utf8))
+                exit(EXIT_FAILURE)
+            }
+            HeadroomApp.main()
+            return
+        }
+        if CommandLine.arguments.contains(DevCaptureCommand.flag), !DemoFixture.isEnabled {
+            DevCaptureCommand.run()
+        }
         if CommandLine.arguments.contains("--probe-claude") {
             runClaudeProbe()
             return
@@ -97,7 +108,7 @@ enum Entry {
         // (single-account screenshot fixtures) still launches normally.
         if case .invalid(let token) = DemoFixture.scenarioRequest() {
             let valid = DemoFixture.MultiAccountScenario.allCases.map(\.rawValue).joined(separator: ", ")
-            FileHandle.standardError.write(Data("Unknown --demo scenario '\(token)'. Valid scenarios: \(valid)\n".utf8))
+            FileHandle.standardError.write(Data("Unknown --demo scenario '\(token)'. Valid scenarios: captured, captured=<path>, \(valid)\n".utf8))
             exit(1)
         }
         if DemoFixture.isEnabled,
@@ -708,7 +719,7 @@ struct HeadroomApp: App {
 
     @MainActor
     init() {
-        PopoverTuningModel.startAgent()
+        if AppComposition.capturedDemo == nil { PopoverTuningModel.startAgent() }
         let preferences = AppComposition.launchPreferences
         // Hosted tests supply their own setup boundaries. A launch-time demo controller
         // would install inert cleanup over tests that stage real handoff fixture scripts.
@@ -794,6 +805,7 @@ struct HeadroomApp: App {
                 // `popoverSurfaceHost()` is exactly that clear background unless a DialKit
                 // build switches to the system surface (PC2).
                 .popoverSurfaceHost()
+                .modifier(CapturedDemoLinks(isReplaying: store.isReplayingDemoCapture))
                 .preferredColorScheme(resolvedScheme)
                 .onChange(of: appearancePreference) { _, newValue in
                     newValue.applyToProcess()
@@ -810,7 +822,9 @@ struct HeadroomApp: App {
             MenuBarStatusLabel(store: store)
                 .preferredColorScheme(resolvedScheme)
                 .task { await store.start() }
-                .task { PopoverTuningModel.shared.showPinnedPopover(store: store) }
+                .task {
+                    if !store.isReplayingDemoCapture { PopoverTuningModel.shared.showPinnedPopover(store: store) }
+                }
                 // Attach to the status item's own window once the scene exists (L1A). The menu
                 // bar's appearance is not the process appearance: a light system appearance over
                 // a dark wallpaper still gets a dark menu bar, which is exactly the case the old
@@ -848,6 +862,7 @@ struct HeadroomApp: App {
                 // U6: the one client per launch; inert under `--demo` and unbundled runs (KTD9).
                 notificationClient: AppComposition.notificationClient
             )
+            .modifier(CapturedDemoLinks(isReplaying: store.isReplayingDemoCapture))
             .preferredColorScheme(resolvedScheme)
             // L9A (revising KTD2): the window opens at 800 × 700 and is resizable on
             // both axes down to 720 × 600, with no ceiling. It no longer changes size
@@ -1068,6 +1083,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Adding a third provider is a one-line append here plus a card — no engine change.
 enum AppComposition {
     private static let t3Installation = T3Installation()
+    static let capturedDemo: DemoCapture? = {
+        guard case .captured(let path) = DemoFixture.scenarioRequest() else { return nil }
+        return try? DevCaptureCommand.load(path: path)
+    }()
+
+    static func isT3ClaudeAvailable() -> Bool {
+        !usesInertAntigravity() && t3Installation.claudeInstanceName() != nil
+    }
+
     struct SubscriptionProviderRegistration {
         let id: ProviderID
         /// KTD10 (2026-09-19 polling plan): the registry is read before any provider instance
@@ -1182,6 +1206,7 @@ enum AppComposition {
         // `--demo <scenario>` gets a fresh per-launch suite (the live multi-account preview
         // must not inherit a previous run); a bare `--demo` keeps the stable screenshot
         // suite the marketing pipeline's repeated captures rely on.
+        if case .captured = request { return DemoMemoryDefaults() }
         if case .multiAccount = request {
             let suite = "co.zantos.headroom.demo.multi.\(UUID().uuidString)"
             guard let defaults = UserDefaults(suiteName: suite) else {
@@ -1220,7 +1245,20 @@ enum AppComposition {
     }
 
     @MainActor
-    static func store(preferences: Preferences = launchPreferences, demoController: LoadingDemoController? = nil) -> UsageStore {
+    static func store(
+        preferences: Preferences = launchPreferences, demoController: LoadingDemoController? = nil,
+        capturingDemo: Bool = false
+    ) -> UsageStore {
+        if let capturedDemo, let defaults = launchDefaults as? DemoMemoryDefaults {
+            return capturedDemo.makeReplayStore(
+                defaults: defaults, accountStorage: demoController?.accountStorage ?? DemoAccountStorage(),
+                newAccountProvider: { [weak demoController] account in
+                    demoController?.provider(for: account, needsSetup: true)
+                        ?? DemoUsageProvider(id: account.providerID, displayName: account.providerID.displayName,
+                                             snapshot: .pending(for: account.providerID), accountID: account.id)
+                }
+            )
+        }
         if DemoFixture.isEnabled {
             // `--demo <scenario>` opts into the isolated multi-account preview; a bare `--demo`
             // keeps the single-account screenshot fixtures the marketing pipeline relies on.
@@ -1249,15 +1287,16 @@ enum AppComposition {
             continuityCache: UsageContinuityCache(),
             defaultLoginRecords: makeDefaultLoginRecordStore(isDemo: DemoFixture.isEnabled),
             signOutRecord: signOutRecord,
-            sessionReliabilityRecord: makeSessionReliabilityRecord(),
+            sessionReliabilityRecord: capturingDemo ? nil : makeSessionReliabilityRecord(),
             bankedResetAcknowledgements: bankedResetAcknowledgements,
-            notificationCoordinator: NotificationCoordinator(
+            notificationCoordinator: capturingDemo ? nil : NotificationCoordinator(
                 poster: notificationClient,
                 useItUpLedger: UseItUpLedger(defaults: launchDefaults),
                 bankedResetBaseline: BankedResetNotificationBaseline(defaults: launchDefaults)
             ),
-            widgetExporter: widgetExporter(),
-            phoneSyncExporter: phoneSyncExporter()
+            widgetExporter: capturingDemo ? nil : widgetExporter(),
+            phoneSyncExporter: capturingDemo ? nil : phoneSyncExporter(),
+            capturesAllAccounts: capturingDemo
         )
     }
 

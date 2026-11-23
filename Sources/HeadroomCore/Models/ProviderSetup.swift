@@ -137,7 +137,7 @@ public struct SetupWaitingCopy: Sendable, Equatable {
 /// These values deliberately carry no provider output, paths, account identity, or
 /// caught errors. Presentation copy is derived separately so behavior never depends
 /// on matching a user-facing string.
-public enum ProviderSetupOutcome: Sendable, Equatable, Hashable {
+public enum ProviderSetupOutcome: String, Codable, Sendable, Equatable, Hashable {
     case claudeCLIMissing
     case claudeLoginRequired
     case claudeTrustRequired

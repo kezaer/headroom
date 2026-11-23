@@ -137,6 +137,8 @@ public final class UsageStore {
     var providers: [any UsageProvider]
     private let apiSpendProviders: [any APISpendProvider]
     let preferences: Preferences
+    private let capturesAllAccounts: Bool
+    public private(set) var isReplayingDemoCapture = false
     let borrowedHomes: BorrowedHomeEnvironment?
     let accountRegistry: AccountRegistry?
     let accountStorage: any AccountStorageManaging
@@ -245,8 +247,10 @@ public final class UsageStore {
         notificationCoordinator: NotificationCoordinator? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         widgetExporter: (any WidgetSnapshotExporting)? = nil,
-        phoneSyncExporter: (any CompanionPhoneSyncing)? = nil
+        phoneSyncExporter: (any CompanionPhoneSyncing)? = nil,
+        capturesAllAccounts: Bool = false
     ) {
+        self.capturesAllAccounts = capturesAllAccounts
         self.providers = providers
         self.apiSpendProviders = apiSpendProviders
         self.preferences = preferences
@@ -1162,6 +1166,13 @@ public final class UsageStore {
            acceptsResult(for: key, attachmentGeneration: attachmentGeneration) {
             observedCLIVersions[key] = version
         }
+        if isReplayingDemoCapture {
+            guard acceptsResult(for: key, attachmentGeneration: attachmentGeneration) else { return false }
+            if snapshots[key] != result.snapshot { snapshots[key] = result.snapshot }
+            refreshDisplayMerge(for: key.providerID, exports: false)
+            if notifiesSetup { setupCoordinator?.receive(result.snapshot, for: key) }
+            return true
+        }
         let isCapabilityFailure = result.capability.map { $0 != .available } == true
         if isCapabilityFailure {
             // A provider-wide discovery failure says nothing about this account. Keep a
@@ -1312,6 +1323,21 @@ public final class UsageStore {
         case .unknown, .discovering, .available:
             break
         }
+    }
+
+    func seedCapturedDemo(
+        results: [AccountKey: UsageProviderFetchResult], spend: [APISpendSnapshot], at date: Date
+    ) {
+        isReplayingDemoCapture = true
+        for (key, result) in results {
+            snapshots[key] = result.snapshot
+            observedCLIVersions[key] = result.cliVersion
+            if let capability = result.capability {
+                providerCapabilities[key.providerID] = ProviderCapabilityStatus(state: capability, observedAt: date)
+            }
+        }
+        for snapshot in spend { apiSpendSnapshots[snapshot.providerID] = snapshot }
+        for provider in registeredProviderOrder { refreshDisplayMerge(for: provider, exports: false) }
     }
 
     private func mergeSpend(id: ProviderID, fresh: APISpendSnapshot) {
@@ -1589,7 +1615,7 @@ extension UsageStore: AccountProbeSchedulerHost {
               !removingAccounts.contains(key),
               let surface = UsageSurface.subscription(for: key.providerID)
         else { return false }
-        return enabledSurfaces.contains(surface)
+        return capturesAllAccounts || enabledSurfaces.contains(surface)
     }
 
     /// Engine side, following the merge map (KTD8): never a remembered row.
