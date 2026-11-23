@@ -86,6 +86,60 @@ struct DemoCaptureTests {
         #expect(store.snapshot(for: row.key) == snapshot)
     }
 
+    @Test func missingFieldsUseCurrentDefaults() async throws {
+        let original = await capture()
+        var json = try captureJSON(original)
+        var settings = try #require(json["settings"] as? [String: Any])
+        for key in ["showMenuBarPercentage", "menuBarProviderOrder", "menuBarIconStyle", "enabledSurfaces"] {
+            settings.removeValue(forKey: key)
+        }
+        var providers = try #require(settings["providerSettings"] as? [[String: Any]])
+        let codex = try #require(providers.firstIndex { $0["windowWasChosen"] as? Bool == true })
+        providers[codex].removeValue(forKey: "menuBarWindow")
+        providers[codex].removeValue(forKey: "windowWasChosen")
+        settings["providerSettings"] = providers
+        json["settings"] = settings
+        json.removeValue(forKey: "providerOrder")
+        json.removeValue(forKey: "hasT3Claude")
+        var accounts = try #require(json["accounts"] as? [[String: Any]])
+        let tracked = try #require(accounts.firstIndex { $0["label"] as? String == "Studio" })
+        accounts[tracked].removeValue(forKey: "isRemembered")
+        accounts[tracked].removeValue(forKey: "mergesBuiltIn")
+        json["accounts"] = accounts
+
+        let data = try JSONSerialization.data(withJSONObject: json)
+        let decoded = try JSONDecoder().decode(DemoCapture.self, from: data)
+        let defaults = Preferences(defaults: DemoMemoryDefaults())
+        let store = decoded.makeReplayStore(defaults: DemoMemoryDefaults(), at: captureDate)
+        #expect(store.showMenuBarPercentage == defaults.showMenuBarPercentage)
+        #expect(decoded.settings.menuBarProviderOrder == defaults.menuBarProviderOrder)
+        #expect(store.menuBarIconStyle == defaults.menuBarIconStyle)
+        #expect(store.isSurfaceEnabled(.codexSubscription) == defaults.isSurfaceEnabled(.codexSubscription))
+        #expect(store.menuBarWindowChoice(for: .codex) == defaults.menuBarWindowChoice(for: .codex))
+        #expect(store.menuBarFillSource == .codex)
+        #expect(decoded.providerOrder == original.providerOrder)
+        #expect(!decoded.hasT3Claude)
+        #expect(!decoded.accounts[tracked].isRemembered)
+        #expect(!decoded.accounts[tracked].mergesBuiltIn)
+    }
+
+    @Test func ignoresUnknownFields() async throws {
+        let original = await capture()
+        var json = try captureJSON(original)
+        var settings = try #require(json["settings"] as? [String: Any])
+        settings["futureSetting"] = ["enabled": true]
+        json["settings"] = settings
+        json["futureCaptureField"] = 3
+
+        let data = try JSONSerialization.data(withJSONObject: json)
+        #expect(try JSONDecoder().decode(DemoCapture.self, from: data) == original)
+    }
+
+    private func captureJSON(_ capture: DemoCapture) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(capture)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     @Test func encoderNeverCarriesCredentialsAccountKeysOrHomePaths() async throws {
         let capture = await capture()
         let data = try JSONEncoder().encode(capture)

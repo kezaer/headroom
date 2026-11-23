@@ -2,6 +2,9 @@ import Foundation
 
 /// Only the settings read by the captured Mac surfaces.
 struct DemoCaptureSettings: Codable, Equatable, Sendable {
+    fileprivate static let defaultPreferences = Preferences(defaults: DemoMemoryDefaults())
+    static let defaults = Self(defaultPreferences, at: .distantPast)
+
     let appearancePreference: String
     let usagePercentageMode: String
     let accountTitleInk: String
@@ -30,6 +33,33 @@ struct DemoCaptureSettings: Codable, Equatable, Sendable {
         let menuBarWindow: String
         let windowWasChosen: Bool
         let renewalOffset: TimeInterval?
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Self.defaults
+        appearancePreference = try values.decodeIfPresent(String.self, forKey: .appearancePreference) ?? defaults.appearancePreference
+        usagePercentageMode = try values.decodeIfPresent(String.self, forKey: .usagePercentageMode) ?? defaults.usagePercentageMode
+        accountTitleInk = try values.decodeIfPresent(String.self, forKey: .accountTitleInk) ?? defaults.accountTitleInk
+        accountLayout = try values.decodeIfPresent(String.self, forKey: .accountLayout) ?? defaults.accountLayout
+        meterFormat = try values.decodeIfPresent(String.self, forKey: .meterFormat) ?? defaults.meterFormat
+        meterShape = try values.decodeIfPresent(String.self, forKey: .meterShape) ?? defaults.meterShape
+        meterFill = try values.decodeIfPresent(String.self, forKey: .meterFill) ?? defaults.meterFill
+        menuBarIconStyle = try values.decodeIfPresent(String.self, forKey: .menuBarIconStyle) ?? defaults.menuBarIconStyle
+        antigravitySourcePreference = try values.decodeIfPresent(String.self, forKey: .antigravitySourcePreference) ?? defaults.antigravitySourcePreference
+        apiSpendPeriod = try values.decodeIfPresent(String.self, forKey: .apiSpendPeriod) ?? defaults.apiSpendPeriod
+        showMenuBarPercentage = try values.decodeIfPresent(Bool.self, forKey: .showMenuBarPercentage) ?? defaults.showMenuBarPercentage
+        showAllProviderAccountsInMenuBar = try values.decodeIfPresent(Bool.self, forKey: .showAllProviderAccountsInMenuBar) ?? defaults.showAllProviderAccountsInMenuBar
+        useEmailAsAccountName = try values.decodeIfPresent(Bool.self, forKey: .useEmailAsAccountName) ?? defaults.useEmailAsAccountName
+        expandAccountsHorizontally = try values.decodeIfPresent(Bool.self, forKey: .expandAccountsHorizontally) ?? defaults.expandAccountsHorizontally
+        showCodexSparkCountersInApp = try values.decodeIfPresent(Bool.self, forKey: .showCodexSparkCountersInApp) ?? defaults.showCodexSparkCountersInApp
+        showsAntigravityFiveHourWindows = try values.decodeIfPresent(Bool.self, forKey: .showsAntigravityFiveHourWindows) ?? defaults.showsAntigravityFiveHourWindows
+        tracksT3Claude = try values.decodeIfPresent(Bool.self, forKey: .tracksT3Claude) ?? defaults.tracksT3Claude
+        pollIntervalMinutes = try values.decodeIfPresent(Int.self, forKey: .pollIntervalMinutes) ?? defaults.pollIntervalMinutes
+        menuBarProviderOrder = try values.decodeIfPresent([ProviderID].self, forKey: .menuBarProviderOrder) ?? defaults.menuBarProviderOrder
+        menuBarFillProviders = try values.decodeIfPresent([ProviderID].self, forKey: .menuBarFillProviders)
+        enabledSurfaces = try values.decodeIfPresent([UsageSurface].self, forKey: .enabledSurfaces) ?? defaults.enabledSurfaces
+        providerSettings = try values.decodeIfPresent([ProviderSettings].self, forKey: .providerSettings) ?? defaults.providerSettings
     }
 
     init(_ preferences: Preferences, at date: Date) {
@@ -97,5 +127,21 @@ struct DemoCaptureSettings: Codable, Equatable, Sendable {
             }
             preferences.setRenewalDate(entry.renewalOffset.map(date.addingTimeInterval), for: entry.provider)
         }
+    }
+}
+
+extension DemoCaptureSettings.ProviderSettings {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let provider = try values.decode(ProviderID.self, forKey: .provider)
+        let defaults = DemoCaptureSettings.defaultPreferences
+        self.init(
+            provider: provider,
+            menuBarWindow: try values.decodeIfPresent(String.self, forKey: .menuBarWindow)
+                ?? defaults.menuBarWindowChoice(for: provider).rawValue,
+            windowWasChosen: try values.decodeIfPresent(Bool.self, forKey: .windowWasChosen)
+                ?? defaults.hasChosenMenuBarWindow(for: provider),
+            renewalOffset: try values.decodeIfPresent(TimeInterval.self, forKey: .renewalOffset)
+        )
     }
 }

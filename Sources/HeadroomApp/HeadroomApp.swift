@@ -16,9 +16,9 @@ import HeadroomCore
 @main
 enum Entry {
     static func main() {
-        if case .captured = DemoFixture.scenarioRequest() {
-            guard AppComposition.capturedDemo != nil else {
-                FileHandle.standardError.write(Data("Could not load the Headroom demo capture. Run --capture-demo while online.\n".utf8))
+        if let capture = AppComposition.capturedDemoResult {
+            if case .failure(let error) = capture {
+                MainActor.assumeIsolated { DevCaptureCommand.showLoadFailure(error) }
                 exit(EXIT_FAILURE)
             }
             HeadroomApp.main()
@@ -1083,10 +1083,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// Adding a third provider is a one-line append here plus a card — no engine change.
 enum AppComposition {
     private static let t3Installation = T3Installation()
-    static let capturedDemo: DemoCapture? = {
+    static let capturedDemoResult: Result<DemoCapture, Error>? = {
         guard case .captured(let path) = DemoFixture.scenarioRequest() else { return nil }
-        return try? DevCaptureCommand.load(path: path)
+        return Result { try DevCaptureCommand.load(path: path) }
     }()
+    static var capturedDemo: DemoCapture? { try? capturedDemoResult?.get() }
 
     static func isT3ClaudeAvailable() -> Bool {
         !usesInertAntigravity() && t3Installation.claudeInstanceName() != nil

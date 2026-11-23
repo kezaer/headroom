@@ -30,6 +30,28 @@ public struct DemoCapture: Codable, Equatable, Sendable {
 
         public var windowCount: Int { windows.count }
 
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try values.decode(ProviderID.self, forKey: .provider)
+            label = try values.decode(String.self, forKey: .label)
+            isRemembered = try values.decodeIfPresent(Bool.self, forKey: .isRemembered) ?? false
+            isBuiltIn = try values.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+            source = try values.decodeIfPresent(Source.self, forKey: .source)
+                ?? (isBuiltIn || isRemembered ? .existingCLI : .separateLogin)
+            mergesBuiltIn = try values.decodeIfPresent(Bool.self, forKey: .mergesBuiltIn) ?? false
+            badge = try values.decodeIfPresent(String.self, forKey: .badge)
+            acknowledgedBankedResets = try values.decodeIfPresent(Int.self, forKey: .acknowledgedBankedResets)
+            cliVersion = try values.decodeIfPresent(String.self, forKey: .cliVersion)
+            plan = try values.decodeIfPresent(String.self, forKey: .plan)
+            email = try values.decodeIfPresent(String.self, forKey: .email)
+            credits = try values.decodeIfPresent(Int.self, forKey: .credits)
+            planStatus = try values.decodeIfPresent(UsageSnapshot.PlanStatus.self, forKey: .planStatus)
+            readingOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .readingOffset)
+            lastReadOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .lastReadOffset)
+            status = try values.decodeIfPresent(Status.self, forKey: .status) ?? .pending
+            windows = try values.decodeIfPresent([Window].self, forKey: .windows) ?? []
+        }
+
         init(
             account: ProviderAccount, source: Source, snapshot: UsageSnapshot, at date: Date,
             badge: String?, cliVersion: String?, acknowledgedBankedResets: Int?,
@@ -75,6 +97,21 @@ public struct DemoCapture: Codable, Equatable, Sendable {
     let spend: [Spend]
     public let hasT3Claude: Bool
     public let hasT3Antigravity: Bool
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        capturedAt = try values.decode(Date.self, forKey: .capturedAt)
+        accounts = try values.decode([Account].self, forKey: .accounts)
+        settings = try values.decodeIfPresent(DemoCaptureSettings.self, forKey: .settings) ?? .defaults
+        var seenProviders: Set<ProviderID> = []
+        providerOrder = try values.decodeIfPresent([ProviderID].self, forKey: .providerOrder)
+            ?? accounts.map(\.provider).filter { seenProviders.insert($0).inserted }
+        capabilities = try values.decodeIfPresent([Capability].self, forKey: .capabilities) ?? []
+        spend = try values.decodeIfPresent([Spend].self, forKey: .spend) ?? []
+        hasT3Claude = try values.decodeIfPresent(Bool.self, forKey: .hasT3Claude) ?? false
+        hasT3Antigravity = try values.decodeIfPresent(Bool.self, forKey: .hasT3Antigravity) ?? false
+    }
 
     @MainActor
     public init(
@@ -142,6 +179,19 @@ public struct DemoCapture: Codable, Equatable, Sendable {
         let staleOffset: TimeInterval?
         let unavailableOffset: TimeInterval?
         let isLimited: Bool
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try values.decode(String.self, forKey: .kind)
+            usedFraction = try values.decode(Double.self, forKey: .usedFraction)
+            billingDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .billingDuration)
+            resetOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .resetOffset)
+            unresolvedReset = try values.decodeIfPresent(String.self, forKey: .unresolvedReset)
+            observedOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .observedOffset)
+            staleOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .staleOffset)
+            unavailableOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .unavailableOffset)
+            isLimited = try values.decodeIfPresent(Bool.self, forKey: .isLimited) ?? false
+        }
 
         init(_ window: UsageWindow, at date: Date) {
             kind = window.kind.persistentID
@@ -217,6 +267,13 @@ public struct DemoCapture: Codable, Equatable, Sendable {
         let kind: Kind
         let issue: String?
 
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try values.decode(ProviderID.self, forKey: .provider)
+            kind = try values.decodeIfPresent(Kind.self, forKey: .kind) ?? .unknown
+            issue = try values.decodeIfPresent(String.self, forKey: .issue)
+        }
+
         init(provider: ProviderID, state: ProviderCapabilityState) {
             self.provider = provider
             if case .inconclusive(let issue) = state { self.issue = issue.rawValue }
@@ -252,6 +309,18 @@ public struct DemoCapture: Codable, Equatable, Sendable {
         let kind: APISpendKind
         let readingOffset: TimeInterval?
         let status: Status
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            provider = try values.decode(ProviderID.self, forKey: .provider)
+            name = try values.decode(String.self, forKey: .name)
+            amount = try values.decodeIfPresent(Double.self, forKey: .amount)
+            currency = try values.decodeIfPresent(String.self, forKey: .currency)
+            period = try values.decode(String.self, forKey: .period)
+            kind = try values.decodeIfPresent(APISpendKind.self, forKey: .kind) ?? .periodSpend
+            readingOffset = try values.decodeIfPresent(TimeInterval.self, forKey: .readingOffset)
+            status = try values.decodeIfPresent(Status.self, forKey: .status) ?? .pending
+        }
 
         init(_ snapshot: APISpendSnapshot, at date: Date) {
             provider = snapshot.providerID

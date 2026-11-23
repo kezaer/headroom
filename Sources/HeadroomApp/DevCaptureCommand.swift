@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import HeadroomCore
@@ -17,6 +18,30 @@ enum DevCaptureCommand {
         let capture = try JSONDecoder().decode(DemoCapture.self, from: Data(contentsOf: url))
         guard capture.isSupportedVersion else { throw Failure.unsupportedVersion }
         return capture
+    }
+
+    @MainActor
+    static func showLoadFailure(_ error: Error) {
+        let reason: String
+        switch error {
+        case Failure.unsupportedVersion:
+            reason = "This version of Headroom cannot replay the capture’s format."
+        case is DecodingError:
+            reason = "The capture contains invalid or incomplete JSON."
+        case let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile:
+            reason = "The capture file could not be found."
+        default:
+            reason = "The capture file could not be read."
+        }
+
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        let alert = NSAlert()
+        alert.messageText = "Could not load the Headroom demo capture"
+        alert.informativeText = "\(reason)\n\nTo recapture while online, run:\n/Applications/Headroom.app/Contents/MacOS/Headroom --capture-demo"
+        alert.addButton(withTitle: "Quit")
+        app.activate()
+        alert.runModal()
     }
 
     static func run() -> Never {
