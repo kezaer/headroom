@@ -119,6 +119,7 @@ jobs:
 
   deploy:
     needs: promote
+    if: always() && needs.promote.result == 'success'
     environment: github-pages
     runs-on: ubuntu-latest
     permissions:
@@ -129,6 +130,7 @@ jobs:
 
   tap:
     needs: deploy
+    if: always() && needs.deploy.result == 'success'
     runs-on: macos-26
     environment: homebrew-tap
     steps:
