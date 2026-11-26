@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Pacemark single-ink mark, "Bolder arc + 78%" (chosen 2026-11-26): same geometry as the app icon, no tile. -->
+  <path d="M24.02 75.75 A30 30 0 1 1 75.98 75.75" stroke="#000" stroke-opacity=".28" stroke-width="11" fill="none" stroke-linecap="round"/>
+  <path d="M24.02 75.75 A30 30 0 1 1 77.66 49.12" stroke="#000" stroke-width="11" fill="none" stroke-linecap="round"/>
+  <path d="M53.95 42.17 L58.73 19.67" stroke="#000" stroke-width="4" stroke-linecap="round"/>
+</svg>

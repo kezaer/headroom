@@ -1,0 +1,342 @@
+import Foundation
+
+/// Why an API-spend row has no live amount, as typed evidence instead of a failure
+/// string. Badge, message and call-to-action are all decided from this one value, so the
+/// card can no longer say "Needs setup" next to "admin key rejected" — those two lines
+/// were computed independently (badge from `isPermanent`, CTA from "amount is nil").
+public enum APISpendAttention: String, Codable, Sendable, Equatable, CaseIterable {
+    /// No key is stored yet.
+    case missingKey
+    /// A key is stored and the provider refused it (401).
+    case keyRejected
+    /// A key is stored and accepted, but it cannot read the cost surface (403).
+    case keyLacksAccess
+    /// Permanent, but none of the key conditions above — keep the source's own copy.
+    case setupRequired
+    /// Retryable; the next poll may clear it on its own.
+    case retryable
+
+    public init(reason: FailureReason) {
+        switch reason {
+        case .notLoggedIn: self = .missingKey
+        case .needsReauth: self = .keyRejected
+        case .scopeDenied: self = .keyLacksAccess
+        case .transient, .decode: self = .retryable
+        case .providerSetup(let outcome): self = outcome.isPermanent ? .setupRequired : .retryable
+        }
+    }
+
+    /// The key itself is what's wrong — there is nothing to wait for, only a key to add,
+    /// replace or re-scope. Rows in these states must offer that action even when they
+    /// still show a retained amount (`setupRequired` is deliberately excluded: its copy
+    /// comes from the source and may not be about a key at all).
+    public var isKeyProblem: Bool {
+        switch self {
+        case .missingKey, .keyRejected, .keyLacksAccess: true
+        case .setupRequired, .retryable: false
+        }
+    }
+}
+
+/// The credential a spend provider actually needs, in the same words the Settings → API
+/// Spend pane puts on its field ("Anthropic admin key", "xAI management key"), so the two
+/// surfaces can't disagree about what the user is being asked to paste. The article is
+/// declared per credential rather than assembled at the call site: copy that picks "a"/"an"
+/// from a vendor name produces "a xAI", and only the provider knows whether it wants an
+/// admin key or a management key.
+public struct APISpendCredentialDescriptor: Sendable, Equatable {
+    /// The indefinite article that belongs to `noun`.
+    public let article: String
+    /// Bare noun for mid-sentence use — "admin key".
+    public let noun: String
+    /// What that credential has to be able to read, article included — "the cost report".
+    /// Each vendor exposes a different surface, so the access failure names the real one.
+    public let reportNoun: String
+
+    public init(article: String, noun: String, reportNoun: String) {
+        self.article = article
+        self.noun = noun
+        self.reportNoun = reportNoun
+    }
+
+    /// The noun carrying its own article — "an admin key", "a management key".
+    public var credentialNoun: String { "\(article) \(noun)" }
+
+    /// `/v1/organizations/cost_report` refuses a regular key; the pane's field is
+    /// "Anthropic admin key".
+    public static let anthropicAdminKey = APISpendCredentialDescriptor(
+        article: "an",
+        noun: "admin key",
+        reportNoun: "the cost report"
+    )
+
+    /// `/v1/organization/costs` refuses a regular key; the pane's field is
+    /// "OpenAI admin key".
+    public static let openAIAdminKey = APISpendCredentialDescriptor(
+        article: "an",
+        noun: "admin key",
+        reportNoun: "organization costs"
+    )
+
+    /// The management API reads team billing and takes a management key, not an admin
+    /// key — the pane's field is "xAI management key".
+    public static let xAIManagementKey = APISpendCredentialDescriptor(
+        article: "a",
+        noun: "management key",
+        reportNoun: "team billing"
+    )
+
+    /// A spend provider that hasn't declared its credential. Vendor-free wording, so a new
+    /// provider reads plainly instead of inheriting Anthropic's nouns.
+    public static let generic = APISpendCredentialDescriptor(
+        article: "an",
+        noun: "API key",
+        reportNoun: "cost data"
+    )
+
+    public static func forProvider(_ providerID: ProviderID?) -> APISpendCredentialDescriptor {
+        switch providerID {
+        case .claude: anthropicAdminKey
+        case .codex: openAIAdminKey
+        case .grok: xAIManagementKey
+        default: generic
+        }
+    }
+}
+
+public struct APISpendRowStatus: Sendable, Equatable {
+    public enum Tone: Sendable, Equatable {
+        /// First run, before any fetch — quieter than a failure.
+        case quiet
+        /// Retryable staleness; informational, not actionable.
+        case neutral
+        case warning
+        case critical
+    }
+
+    public let badge: String?
+    public let shortBadge: String?
+    public let tone: Tone
+    public let message: String?
+    /// Title for the button that opens Settings → API Spend; nil renders no button.
+    public let callToAction: String?
+    /// The stored (or absent) key is itself the problem — see `APISpendAttention.isKeyProblem`.
+    public let keyNeedsAttention: Bool
+
+    public init(
+        badge: String?,
+        shortBadge: String? = nil,
+        tone: Tone,
+        message: String?,
+        callToAction: String?,
+        keyNeedsAttention: Bool = false
+    ) {
+        self.badge = badge
+        self.shortBadge = shortBadge
+        self.tone = tone
+        self.message = message
+        self.callToAction = callToAction
+        self.keyNeedsAttention = keyNeedsAttention
+    }
+
+    /// Whether the row renders its button. A row with an amount normally stays a plain
+    /// number, but continuity keeps showing the last total after the key stops working —
+    /// and a retained amount beside a "Key rejected" badge with no button is a dead end.
+    /// PA3: pending and retryable rows now carry no `callToAction` at all, so they fall out
+    /// here on the first line rather than on the amount rule.
+    public func showsCTA(hasAmount: Bool) -> Bool {
+        guard callToAction != nil else { return false }
+        return keyNeedsAttention || !hasAmount
+    }
+}
+
+public enum APISpendPresentation {
+    public static func amountText(amount: Double?, currency: String?) -> String? {
+        guard let amount, let currency, !currency.isEmpty else { return nil }
+        let code = currency.uppercased()
+        if code == "USD" {
+            return String(format: "$%.2f", amount)
+        }
+
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .currency
+        formatter.currencyCode = code
+        formatter.maximumFractionDigits = 2
+        formatter.minimumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: amount)) ?? "\(code) \(String(format: "%.2f", amount))"
+    }
+
+    // MARK: - Row status
+
+    /// The vendor inside a spend provider's display name ("Anthropic API" → "Anthropic"),
+    /// so copy names the brand rather than the row title. Derived rather than kept in a
+    /// per-provider copy table, so a new spend provider needs no new strings.
+    public static func vendorName(from displayName: String) -> String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasSuffix(" API") else { return trimmed }
+        let vendor = String(trimmed.dropLast(4)).trimmingCharacters(in: .whitespaces)
+        return vendor.isEmpty ? trimmed : vendor
+    }
+
+    /// macOS popover row: the full `Freshness` still carries the typed `FailureReason`.
+    public static func rowStatus(
+        freshness: Freshness,
+        providerID: ProviderID? = nil,
+        displayName: String,
+        kind: APISpendKind = .periodSpend
+    ) -> APISpendRowStatus {
+        switch freshness {
+        case .pending:
+            pendingStatus
+        case .live:
+            liveStatus
+        case .stale(let reason):
+            attentionStatus(
+                APISpendAttention(reason: reason),
+                sourceMessage: reason.message,
+                vendor: vendorName(from: displayName),
+                credential: .forProvider(providerID),
+                kind: kind
+            )
+        }
+    }
+
+
+    /// PA3: no call to action. This is the *first* fetch after a key is saved, and with no
+    /// retained amount the chip renders — telling a user who has just saved a key to add one,
+    /// on a pane that says "Saved securely". Waiting is not a state anyone can act on.
+    private static let pendingStatus = APISpendRowStatus(
+        badge: nil,
+        tone: .quiet,
+        message: "Waiting for cost data",
+        callToAction: nil
+    )
+
+    private static let liveStatus = APISpendRowStatus(
+        badge: nil,
+        tone: .neutral,
+        message: nil,
+        callToAction: nil
+    )
+
+    /// R2C8 vocabulary again, this time as the noun the missing-key line promises. A balance
+    /// row's figure is money *remaining*, so "to see xAI spend" named a number the key would
+    /// never produce — the popover chip on that same row reads "Remaining balance".
+    private static func figureNoun(kind: APISpendKind) -> String {
+        switch kind {
+        case .periodSpend: "spend"
+        case .balance: "balance"
+        }
+    }
+
+    private static func attentionStatus(
+        _ attention: APISpendAttention,
+        sourceMessage: String,
+        vendor: String,
+        credential: APISpendCredentialDescriptor,
+        kind: APISpendKind
+    ) -> APISpendRowStatus {
+        switch attention {
+        case .missingKey:
+            APISpendRowStatus(
+                badge: "Needs setup",
+                shortBadge: "Setup",
+                tone: .warning,
+                message: "Add \(credential.credentialNoun) to see \(vendor) \(figureNoun(kind: kind))",
+                callToAction: "Add Key",
+                keyNeedsAttention: true
+            )
+        case .keyRejected:
+            APISpendRowStatus(
+                badge: "Key rejected",
+                shortBadge: "Rejected",
+                tone: .critical,
+                message: "\(vendor) didn’t accept the saved \(credential.noun)",
+                callToAction: "Replace Key",
+                keyNeedsAttention: true
+            )
+        case .keyLacksAccess:
+            APISpendRowStatus(
+                badge: "Key lacks access",
+                shortBadge: "Denied",
+                tone: .warning,
+                message: "Key can’t read \(credential.reportNoun)",
+                // PA3: the pane offers Replace and Remove — there is no "fix" to press.
+                callToAction: "Replace Key",
+                keyNeedsAttention: true
+            )
+        case .setupRequired:
+            APISpendRowStatus(
+                badge: "Needs setup",
+                shortBadge: "Setup",
+                tone: .warning,
+                message: sourceMessage,
+                callToAction: "Add Key"
+            )
+        case .retryable:
+            // PA3: retryable staleness is the app's problem, not the key's — the next poll may
+            // clear it on its own — so it names no action the user could take.
+            APISpendRowStatus(
+                badge: "Stale",
+                shortBadge: "Stale",
+                tone: .neutral,
+                message: sourceMessage,
+                callToAction: nil
+            )
+        }
+    }
+
+
+    public static func directionTerm(kind: APISpendKind) -> String {
+        switch kind {
+        case .periodSpend: "used"
+        case .balance: "left"
+        }
+    }
+
+
+    public struct PopoverIdentity: Sendable, Equatable {
+        public let title: String
+        /// Replaces the period chip's label, or nil when the name carried no qualifier.
+        public let chipOverride: String?
+    }
+
+    public static func popoverIdentity(displayName: String) -> PopoverIdentity {
+        let trimmed = displayName.trimmingCharacters(in: .whitespaces)
+        guard let separator = trimmed.lastIndex(of: " ") else {
+            return PopoverIdentity(title: trimmed, chipOverride: nil)
+        }
+        let qualifier = String(trimmed[trimmed.index(after: separator)...])
+        let title = String(trimmed[..<separator]).trimmingCharacters(in: .whitespaces)
+        guard let first = qualifier.first, first.isLowercase, !title.isEmpty else {
+            return PopoverIdentity(title: trimmed, chipOverride: nil)
+        }
+        return PopoverIdentity(
+            title: title,
+            chipOverride: first.uppercased() + String(qualifier.dropFirst())
+        )
+    }
+
+    public static func contextLabel(kind: APISpendKind, periodLabel: String) -> String {
+        kind == .balance ? "Remaining balance" : periodLabel
+    }
+
+    /// The exact page where a user tops up prepaid API credits — the billing screen that
+    /// hosts Anthropic's "Buy credits" / OpenAI's "Add to credit balance" control, not a
+    /// docs or marketing page. Anthropic's console moved to platform.claude.com (late
+    /// 2025), so we link there directly instead of riding the console.anthropic.com
+    /// redirect. Kept in Core so the mapping is unit-tested.
+    public static func addCreditsURL(for providerID: ProviderID) -> URL? {
+        switch providerID {
+        case .claude:
+            URL(string: "https://platform.claude.com/settings/billing")
+        case .codex:
+            URL(string: "https://platform.openai.com/settings/organization/billing/overview")
+        case .grok:
+            URL(string: "https://console.x.ai")
+        default:
+            nil
+        }
+    }
+}

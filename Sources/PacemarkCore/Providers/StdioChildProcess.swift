@@ -1,0 +1,244 @@
+import Foundation
+import Darwin
+
+/// A CLI spawned as its own session leader, so a server that
+/// hangs, or leaves workers behind, can be ended as one process group. Stderr is discarded
+/// unless a caller asks to watch it: nothing a CLI prints there may reach a log or an error.
+struct StdioChildProcess: Sendable {
+    private let pid: pid_t
+    private let stdin: Int32
+    private let stdout: Int32
+    /// -1 unless spawned with `stderr: .watch`.
+    private let stderr: Int32
+
+    /// Where the child's stderr goes. `.watch` pipes it back only so a caller can match a
+    /// fixed marker while the child runs; the bytes are never kept, logged or returned.
+    enum Stderr {
+        case discard
+        case watch
+    }
+
+    /// What the child reads. `.pipe` is the default every server-style caller writes to;
+    /// `.nullDevice` gives a run-and-exit CLI end of file at once, so a client that ever reads
+    /// stdin cannot sit on a pipe nobody writes until its deadline.
+    enum Stdin {
+        case pipe
+        case nullDevice
+    }
+
+    enum Stdout {
+        case pipe
+        case discard
+    }
+
+    static func spawn(
+        path: String,
+        arguments: [String],
+        environment: [String: String],
+        workingDirectory: String,
+        stdin stdinMode: Stdin = .pipe,
+        stdout stdoutMode: Stdout = .pipe,
+        stderr stderrMode: Stderr = .discard
+    ) -> StdioChildProcess? {
+        var input = [Int32](repeating: -1, count: 2)
+        var output = [Int32](repeating: -1, count: 2)
+        switch stdinMode {
+        case .pipe:
+            guard pipe(&input) == 0 else { return nil }
+        case .nullDevice:
+            input[0] = open("/dev/null", O_RDONLY)
+            guard input[0] >= 0 else { return nil }
+        }
+        if stdoutMode == .pipe, pipe(&output) != 0 {
+            for fd in input where fd >= 0 { close(fd) }
+            return nil
+        }
+        guard input[1] < 0 || fcntl(input[1], F_SETNOSIGPIPE, 1) != -1 else {
+            close(input[0]); close(input[1]); close(output[0]); close(output[1])
+            return nil
+        }
+        var errorPipe = [Int32](repeating: -1, count: 2)
+        if stderrMode == .watch, pipe(&errorPipe) != 0 {
+            for fd in input + output where fd >= 0 { close(fd) }
+            return nil
+        }
+        let discardsOutput = stdoutMode == .discard || stderrMode == .discard
+        let devNull = discardsOutput ? open("/dev/null", O_WRONLY) : -1
+        guard !discardsOutput || devNull >= 0 else {
+            for fd in input + output + errorPipe where fd >= 0 { close(fd) }
+            return nil
+        }
+
+        var actions = posix_spawn_file_actions_t(bitPattern: 0)
+        posix_spawn_file_actions_init(&actions)
+        if #available(macOS 26.0, *) {
+            posix_spawn_file_actions_addchdir(&actions, workingDirectory)
+        } else {
+            posix_spawn_file_actions_addchdir_np(&actions, workingDirectory)
+        }
+        posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO)
+        posix_spawn_file_actions_adddup2(&actions, stdoutMode == .discard ? devNull : output[1], STDOUT_FILENO)
+        if stderrMode == .discard { posix_spawn_file_actions_adddup2(&actions, devNull, STDERR_FILENO) }
+        if errorPipe[1] >= 0 { posix_spawn_file_actions_adddup2(&actions, errorPipe[1], STDERR_FILENO) }
+        for fd in [input[0], input[1], output[0], output[1], devNull, errorPipe[0], errorPipe[1]] where fd >= 0 {
+            posix_spawn_file_actions_addclose(&actions, fd)
+        }
+
+        var attributes = posix_spawnattr_t(bitPattern: 0)
+        posix_spawnattr_init(&attributes)
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+
+        let cEnvironment = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        let cArguments = arguments.map { strdup($0) } + [nil]
+        defer {
+            cEnvironment.forEach { free($0) }
+            cArguments.forEach { free($0) }
+            posix_spawn_file_actions_destroy(&actions)
+            posix_spawnattr_destroy(&attributes)
+        }
+
+        var pid: pid_t = 0
+        let spawnStatus = posix_spawn(&pid, path, &actions, &attributes, cArguments, cEnvironment)
+        close(input[0])
+        if output[1] >= 0 { close(output[1]) }
+        if devNull >= 0 { close(devNull) }
+        if errorPipe[1] >= 0 { close(errorPipe[1]) }
+        guard spawnStatus == 0 else {
+            if input[1] >= 0 { close(input[1]) }
+            if output[0] >= 0 { close(output[0]) }
+            if errorPipe[0] >= 0 { close(errorPipe[0]) }
+            return nil
+        }
+        return StdioChildProcess(pid: pid, stdin: input[1], stdout: output[0], stderr: errorPipe[0])
+    }
+
+    /// Bounded protocol replies must not hang if a child stops consuming stdin.
+    func writeWithoutBlocking(_ data: Data) -> Bool {
+        guard stdin >= 0, fcntl(stdin, F_SETFL, O_NONBLOCK) != -1 else { return false }
+        return write(data)
+    }
+
+    func write(_ data: Data) -> Bool {
+        guard stdin >= 0 else { return false }
+        return data.withUnsafeBytes { rawBuffer in
+            guard var pointer = rawBuffer.baseAddress else { return false }
+            var remaining = rawBuffer.count
+            while remaining > 0 {
+                let written = Darwin.write(stdin, pointer, remaining)
+                guard written > 0 else { return false }
+                remaining -= written
+                pointer = pointer.advanced(by: written)
+            }
+            return true
+        }
+    }
+
+    /// Waits up to 250 ms for output and appends what arrived. False once the pipe has
+    /// closed or failed; callers loop until their own deadline.
+    func readOutput(into buffer: inout Data, deadline: Date) -> Bool {
+        guard stdout >= 0 else { return false }
+        let remainingMilliseconds = max(1, Int(deadline.timeIntervalSinceNow * 1_000))
+        var descriptor = pollfd(fd: stdout, events: Int16(POLLIN), revents: 0)
+        let pollResult = Darwin.poll(&descriptor, 1, Int32(min(remainingMilliseconds, 250)))
+        guard pollResult >= 0 else { return false }
+        guard pollResult > 0 else { return true }
+        var chunk = [UInt8](repeating: 0, count: 8_192)
+        let count = Darwin.read(stdout, &chunk, chunk.count)
+        guard count > 0 else { return false }
+        buffer.append(contentsOf: chunk.prefix(count))
+        return true
+    }
+
+    /// `readOutput` for a child spawned with `stderr: .watch`: also hands whatever stderr
+    /// printed to `onError`, until stderr closes (`errorOpen` turns false). False once stdout
+    /// has closed or failed.
+    func readOutput(
+        into buffer: inout Data,
+        errorOpen: inout Bool,
+        deadline: Date,
+        onError: (Data) -> Void
+    ) -> Bool {
+        guard stdout >= 0 else { return false }
+        let remainingMilliseconds = max(1, Int(deadline.timeIntervalSinceNow * 1_000))
+        let watchesError = errorOpen && stderr >= 0
+        var descriptors = [pollfd(fd: stdout, events: Int16(POLLIN), revents: 0)]
+        if watchesError { descriptors.append(pollfd(fd: stderr, events: Int16(POLLIN), revents: 0)) }
+        let pollResult = Darwin.poll(&descriptors, nfds_t(descriptors.count), Int32(min(remainingMilliseconds, 250)))
+        guard pollResult >= 0 else { return false }
+        guard pollResult > 0 else { return true }
+        var chunk = [UInt8](repeating: 0, count: 8_192)
+        if watchesError, descriptors[1].revents != 0 {
+            let count = Darwin.read(stderr, &chunk, chunk.count)
+            if count > 0 { onError(Data(chunk.prefix(count))) } else { errorOpen = false }
+        }
+        guard descriptors[0].revents != 0 else { return true }
+        let count = Darwin.read(stdout, &chunk, chunk.count)
+        guard count > 0 else { return false }
+        buffer.append(contentsOf: chunk.prefix(count))
+        return true
+    }
+
+    /// Consume watched diagnostics while stdout goes directly to /dev/null.
+    func drainError(until deadline: Date, consume: (Data) -> Bool) {
+        guard stderr >= 0 else { return }
+        var descriptor = pollfd(fd: stderr, events: Int16(POLLIN), revents: 0)
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while Date() < deadline {
+            var info = siginfo_t()
+            let exited = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == pid
+            let ready = Darwin.poll(&descriptor, 1, exited ? 0 : 50)
+            if ready == 0 && exited { return }
+            if ready == 0 || (ready < 0 && errno == EINTR) { continue }
+            guard ready > 0 else { return }
+            let count = Darwin.read(stderr, &chunk, chunk.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0, consume(Data(chunk.prefix(count))) else { return }
+        }
+    }
+
+    /// The leader's exit code once it exits within `seconds`; nil if it is still running or
+    /// was killed by a signal. `WNOWAIT` leaves the leader unreaped, so `terminate()` still
+    /// signals its group while the pid is held and can't be reused, then reaps it.
+    func exitCode(within seconds: TimeInterval) -> Int32? {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            var info = siginfo_t()
+            guard waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 else { return nil }
+            if info.si_pid == pid {
+                return info.si_code == CLD_EXITED ? info.si_status : nil
+            }
+            usleep(10_000)
+        } while Date() < deadline
+        return nil
+    }
+
+    func terminate() {
+        if stdin >= 0 { close(stdin) }
+        if stdout >= 0 { close(stdout) }
+        if stderr >= 0 { close(stderr) }
+        Self.terminateProcessGroup(pid)
+    }
+
+    /// The group is signalled even when the leader has already exited, because a worker it
+    /// started can outlive it. Signalling before reaping keeps the group ID from being
+    /// reused, since an unreaped leader still holds its pid.
+    private static func terminateProcessGroup(_ pid: pid_t) {
+        guard pid > 0 else { return }
+        kill(-pid, SIGTERM)
+        if reapLeader(pid, within: 0.5), kill(-pid, 0) != 0 { return }
+        kill(-pid, SIGKILL)
+        _ = reapLeader(pid, within: 0.5)
+    }
+
+    /// True once the leader is reaped, or was already reaped elsewhere.
+    private static func reapLeader(_ pid: pid_t, within seconds: TimeInterval) -> Bool {
+        var status: Int32 = 0
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid || (result == -1 && errno == ECHILD) { return true }
+            usleep(20_000)
+        } while Date() < deadline
+        return false
+    }
+}

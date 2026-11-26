@@ -1,0 +1,64 @@
+name: CI
+
+# Runs on pushes to main and on pull requests, including ones from forks. It uses
+# `pull_request` (never `pull_request_target`), so fork code runs without repository secrets,
+# and it needs none: everything builds with signing turned off.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-package:
+    name: swift build + swift test
+    # GitHub's Xcode 27 image (Apple silicon, macOS 27). The macos-26 and macos-latest labels
+    # still carry Xcode 26, which can't build this project.
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -version && swift --version
+      - run: ./Scripts/check-pacemark-copy.sh
+      - run: ./Scripts/check-design-system.sh
+      - run: swift build
+      # These suites launch real programs and time them against deadlines of a few seconds.
+      # On this 3-core runner the other ~2,400 tests running at once starved them: a 0.5 s
+      # deadline test measured 5.6 s, `git --version` missed a 5 s deadline, and the Copilot
+      # and OpenCode kill tests ran long (CI runs since 2026-11-13). Running them afterwards,
+      # one at a time, keeps every assertion as written. A new suite that times a real
+      # process belongs in this list.
+      - name: swift test (parallel)
+        run: swift test --skip "$TIMED_PROCESS_SUITES"
+        env:
+          TIMED_PROCESS_SUITES: AntigravityUsageSourceProcessTests|CLIVersionReaderTests|CopilotStatusSourceTests|OpenCodeUsageSourceProcessTests|StdioChildProcessTests
+      - name: swift test (timed process suites, one at a time)
+        run: swift test --skip-build --filter "$TIMED_PROCESS_SUITES" --no-parallel
+        env:
+          TIMED_PROCESS_SUITES: AntigravityUsageSourceProcessTests|CLIVersionReaderTests|CopilotStatusSourceTests|OpenCodeUsageSourceProcessTests|StdioChildProcessTests
+
+  mac-app-tests:
+    name: Mac app tests
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack Sparkle
+        run: ./Scripts/build-app.sh --deps-only
+      - name: Cold-host handoff cleanup
+        run: |
+          xcodebuild -project Pacemark.xcodeproj -scheme PacemarkAppTests \
+            -destination 'platform=macOS' -derivedDataPath ./.xcode-derived \
+            -only-testing:PacemarkAppTests/ClaudeExecutableDiscoveryInteractionTests \
+            PACEMARK_HOST_BUNDLE_ID=org.pacemark.tests.host CODE_SIGNING_ALLOWED=NO test
+      - name: PacemarkAppTests
+        run: |
+          xcodebuild -project Pacemark.xcodeproj -scheme PacemarkAppTests \
+            -destination 'platform=macOS' -derivedDataPath ./.xcode-derived \
+            PACEMARK_HOST_BUNDLE_ID=org.pacemark.tests.host CODE_SIGNING_ALLOWED=NO test

@@ -1,0 +1,24 @@
+.DS_Store
+/.build
+/build
+/Packages
+xcuserdata/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+.swiftpm/
+DerivedData/
+*.profraw
+/.xcode-derived*/
+/.xcode-*-derived/
+/.ios-derived/
+/.derivedData-ios/
+/.xcode-managed-signing/
+/.codex/
+/scratchpad
+/dist
+
+# Licensed fonts stay on the maintainer's machine, outside the source repository.
+/design/appstore/print/assets/brand/TX-02-*.woff2
+
+.claude/
+Pacemark.app/

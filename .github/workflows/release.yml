@@ -1,0 +1,151 @@
+name: Pacemark release
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      promote_tag:
+        description: Published tag to promote
+        required: true
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: pacemark-production-release
+  cancel-in-progress: false
+env:
+  TAG: ${{ inputs.promote_tag || github.ref_name }}
+
+jobs:
+  check:
+    if: github.repository == 'kezaer/pacemark'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git merge-base --is-ancestor "refs/tags/$TAG^{commit}" "origin/$DEFAULT_BRANCH"
+
+  package:
+    needs: check
+    if: github.event_name == 'push' && github.ref_name != vars.LOCAL_RELEASE_TAG
+    runs-on: ${{ vars.RELEASE_MACOS_RUNNER || 'xcode-27' }}
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: |
+          brew install xcodegen
+          swift test
+      - name: Sign and notarize
+        shell: bash
+        env:
+          P12: ${{ secrets.DEVELOPER_ID_P12_B64 }}
+          P12_PASS: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          P8: ${{ secrets.ASC_P8_B64 }}
+          SPARKLE_SECRET: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ vars.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ vars.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          dir=$(mktemp -d "$RUNNER_TEMP/sign.XXXXXX")
+          kc="$dir/release.keychain-db"
+          pass=$(openssl rand -hex 32)
+          original=()
+          while IFS= read -r path; do original+=("$path"); done < <(security list-keychains -d user | sed 's/^ *"//;s/"$//')
+          cleanup() {
+            security list-keychains -d user -s "${original[@]}"
+            security delete-keychain "$kc" || true
+            rm -rf "$dir"
+          }
+          trap cleanup EXIT
+          export ASC_KEY_FILE="$dir/notary.p8" SPARKLE_KEY_FILE="$dir/sparkle.key"
+          printf %s "$P12" | base64 -D > "$dir/id.p12"
+          printf %s "$P8" | base64 -D > "$ASC_KEY_FILE"
+          printf %s "$SPARKLE_SECRET" > "$SPARKLE_KEY_FILE"
+          security create-keychain -p "$pass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pass" "$kc"
+          security list-keychains -d user -s "$kc" "${original[@]}"
+          security import "$dir/id.p12" -k "$kc" -P "$P12_PASS" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$kc" >/dev/null
+          unset P12 P12_PASS P8 SPARKLE_SECRET
+          OPENSSL="$(brew --prefix openssl@3)/bin/openssl" Scripts/release.sh package "$TAG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-release
+          path: dist/${{ env.TAG }}/
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    needs: package
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-release
+          path: dist/${{ env.TAG }}
+      - run: OPENSSL="$(brew --prefix openssl@3)/bin/openssl" Scripts/release.sh publish "$TAG"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  promote:
+    needs: [check, publish]
+    if: always() && needs.check.result == 'success' && (needs.publish.result == 'success' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+      - run: OPENSSL="$(brew --prefix openssl@3)/bin/openssl" Scripts/release.sh promote "$TAG"
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+        with:
+          path: dist/pages
+
+  deploy:
+    needs: promote
+    environment: github-pages
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+
+  tap:
+    needs: deploy
+    runs-on: macos-26
+    environment: homebrew-tap
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: kezaer/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+      - run: |
+          mkdir -p "$(brew --repository)/Library/Taps/kezaer"
+          ln -s "$PWD/tap" "$(brew --repository kezaer/tap)"
+          git -C tap config user.name 'Pacemark Releases'
+          git -C tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          export OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+          Scripts/bump-homebrew-tap.sh "$TAG" tap

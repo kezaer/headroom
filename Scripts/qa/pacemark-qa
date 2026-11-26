@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Own one fixture process and display per checkout, using child handles rather than saved PIDs."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import selectors
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[2]
+PACKAGE = ROOT / 'Tools/PacemarkQA'
+HELPER = PACKAGE / '.build/debug/PacemarkQA'
+STATE = Path(tempfile.gettempdir()) / ('pmqa-' + hashlib.sha256(os.fsencode(ROOT) + os.getenv("PACEMARK_QA_SESSION", "").encode()).hexdigest()[:12])
+SOCKET = STATE / 'control'
+BUNDLE = STATE / 'QA Fixture.app'
+QA_ID = 'org.pacemark.qa.fixture'
+
+
+def prepare():
+    subprocess.run(['swift', 'build', '--package-path', PACKAGE], check=True, stdout=sys.stderr)
+    source = ROOT / 'Pacemark.app'
+    if not source.exists():
+        subprocess.run([ROOT / 'Scripts/pacemark.sh', 'build'], cwd=ROOT, check=True)
+    with tempfile.TemporaryDirectory(dir=STATE) as directory:
+        staged = Path(directory) / BUNDLE.name
+        subprocess.run(['ditto', source, staged], check=True)
+        plist = staged / 'Contents/Info.plist'
+        subprocess.run(['plutil', '-replace', 'CFBundleIdentifier', '-string', QA_ID, plist], check=True)
+        subprocess.run(['codesign', '--force', '--sign', '-', staged], check=True)
+        if BUNDLE.exists():
+            shutil.rmtree(BUNDLE)
+        staged.rename(BUNDLE)
+
+
+def stop(child):
+    if child and child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait()
+
+
+def launch(arguments, display):
+    parser = argparse.ArgumentParser(exit_on_error=False)
+    parser.add_argument('--scenario', required=True)
+    parser.add_argument('--appearance', choices=['light', 'dark'], default='light')
+    parser.add_argument('--pane')
+    parser.add_argument('--status-item', action='store_true')
+    parser.add_argument('--gallery', action='store_true')
+    parser.add_argument('--popover', action='store_true')
+    parser.add_argument('--long-lists', choices=['columns', 'scroll'], default='columns')
+    parser.add_argument('--meter-style')
+    parser.add_argument('--summary-slots', nargs=2, choices=['tightest', 'nextReset', 'apiSpend', 'off'])
+    parser.add_argument('--labels', choices=['empty', 'one', 'off', 'numbers'])
+    parser.add_argument('--bank-tip', action='store_true')
+    parser.add_argument('--tip-prefix')
+    parser.add_argument('--twelve-hour', action='store_true')
+    parser.add_argument('--key', action='store_true')
+    parser.add_argument('--midgrey', action='store_true')
+    options = parser.parse_args(arguments)
+    args = ['--qa-display', display, '--appearance', options.appearance, '--demo']
+    if options.scenario != 'single-account':
+        if not options.scenario.isalnum() and not options.scenario.replace('-', '').isalnum():
+            raise ValueError('Invalid fixture name')
+        args.append(options.scenario)
+    if options.summary_slots:
+        for index, slot in enumerate(options.summary_slots, start=1):
+            args.extend([f'-t3.popover.summarySlot{index}', slot])
+    if options.labels:
+        args.extend(['--qa-labels', options.labels])
+    if options.tip_prefix:
+        args.extend(['--qa-tip-prefix', options.tip_prefix])
+    if options.twelve_hour:
+        args.extend(['-AppleLocale', 'en_US', '-AppleICUForce12HourTime', 'YES'])
+    if options.key:
+        args.append('--qa-key')
+    if options.midgrey:
+        args.append('--qa-midgrey')
+    if options.bank_tip:
+        args.append('--qa-bank-tip')
+    if options.status_item:
+        args.append('--status-item')
+    if options.gallery:
+        args.append('--gallery')
+    if options.popover:
+        args.append('--popover')
+    if options.pane:
+        args.extend(['--pane', options.pane])
+    if options.long_lists == 'scroll':
+        args.append('--vertical-accounts')
+    if options.meter_style:
+        args.extend(['--meter-style', options.meter_style])
+    return subprocess.Popen([BUNDLE / 'Contents/MacOS/Pacemark', *args], stdout=subprocess.PIPE, text=True)
+
+
+def ready(child):
+    with selectors.DefaultSelector() as selector:
+        selector.register(child.stdout, selectors.EVENT_READ)
+        if selector.select(timeout=15):
+            line = child.stdout.readline().strip()
+            if line:
+                return line
+    raise RuntimeError('QA child failed readiness check (see ' + str(STATE / 'session.log') + ')')
+
+
+def serve(server):
+    display = app = None
+    def interrupt(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupt)
+    try:
+        prepare()
+        display = subprocess.Popen([HELPER, 'display'], stdout=subprocess.PIPE, text=True)
+        display_id = str(int(ready(display)))
+        server.settimeout(1)
+        while display.poll() is None:
+            try:
+                client, _ = server.accept()
+            except socket.timeout:
+                continue
+            with client, client.makefile('rb') as stream:
+                try:
+                    args = json.loads(stream.readline())
+                    if args == ['display', 'down']:
+                        stop(app)
+                        stop(display)
+                        client.sendall(b'[0,""]\n')
+                        break
+                    if args == ['display', 'up']:
+                        message = display_id
+                    elif args == ['quit']:
+                        stop(app)
+                        message = ''
+                    elif args[0] == 'launch':
+                        stop(app)
+                        app = launch(args[1:], display_id)
+                        message = ready(app)
+                        if message != 'QA ready ' + display_id:
+                            raise RuntimeError('Unexpected QA placement: ' + message)
+                        message += ' PID ' + str(app.pid)
+                    else:
+                        if app is None or app.poll() is not None:
+                            raise RuntimeError('No live QA fixture')
+                        command = [HELPER, str(app.pid), display_id, *args]
+                        result = subprocess.run(command, capture_output=True, text=True, timeout=45)
+                        if result.returncode:
+                            raise RuntimeError(result.stderr.strip())
+                        message = result.stdout
+                    response = [0, message]
+                except (Exception, SystemExit) as error:
+                    response = [1, str(error)]
+                client.sendall(json.dumps(response).encode() + b'\n')
+    finally:
+        stop(app)
+        stop(display)
+        SOCKET.unlink(missing_ok=True)
+        if BUNDLE.exists():
+            shutil.rmtree(BUNDLE)
+
+
+def main(args):
+    os.umask(0o077)
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    if args[0] == 'serve':
+        serve(socket.socket(fileno=int(args[1])))
+        return
+    if args == ['display', 'up'] and not SOCKET.exists():
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(SOCKET))
+            server.listen()
+            with (STATE / 'session.log').open('w') as log:
+                subprocess.Popen([sys.executable, __file__, 'serve', str(server.fileno())],
+                                 stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                 pass_fds=(server.fileno(),), start_new_session=True)
+    if args and args[0] == 'shot' and len(args) > 1:
+        args[1] = os.path.abspath(args[1])
+    capture = None
+    if args[0] == 'check' and '--image' in args:
+        index = args.index('--image')
+        capture = Path(args[index + 1]).resolve()
+        del args[index:index + 2]
+    with socket.socket(socket.AF_UNIX) as client:
+        client.connect(str(SOCKET))
+        client.sendall(json.dumps(args).encode() + b'\n')
+        with client.makefile('rb') as stream:
+            response = stream.readline()
+            if not response:
+                raise RuntimeError('QA service stopped; see ' + str(STATE / 'session.log'))
+            status, message = json.loads(response)
+            if capture and not status:
+                from contrast import check
+                from layout_rules import check as check_geometry
+                report = json.loads(message)
+                check(capture, report)
+                check_geometry(capture, report)
+                message = json.dumps(report, indent=2)
+            if message:
+                print(message.rstrip(), file=sys.stderr if status else sys.stdout)
+            if not status and args[0] == "check" and json.loads(message)["violations"]:
+                sys.exit(2)
+            sys.exit(status)
+
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except (OSError, RuntimeError, IndexError) as error:
+        sys.exit(str(error))

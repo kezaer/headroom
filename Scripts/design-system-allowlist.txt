@@ -1,0 +1,11 @@
+# File | rule | justification
+Sources/PacemarkApp/UI/MiniPillPreviewHarness.swift|font|Offscreen diagnostic replicates fixed menu bar dimensions.
+Sources/PacemarkApp/UI/MiniPillPreviewHarness.swift|padding|Offscreen diagnostic uses the status item inset.
+Sources/PacemarkApp/UI/MiniPillPreviewHarness.swift|spacing|Offscreen diagnostic replicates fixed menu bar dimensions.
+Sources/PacemarkSharedUI/MeterGauge.swift|colour|Uses sampled RGB values from the continuous brand ramp.
+Sources/PacemarkSharedUI/APISpendRow.swift|scaled-font|Spend rows measure their optical type.
+Sources/PacemarkSharedUI/IdentityRow.swift|scaled-font|Identity text follows the row scale.
+Sources/PacemarkSharedUI/UsageBarView.swift|scaled-font|Meter text follows its measured width and display scale.
+Sources/PacemarkSharedUI/StatusSentence.swift|scaled-font|Status text follows the row scale.
+Sources/PacemarkApp/UI/SettingsView.swift|native-divider|Native vertical split between sidebar and detail
+Sources/PacemarkApp/UI/Settings/MenuBarMeterTable.swift|native-divider|Native window-choice menu section separator

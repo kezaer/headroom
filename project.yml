@@ -1,0 +1,98 @@
+name: Pacemark
+options:
+  bundleIdPrefix: com.kezaer
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    PACEMARK_HOST_BUNDLE_ID: com.kezaer.pacemark
+    DEVELOPMENT_TEAM: 46DQYGR8QP
+    PACEMARK_SPARKLE_FEED_URL: "https://kezaer.github.io/pacemark/appcast.xml"
+    PACEMARK_SPARKLE_PUBLIC_ED_KEY: "CgeUbW5ihDn1NxWqJ1TW4lGPhb7lg5uuyEquG+bD8AA="
+targets:
+  PacemarkCore:
+    type: library.static
+    platform: macOS
+    sources:
+      # Includes the macOS-only warm-up engine, settings and CLI sender.
+      - path: Sources/PacemarkCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kezaer.pacemark.core
+        GENERATE_INFOPLIST_FILE: YES
+  Pacemark:
+    productName: Pacemark
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PacemarkApp
+      - path: LICENSE
+        buildPhase: resources
+      - path: NOTICE
+        buildPhase: resources
+      - path: Sources/PacemarkSharedUI
+    dependencies:
+      - target: PacemarkCore
+      - framework: .xcode-derived/SourcePackages/artifacts/sparkle/Sparkle/Sparkle.xcframework
+        embed: true
+    settings:
+      base:
+        PRODUCT_NAME: Pacemark
+        PRODUCT_MODULE_NAME: Pacemark
+        PRODUCT_BUNDLE_IDENTIFIER: "$(PACEMARK_HOST_BUNDLE_ID)"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 2
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Pacemark
+        INFOPLIST_KEY_CFBundleName: Pacemark
+        INFOPLIST_KEY_CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        INFOPLIST_KEY_CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: Personal use
+        INFOPLIST_KEY_SUAllowsAutomaticUpdates: YES
+        INFOPLIST_KEY_SUAutomaticallyUpdate: NO
+        INFOPLIST_KEY_SUEnableAutomaticChecks: YES
+        INFOPLIST_KEY_SUFeedURL: "$(PACEMARK_SPARKLE_FEED_URL)"
+        INFOPLIST_KEY_SUPublicEDKey: "$(PACEMARK_SPARKLE_PUBLIC_ED_KEY)"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+  PacemarkAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/PacemarkAppTests
+    dependencies:
+      - target: Pacemark
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Pacemark.app/Contents/MacOS/Pacemark"
+        PRODUCT_BUNDLE_IDENTIFIER: com.kezaer.pacemark.app-tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Pacemark:
+    build:
+      targets:
+        Pacemark: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  PacemarkAppTests:
+    build:
+      targets:
+        Pacemark: all
+        PacemarkAppTests: [test]
+    test:
+      # The hosted unit suite uses isolated fixtures while another real copy may run.
+      commandLineArguments:
+        "--demo": true
+      targets:
+        - PacemarkAppTests

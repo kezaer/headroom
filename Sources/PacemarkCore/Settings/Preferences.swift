@@ -1,0 +1,463 @@
+import Foundation
+
+public enum AntigravitySourcePreference: String, Sendable, CaseIterable, Identifiable, Codable {
+    case autoPreferT3
+    case systemCLI
+    public var id: String { rawValue }
+}
+
+/// UserDefaults-backed preferences (U8). Renewal dates and poll interval are
+/// non-secret, so they live here, not the Keychain (KTD4). The `Preferences` type
+/// lands early (with U2) because U6 reads the interval and U7 reads renewal dates.
+public struct Preferences: @unchecked Sendable { // UserDefaults is thread-safe
+    let defaults: UserDefaults
+    public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+    private enum Key {
+        static let interval = "pollIntervalMinutes"
+        static let appearancePreference = "appearancePreference"
+        static let showMenuBarPercentage = "showMenuBarPercentage"
+        static let usagePercentageMode = "usagePercentageMode"
+        static let accountTitleInk = "accountTitleInk"
+        static let accountLayout = "accountLayout"
+        static let popoverExpandedAccounts = "t3.popover.expandedAccounts"
+        static let expandAccountsHorizontally = "expandAccountsHorizontally"
+        static let useEmailAsAccountName = "useEmailAsAccountName"
+        static let meterFormat = "meterFormat"
+        static let meterShape = "meterShape"
+        static let meterFill = "meterFill"
+        static let menuBarFillSource = "menuBarFillSource"
+        static let menuBarFillProviders = "menuBarFillProviders"
+        static let menuBarProviderOrder = "menuBarProviderOrder"
+        /// Kept as a read-through migration source for installs that saved one shared
+        /// menu-bar window before providers became independently configurable.
+        static let legacyMenuBarWindowSource = "menuBarWindowSource"
+        static let showCodexSparkCountersInApp = "showCodexSparkCountersInApp"
+        static let showsAntigravityOtherModels = "t3.showsAntigravityOtherModels"
+        static let showsAntigravityFiveHourWindows = "showsAntigravityFiveHourWindows"
+        static let antigravityStoppedClient = "antigravityStoppedClient"
+        static let antigravitySignedOut = "antigravitySignedOut"
+        static let antigravitySourcePreference = "antigravitySourcePreference"
+        static let antigravitySignedOutHomes = "antigravitySignedOutHomes.v1"
+        static let menuBarIconStyle = "menuBarIconStyle"
+        static let showAllProviderAccountsInMenuBar = "showAllProviderAccountsInMenuBar"
+        static let menuBarAccountBadges = "menuBarAccountBadges.v1"
+        static let apiSpendPeriod = "apiSpendPeriod"
+        static let settingsPane = "settingsPane"
+        static let useItUpRemindersEnabled = "useItUpRemindersEnabled"
+        static let bankedResetNotificationsEnabled = "bankedResetNotificationsEnabled"
+        static let reminderRules = "reminderRules.v1"
+        static let reminderScope = "reminderScope.v1"
+        static func menuBarWindowSource(_ id: ProviderID) -> String { "menuBarWindowSource.\(id.raw)" }
+        static func renewal(_ id: ProviderID) -> String { "renewalDate.\(id.raw)" }
+        static func surfaceEnabled(_ surface: UsageSurface) -> String { "surfaceEnabled.\(surface.rawValue)" }
+    }
+
+    public static let defaultIntervalMinutes = 5
+    public static let minimumIntervalMinutes = 1
+
+    public var pollIntervalMinutes: Int {
+        get {
+            let v = defaults.integer(forKey: Key.interval)
+            return v > 0 ? min(60, max(Self.minimumIntervalMinutes, v)) : Self.defaultIntervalMinutes
+        }
+        nonmutating set { defaults.set(min(60, max(Self.minimumIntervalMinutes, newValue)), forKey: Key.interval) }
+    }
+
+    public var appearancePreference: AppearancePreference {
+        get {
+            guard let raw = defaults.string(forKey: Key.appearancePreference),
+                  let preference = AppearancePreference(rawValue: raw)
+            else { return .system }
+            return preference
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.appearancePreference) }
+    }
+
+    public var showMenuBarPercentage: Bool {
+        get { defaults.bool(forKey: Key.showMenuBarPercentage) }
+        nonmutating set { defaults.set(newValue, forKey: Key.showMenuBarPercentage) }
+    }
+
+    public var usagePercentageMode: UsagePercentageMode {
+        get {
+            guard let raw = defaults.string(forKey: Key.usagePercentageMode),
+                  let mode = UsagePercentageMode(rawValue: raw)
+            else { return .remaining }
+            return mode
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.usagePercentageMode) }
+    }
+
+    public var accountTitleInk: AccountTitleInk {
+        get {
+            guard let raw = defaults.string(forKey: Key.accountTitleInk),
+                  let ink = AccountTitleInk(rawValue: raw)
+            else { return .neutral }
+            return ink
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.accountTitleInk) }
+    }
+
+    public var effectiveAccountLayout: AccountLayout { .ledger }
+
+    public var accountLayout: AccountLayout {
+        get {
+            guard let raw = defaults.string(forKey: Key.accountLayout),
+                  let layout = AccountLayout(rawValue: raw)
+            else { return .standard }
+            return layout
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.accountLayout) }
+    }
+
+    public var popoverSummarySlot1: PopoverSummarySlot {
+        get { defaults.string(forKey: PopoverSummarySlot.firstKey).flatMap(PopoverSummarySlot.init(rawValue:)) ?? .off }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: PopoverSummarySlot.firstKey) }
+    }
+
+    public var popoverExpandedAccounts: Set<AccountKey> {
+        get {
+            guard let data = defaults.data(forKey: Key.popoverExpandedAccounts),
+                  let keys = try? JSONDecoder().decode([AccountKey].self, from: data)
+            else { return [] }
+            return Set(keys)
+        }
+        nonmutating set {
+            let keys = newValue.sorted { $0.description < $1.description }
+            defaults.set(try? JSONEncoder().encode(keys), forKey: Key.popoverExpandedAccounts)
+        }
+    }
+
+    public var popoverSummarySlot2: PopoverSummarySlot {
+        get { defaults.string(forKey: PopoverSummarySlot.secondKey).flatMap(PopoverSummarySlot.init(rawValue:)) ?? .off }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: PopoverSummarySlot.secondKey) }
+    }
+
+    public var useEmailAsAccountName: Bool {
+        get { defaults.bool(forKey: Key.useEmailAsAccountName) }
+        nonmutating set { defaults.set(newValue, forKey: Key.useEmailAsAccountName) }
+    }
+
+    /// Mac popover only: keep existing installs' automatic second column unless opted out.
+    public var expandAccountsHorizontally: Bool {
+        get {
+            guard defaults.object(forKey: Key.expandAccountsHorizontally) != nil else { return true }
+            return defaults.bool(forKey: Key.expandAccountsHorizontally)
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.expandAccountsHorizontally) }
+    }
+
+    public var meterFormat: GaugeFormat {
+        get {
+            guard let raw = defaults.string(forKey: Key.meterFormat),
+                  let format = GaugeFormat(rawValue: raw)
+            else { return MeterStyle.default.format }
+            return format
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.meterFormat) }
+    }
+
+    public var meterShape: GaugeShape {
+        get {
+            guard let raw = defaults.string(forKey: Key.meterShape),
+                  let shape = GaugeShape(rawValue: raw)
+            else { return MeterStyle.default.shape }
+            return shape
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.meterShape) }
+    }
+
+    public var meterFill: GaugeFill {
+        get {
+            guard let raw = defaults.string(forKey: Key.meterFill),
+                  let fill = GaugeFill(rawValue: raw)
+            else { return MeterStyle.default.fill }
+            return fill
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.meterFill) }
+    }
+
+    public var meterStyle: MeterStyle {
+        get {
+            MeterStyle(format: meterFormat, shape: meterShape, fill: meterFill)
+        }
+        nonmutating set {
+            if meterFormat != newValue.format { meterFormat = newValue.format }
+            if meterShape != newValue.shape { meterShape = newValue.shape }
+            if meterFill != newValue.fill { meterFill = newValue.fill }
+        }
+    }
+
+    public var menuBarFillSource: MenuBarFillSource {
+        get {
+            switch defaults.string(forKey: Key.menuBarFillSource) {
+            case "providers":
+                let ids = Set((defaults.stringArray(forKey: Key.menuBarFillProviders) ?? []).map(ProviderID.init))
+                return ids.isEmpty ? .auto : .providers(ids)
+            case "claude":
+                return .claude
+            case "codex":
+                return .codex
+            case "both":
+                return .both
+            default:
+                // Legacy `none` was the shipped automatic tightest-window summary,
+                // despite its label suggesting an empty selection (KTD4).
+                return .auto
+            }
+        }
+        nonmutating set {
+            switch newValue {
+            case .auto:
+                defaults.set("auto", forKey: Key.menuBarFillSource)
+                defaults.removeObject(forKey: Key.menuBarFillProviders)
+            case .providers(let ids):
+                guard !ids.isEmpty else {
+                    defaults.set("auto", forKey: Key.menuBarFillSource)
+                    defaults.removeObject(forKey: Key.menuBarFillProviders)
+                    return
+                }
+                defaults.set("providers", forKey: Key.menuBarFillSource)
+                defaults.set(ids.map(\.raw).sorted(), forKey: Key.menuBarFillProviders)
+            }
+        }
+    }
+
+    /// Independent from the app's provider order. Unknown IDs survive temporarily
+    /// missing providers; the store filters them when resolving the visible order.
+    public var menuBarProviderOrder: [ProviderID] {
+        get { (defaults.stringArray(forKey: Key.menuBarProviderOrder) ?? []).map(ProviderID.init) }
+        nonmutating set { defaults.set(newValue.map(\.raw), forKey: Key.menuBarProviderOrder) }
+    }
+
+    /// Nil means this install still inherits its legacy menu-bar priority selection.
+
+    /// The chosen menu-bar limit for one provider. A provider-specific value wins;
+    /// otherwise the pre-1.1 shared value is inherited so upgrading does not change the
+    /// existing menu-bar presentation. Fresh installs default every provider to weekly.
+    /// Stored values from before per-limit IDs ("weekly", "fiveHour") are already valid IDs.
+    public func menuBarWindowChoice(for id: ProviderID) -> MenuBarWindowChoice {
+        if let raw = defaults.string(forKey: Key.menuBarWindowSource(id)),
+           let choice = MenuBarWindowChoice(rawValue: raw) {
+            return choice
+        }
+        if let raw = defaults.string(forKey: Key.legacyMenuBarWindowSource),
+           let choice = MenuBarWindowChoice(rawValue: raw) {
+            return choice
+        }
+        return .weekly
+    }
+
+    /// True once the user has picked this provider's limit. Only such a choice is worth
+    /// listing when the provider stops reporting it: the weekly default names a limit
+    /// Cursor and Grok never had.
+    public func hasChosenMenuBarWindow(for id: ProviderID) -> Bool {
+        defaults.string(forKey: Key.menuBarWindowSource(id)).flatMap(MenuBarWindowChoice.init(rawValue:)) != nil
+    }
+
+    public func setMenuBarWindowChoice(_ choice: MenuBarWindowChoice, for id: ProviderID) {
+        defaults.set(choice.rawValue, forKey: Key.menuBarWindowSource(id))
+    }
+
+    func setInheritedMenuBarWindow(_ rawValue: String?) {
+        defaults.set(rawValue, forKey: Key.legacyMenuBarWindowSource)
+    }
+
+
+    public var showCodexSparkCountersInApp: Bool {
+        get { defaults.bool(forKey: Key.showCodexSparkCountersInApp) }
+        nonmutating set { defaults.set(newValue, forKey: Key.showCodexSparkCountersInApp) }
+    }
+
+
+    public var showsAntigravityOtherModels: Bool {
+        get { defaults.object(forKey: Key.showsAntigravityOtherModels) as? Bool ?? false }
+        nonmutating set { defaults.set(newValue, forKey: Key.showsAntigravityOtherModels) }
+    }
+
+    /// Retained for older captures and downgrades.
+    public var showsAntigravityFiveHourWindows: Bool {
+        get {
+            guard defaults.object(forKey: Key.showsAntigravityFiveHourWindows) != nil else { return true }
+            return defaults.bool(forKey: Key.showsAntigravityFiveHourWindows)
+        }
+        nonmutating set { defaults.set(newValue, forKey: Key.showsAntigravityFiveHourWindows) }
+    }
+
+    public var antigravityStoppedClientData: Data? {
+        get { defaults.data(forKey: Key.antigravityStoppedClient) }
+        nonmutating set {
+            if let newValue { defaults.set(newValue, forKey: Key.antigravityStoppedClient) }
+            else { defaults.removeObject(forKey: Key.antigravityStoppedClient) }
+        }
+    }
+
+    /// Antigravity's signed-out mark (`AntigravityCaptureFailure.signedOut`), kept so a
+    /// relaunch doesn't open another browser sign-in.
+    public var antigravitySignedOut: Bool {
+        get { defaults.bool(forKey: Key.antigravitySignedOut) }
+        nonmutating set {
+            if newValue { defaults.set(true, forKey: Key.antigravitySignedOut) }
+            else { defaults.removeObject(forKey: Key.antigravitySignedOut) }
+        }
+    }
+
+    public var tracksT3Claude: Bool {
+        get { defaults.bool(forKey: "tracksT3Claude.v1") }
+        nonmutating set { defaults.set(newValue, forKey: "tracksT3Claude.v1") }
+    }
+
+    public var antigravitySourcePreference: AntigravitySourcePreference {
+        get {
+            defaults.string(forKey: Key.antigravitySourcePreference)
+                .flatMap(AntigravitySourcePreference.init(rawValue:)) ?? .autoPreferT3
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.antigravitySourcePreference) }
+    }
+
+    public var antigravitySignedOutHomes: Set<String> {
+        get { Set(defaults.stringArray(forKey: Key.antigravitySignedOutHomes) ?? []) }
+        nonmutating set { defaults.set(newValue.sorted(), forKey: Key.antigravitySignedOutHomes) }
+    }
+
+    public var menuBarIconStyle: MenuBarIconStyle {
+        get {
+            defaults.string(forKey: Key.menuBarIconStyle)
+                .flatMap(MenuBarIconStyle.init(rawValue:)) ?? .providerIcons
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.menuBarIconStyle) }
+    }
+
+    public var showAllProviderAccountsInMenuBar: Bool {
+        get { (defaults.object(forKey: Key.showAllProviderAccountsInMenuBar) as? Bool) ?? true }
+        nonmutating set { defaults.set(newValue, forKey: Key.showAllProviderAccountsInMenuBar) }
+    }
+
+    public var menuBarAccountBadges: [AccountKey: String] {
+        get {
+            guard let data = defaults.data(forKey: Key.menuBarAccountBadges) else { return [:] }
+            return (try? JSONDecoder().decode([AccountKey: String].self, from: data)) ?? [:]
+        }
+        nonmutating set {
+            defaults.set(try? JSONEncoder().encode(newValue), forKey: Key.menuBarAccountBadges)
+        }
+    }
+
+
+    public var apiSpendPeriod: APISpendPeriod {
+        get {
+            guard let raw = defaults.string(forKey: Key.apiSpendPeriod),
+                  let period = APISpendPeriod(rawValue: raw)
+            else { return .currentMonth }
+            return period
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.apiSpendPeriod) }
+    }
+
+    /// Last-visited Settings destination (R4/KTD7). A plain preference rather than
+    /// `@SceneStorage` so the choice survives quitting the app, not just closing the
+    /// window; an unrecognized stored pane falls back to General.
+    public var settingsPane: SettingsPane {
+        get {
+            guard let raw = defaults.string(forKey: Key.settingsPane),
+                  let pane = SettingsPane(rawValue: raw)
+            else { return .general }
+            return pane
+        }
+        nonmutating set { defaults.set(newValue.rawValue, forKey: Key.settingsPane) }
+    }
+
+    /// R2B1: the destination Settings opens on. Once the user has visited a pane the stored
+    /// choice always wins (R4). Only the *first* open has a decision to make, and General is
+    /// the wrong answer there — it holds two controls and several hundred points of empty
+    /// pane, while a Mac with nothing signed in has all of its work in Accounts.
+    public func initialSettingsPane(hasSignedInAccount: Bool) -> SettingsPane {
+        guard defaults.object(forKey: Key.settingsPane) == nil else { return settingsPane }
+        return hasSignedInAccount ? .general : .accounts
+    }
+
+    /// R3: off by default.
+    public var useItUpRemindersEnabled: Bool {
+        get { defaults.bool(forKey: Key.useItUpRemindersEnabled) }
+        nonmutating set { defaults.set(newValue, forKey: Key.useItUpRemindersEnabled) }
+    }
+
+    /// R14: off by default.
+    public var bankedResetNotificationsEnabled: Bool {
+        get { defaults.bool(forKey: Key.bankedResetNotificationsEnabled) }
+        nonmutating set { defaults.set(newValue, forKey: Key.bankedResetNotificationsEnabled) }
+    }
+
+    /// KTD14: a missing key yields the defaults; a corrupt one yields the defaults without
+    /// overwriting, so a newer build's data survives a downgrade. Stored values clamp on
+    /// read so the evaluator never sees an out-of-range rule.
+    public var reminderRules: [ReminderRule] {
+        get {
+            guard let data = defaults.data(forKey: Key.reminderRules),
+                  let rules = try? JSONDecoder().decode([ReminderRule].self, from: data)
+            else { return ReminderRules.defaults }
+            return rules.map { $0.clamped() }
+        }
+        nonmutating set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            defaults.set(data, forKey: Key.reminderRules)
+        }
+    }
+
+    /// Stored as sorted raw strings; an unknown value from a newer build is dropped
+    /// rather than discarding the whole set.
+    public var reminderScope: Set<ReminderScope> {
+        get {
+            guard let data = defaults.data(forKey: Key.reminderScope),
+                  let raw = try? JSONDecoder().decode([String].self, from: data)
+            else { return ReminderScope.defaults }
+            return Set(raw.compactMap(ReminderScope.init(rawValue:)))
+        }
+        nonmutating set {
+            guard let data = try? JSONEncoder().encode(newValue.map(\.rawValue).sorted()) else { return }
+            defaults.set(data, forKey: Key.reminderScope)
+        }
+    }
+
+    public func isSurfaceEnabled(_ surface: UsageSurface) -> Bool {
+        let key = Key.surfaceEnabled(surface)
+        guard defaults.object(forKey: key) != nil else {
+            return surface.isEnabledByDefault
+        }
+        return defaults.bool(forKey: key)
+    }
+
+    public func setSurfaceEnabled(_ enabled: Bool, for surface: UsageSurface) {
+        defaults.set(enabled, forKey: Key.surfaceEnabled(surface))
+    }
+
+    public func renewalDate(for id: ProviderID) -> Date? {
+        let t = defaults.double(forKey: Key.renewal(id))
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }
+
+    public func setRenewalDate(_ date: Date?, for id: ProviderID) {
+        if let date {
+            defaults.set(date.timeIntervalSince1970, forKey: Key.renewal(id))
+        } else {
+            defaults.removeObject(forKey: Key.renewal(id))
+        }
+    }
+}
+
+public enum AppearancePreference: String, CaseIterable, Identifiable, Sendable {
+    case system
+    case light
+    case dark
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .system: "System"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+}

@@ -1,0 +1,521 @@
+#if SWIFT_PACKAGE
+import PacemarkSharedUI
+#endif
+import AppKit
+import SwiftUI
+import Accessibility
+import PacemarkCore
+
+/// Settings window root. Presented in its own window so dismissing settings never
+/// closes the menu bar popover behind it.
+///
+/// A native sidebar routes to panes that share the Ledger’s type, tiles and rows.
+///
+/// KTD3: this view owns *all* root state. The panes are stateless and read it through
+/// bindings and closures, so switching panes preserves API key drafts, the Replace flow,
+/// result messages, and the pending removal dialog (R13).
+struct SettingsView: View {
+    let store: UsageStore
+    var softwareUpdates: SoftwareUpdateControlling = DisabledSoftwareUpdateController()
+    // The launch domain, not `.standard`: production passes this in, but a fallback on
+    // `.standard` would put a `--demo` Settings session back in the user's real defaults.
+    var preferences = AppComposition.launchPreferences
+    var credentialStore = CredentialStore()
+    var launchControl: LaunchAtLoginControlling = LaunchAtLogin()
+    /// Injection seam (unused in production wiring); the default reads each account's
+    /// `.claude.json`.
+    var duplicateDetector = ClaudeDuplicateLoginDetector()
+    /// U6: permission reads and requests for the Notifications pane. Required, so every
+    /// caller chooses — production passes `AppComposition.notificationClient`, the render
+    /// harness a scripted fake — and none can reach the real center by default (KTD9).
+    let notificationClient: any NotificationAuthorizing
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// LP1 (2026-10-03 perf bench): nil until `loadPreferences` picks the room. Seeded with
+    /// `.general`, every open built General — twice — before switching to the stored pane,
+    /// and that switch played the pane transition inside the window's own fade-in. Not seeded
+    /// in `init` either: the `Window` content is built in `App.body`, which rarely re-runs, so
+    /// an init-time seed could reopen on a stale pane (see the App.body solution doc).
+    @State private var sidebarSelection: SettingsPane?
+    /// KB1: whether the latest pane switch came from the keyboard.
+    @State private var paneSwitchIsInstant = false
+    @State private var hasVisitedAccounts = false
+    @State private var intervalMinutes: Int = Preferences.defaultIntervalMinutes
+    @State private var launchAtLogin = false
+    @State private var apiSpendPeriod: APISpendPeriod = .currentMonth
+    @State private var apiKeyDrafts: [APIKeyProvider: String] = [:]
+    @State private var savedKeyProviders: Set<APIKeyProvider> = []
+    @State private var replacingKeyProviders: Set<APIKeyProvider> = []
+    @State private var credentialMessages: [APIKeyProvider: String] = [:]
+    @State private var messageDismissals: [APIKeyProvider: Task<Void, Never>] = [:]
+    @State private var removalCandidate: APIKeyProvider?
+    /// KTD3: hoisted off `AccountsSettingsTile` so leaving and re-entering Accounts
+    /// neither blanks the "Same login as X" badges nor re-reads every `.claude.json`.
+    @State private var duplicateLoginLabels: [AccountKey: String] = [:]
+    /// KTD11: the last permission read. Nil until the first check lands, so the pane never
+    /// flashes the denied notice on open.
+    @State private var notificationAuthorization: NotificationAuthorization?
+
+    /// Fast, no-bounce settle shared by the credential-row reveals and result messages.
+    /// The interaction is occasional settings work, so it gets just enough motion to
+    /// confirm the state change.
+    private static let settleAnimation = PacemarkMotion.settle
+
+    /// L9A: one window for every destination, resizable on both axes, and the size the
+    /// user leaves it at is the size it keeps. Per-pane window heights are retired —
+    /// resizing the frame on every pane switch is what read as unfinished, and the real
+    /// squeeze in the review was horizontal (help text wrapping in a ~340pt content
+    /// column), not vertical. Every pane body is a `ScrollView`, so Appearance — the
+    /// tallest room at roughly 812pt of content — simply scrolls at the 700pt default
+    /// instead of dictating the window.
+    ///
+    /// 800 × 700 default, 720 × 600 floor, no ceiling. 800 keeps the Appearance Fill row
+    /// on one line: the row needs 392pt of grid (5 × 72pt swatches + 4 × 8pt gaps) beside
+    /// its 46pt label, and the detail column offers `width − sidebar − 124` — 460pt at
+    /// 800/216, against 380pt at the old 720. 600 tall is the floor because the sidebar's
+    /// identity block and six destinations need roughly 340pt before the list itself
+    /// scrolls; the seventh (Notifications, 2026-09-26) adds one ~28pt row, still well
+    /// inside the floor. The scene declares these via `.windowResizability(.contentSize)`,
+    /// which reads the min and max off this frame; leaving max unset is what makes the
+    /// window resizable at all.
+    static let windowWidth: CGFloat = 800
+    /// R2B2: 770, up from 700. The opening height of a resizable window matters only for
+    /// where it *cuts*, and 700 cut through the middle of the Fill swatch row — a half-drawn
+    /// control is the one thing an opening frame must not show. Measured off the harness
+    /// render of Appearance (the tallest pane) after R2C19's spacing: the Fill grid's last
+    /// swatch ends at ≈766pt and its help line starts 6pt later, so 770 puts the fold in that
+    /// gap. Every control in the pane is whole; only prose waits below it. 760 was two points
+    /// short and clipped the second line of the wrapped swatch labels. Re-measure if the
+    /// pane's spacing or content changes again.
+    static let windowHeight: CGFloat = 770
+    static let minimumWindowWidth: CGFloat = 720
+    static let minimumWindowHeight: CGFloat = 600
+    /// L9A: leading-aligned cap on a pane's content so a window dragged to 1200pt does
+    /// not run a help line to full measure. Sits inside the detail column, outside the
+    /// pane's own 20pt padding, and never bites at the default width (the detail column
+    /// is ~584pt there).
+    static let detailContentMaxWidth: CGFloat = 640
+    /// Diagnostic seam: the render harness raises the frame for its multi-account capture
+    /// so the whole account list is in the picture. The live window never sets this.
+    var frameHeightOverride: CGFloat? = nil
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let _ = BenchCounters.hit("SettingsView")
+        HStack(spacing: .zero) {
+            SettingsSidebar(selection: sidebarBinding, softwareUpdates: softwareUpdates)
+                .frame(width: 216)
+            Divider()
+            detailColumn
+        }
+        .background { LedgerSurfaceGlow() }
+        .modifier(PopoverSurfaceModifier(cornerRadius: 0))
+        .ignoresSafeArea(.container, edges: .top)
+        .containerBackground(.clear, for: .window)
+        // KTD8: no `.navigationTitle` anywhere in the split view — the window title
+        // string set in `PacemarkApp` is what `placeSettingsWindowOnActiveScreen()`
+        // matches on, and a navigation title would replace it.
+        // L9A: no max on either axis — `.windowResizability(.contentSize)` derives the
+        // window's resize limits from this frame, so an unset max is what lets the user
+        // drag the window as large as they like. The ideal is only the opening size.
+        .frame(
+            minWidth: Self.minimumWindowWidth,
+            idealWidth: Self.windowWidth,
+            minHeight: Self.minimumWindowHeight,
+            idealHeight: frameHeightOverride ?? Self.windowHeight
+        )
+        .onAppear { loadPreferences() }
+        #if PACEMARK_BENCH
+        // `--bench-ui`'s pane seam: the same two writes a sidebar click makes, in one update
+        // (KB1). Compiled only into bench builds; LP1's first selection still comes from
+        // `loadPreferences`.
+        .onReceive(NotificationCenter.default.publisher(for: BenchSettingsSeam.selectPane)) { note in
+            guard let request = note.object as? BenchSettingsSeam.Request else { return }
+            paneSwitchIsInstant = request.instant
+            sidebarSelection = request.pane
+        }
+        #endif
+        // R18: re-check permission every time Settings opens, and again whenever Pacemark
+        // comes back to the front — the way back from "Open System Settings…".
+        .task { await refreshNotificationAuthorization() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await refreshNotificationAuthorization() }
+        }
+        .task { await refreshSavedKeyPresence() }
+        // KTD3: the scan's result lives on the root so revisiting Accounts keeps its badges,
+        // but it only starts once Accounts has been shown — a visit to General should not
+        // read every Claude account's `.claude.json`.
+        .background {
+            if hasVisitedAccounts {
+                ClaudeDuplicateLoginScan(
+                    store: store,
+                    detector: duplicateDetector,
+                    labels: $duplicateLoginLabels
+                )
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openSettingsPane)) { note in
+            if let pane = note.object as? SettingsPane { sidebarSelection = pane }
+        }
+        .onChange(of: selectedPane) { _, newValue in
+            preferences.settingsPane = newValue
+            if newValue == .accounts { hasVisitedAccounts = true }
+        }
+        .confirmationDialog(
+            "Remove this admin key?",
+            isPresented: removalDialogPresented,
+            titleVisibility: .visible,
+            presenting: removalCandidate
+        ) { provider in
+            Button("Remove \(provider.displayName) Key", role: .destructive) {
+                deleteKey(for: provider)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { provider in
+            Text("Pacemark will stop fetching \(provider.displayName) spend until a new key is added.")
+        }
+        .builtInSignInConfirmation()
+    }
+
+    /// The pane on screen. `sidebarSelection` is optional because `List(selection:)` demands
+    /// it, and it is nil only before `loadPreferences` runs (LP1); the binding below never
+    /// stores nil after that.
+    private var selectedPane: SettingsPane { sidebarSelection ?? .general }
+
+
+    /// macOS can hand a sidebar `List` a nil selection (⌘-click deselect, or a rebuild
+    /// mid-transition). Dropping to no pane would blank the detail column, so a nil is
+    /// ignored and the last real destination stays selected.
+    private var sidebarBinding: Binding<SettingsPane?> {
+        Binding(
+            get: { sidebarSelection },
+            set: { newValue in
+                guard let newValue else { return }
+                // KB1: arrowing through the sidebar swaps panes instantly. Set in the same
+                // update as the selection, because the transition is read for both panes then.
+                paneSwitchIsInstant = PacemarkMotion.isKeyboardInitiated
+                sidebarSelection = newValue
+            }
+        )
+    }
+
+    /// M6B: 120ms opacity-only dissolve between destinations. Nothing travels — a pane is a
+    /// different room, not the same content moving — and the sidebar's native selection
+    /// highlight is left alone. The `ZStack` is what makes the `.id` swap a transition
+    /// rather than a hard cut: it is the stable container the outgoing and incoming panes
+    /// overlap inside, the same shape as the Menu Bar pane's `preview` strip (MS2).
+    /// Panes stay stateless (KTD3), so nothing is lost when one is rebuilt.
+    ///
+    /// SM2 (2026-09-22): the symmetric 120ms dissolve overlapped two dense rooms at half
+    /// opacity each, which read as a double exposure rather than a room change. The exit is
+    /// now 80ms and the entrance 200ms out of a 3pt blur (Emil's blur-bridge), so the eye
+    /// sees one pane resolve instead of two crossing. Still nothing travels (M6B).
+    private var detailColumn: some View {
+        ZStack(alignment: .topLeading) {
+            // LP1: no pane until the stored one is known, so the first one built is the one
+            // shown. `loadPreferences` runs in the first layout pass, before the window is
+            // revealed, so this empty column never reaches the screen.
+            if sidebarSelection != nil {
+                detail
+                    .id(selectedPane)
+                    // KB1: `.identity`, not a nil-animation transaction — measured, a transition's
+                    // attached animation plays even inside `disablesAnimations`.
+                    .transition(paneSwitchIsInstant ? .identity : .settingsPane(reduceMotion: reduceMotion))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        .animation(
+            paneSwitchIsInstant
+                ? nil
+                : PacemarkMotion.resolved(PacemarkMotion.paneIn, .crossfade, reduceMotion: reduceMotion),
+            value: selectedPane
+        )
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch selectedPane {
+        case .general:
+            GeneralSettingsPane(
+                intervalMinutes: $intervalMinutes,
+                launchAtLogin: $launchAtLogin,
+                softwareUpdates: softwareUpdates,
+                store: store,
+                onIntervalChange: { newValue in
+                    preferences.pollIntervalMinutes = newValue
+                    store.reschedulePolling()
+                },
+                onLaunchAtLoginChange: { newValue in
+                    try? launchControl.setEnabled(newValue)
+                }
+            )
+        case .appearance:
+            PopoverSettingsPane(store: store)
+        case .menuBar:
+            MenuBarSettingsPane(store: store, onOpenAccounts: {
+                paneSwitchIsInstant = false
+                sidebarSelection = .accounts
+            })
+        case .warmUp:
+            WarmUpSettingsTile(store: store)
+        case .notifications:
+            NotificationsSettingsPane(
+                store: store,
+                authorization: notificationAuthorization,
+                latenessMinutes: reminderLatenessMinutes,
+                onSetSwitch: { which, isOn in
+                    Task {
+                        let status = await NotificationsSettingsInteractions.setSwitch(
+                            which,
+                            isOn: isOn,
+                            store: store,
+                            client: notificationClient,
+                            known: notificationAuthorization
+                        )
+                        setNotificationAuthorization(status)
+                    }
+                },
+                onOpenSystemSettings: { notificationClient.openSystemSettings() }
+            )
+        case .accounts:
+            AccountsSettingsPane(
+                store: store,
+                duplicateLoginLabels: duplicateLoginLabels,
+                surfaceBinding: surfaceBinding
+            )
+        case .apiSpend:
+            APISpendSettingsPane(
+                store: store,
+                apiSpendPeriod: $apiSpendPeriod,
+                apiKeyDrafts: $apiKeyDrafts,
+                replacingKeyProviders: $replacingKeyProviders,
+                credentialMessages: $credentialMessages,
+                savedKeyProviders: savedKeyProviders,
+                surfaceBinding: surfaceBinding,
+                onSaveKey: { key, provider in saveKey(key, for: provider) },
+                onRequestRemoval: { removalCandidate = $0 },
+                cancelMessageDismissal: { messageDismissals[$0]?.cancel() }
+            )
+        case .about:
+            AboutSettingsPane(store: store)
+        }
+    }
+
+    private var reminderLatenessMinutes: Int {
+        PollCadencePresentation.slowestEffectiveMinutes(
+            store.registeredProviderOrder.compactMap { store.pollCadences[$0] },
+            chosenInterval: LaneSchedule.chosenInterval(minutes: intervalMinutes)
+        )
+    }
+
+    // MARK: - Notifications permission
+
+    private func refreshNotificationAuthorization() async {
+        let status = await NotificationsSettingsInteractions.refreshAuthorization(
+            store: store,
+            client: notificationClient
+        )
+        setNotificationAuthorization(status)
+    }
+
+    /// The notice tile's reveal rides the pane's own `.animation` scope; this only avoids
+    /// republishing an unchanged state.
+    private func setNotificationAuthorization(_ status: NotificationAuthorization?) {
+        guard notificationAuthorization != status else { return }
+        notificationAuthorization = status
+    }
+
+    // MARK: - Shared bindings
+
+    private func surfaceBinding(_ surface: UsageSurface) -> Binding<Bool> {
+        Binding(
+            get: { store.isSurfaceEnabled(surface) },
+            set: { newValue in
+                // Animated so the key-entry reveal below an API row settles instead of
+                // hard-cutting. RM1: `.movement`, so under Reduce Motion the tile's height
+                // snaps; the reveal's fade survives on its own via
+                // `settingsReveal(reduceMotion:)`.
+                withAnimation(
+                    PacemarkMotion.resolved(Self.settleAnimation, .movement, reduceMotion: reduceMotion)
+                ) {
+                    store.setSurfaceEnabled(newValue, for: surface)
+                }
+                if surface.isSubscription {
+                    // KTD11 (2026-09-19 polling plan): wake only this provider's now-due
+                    // accounts. A full `refreshNow()` here marked every other provider's
+                    // accounts due too, which at the account envelope is the very sweep the
+                    // per-account scheduler removes.
+                    store.dispatchDueNow(for: surface.providerID)
+                } else {
+                    store.refreshAPISpendNow()
+                }
+            }
+        )
+    }
+
+    private var removalDialogPresented: Binding<Bool> {
+        Binding(
+            get: { removalCandidate != nil },
+            set: { if !$0 { removalCandidate = nil } }
+        )
+    }
+
+    // MARK: - State
+
+    /// R2B1: "signed in" for the first-open default means at least one configured account has
+    /// produced a reading. A never-signed-in stale reason — or nothing fetched at all — is the
+    /// case Accounts exists to answer, so that is the room the window opens in.
+    private var hasSignedInAccount: Bool {
+        store.registeredProviderOrder.contains { providerID in
+            store.accounts(for: providerID).contains { account in
+                let snapshot = store.snapshot(for: account.key)
+                if case .stale(let reason) = snapshot.freshness,
+                   reason.providerSetupOutcome?.isNeverSignedIn == true {
+                    return false
+                }
+                return snapshot.freshness == .live || !snapshot.windows.isEmpty
+            }
+        }
+    }
+
+    private func loadPreferences() {
+        intervalMinutes = preferences.pollIntervalMinutes
+        // R4: reopen on the last-visited destination; an unknown stored value already
+        // decodes to General in `Preferences`. R2B1: on the *first* open — nothing stored —
+        // a Mac with no account signed in opens on Accounts instead, where all of its work is.
+        let storedPane = preferences.initialSettingsPane(hasSignedInAccount: hasSignedInAccount)
+        // LP1: the opening pane arrives with the window, not as a pane switch.
+        paneSwitchIsInstant = true
+        sidebarSelection = storedPane
+        if storedPane == .accounts { hasVisitedAccounts = true }
+        apiSpendPeriod = store.apiSpendPeriod
+        launchAtLogin = launchControl.isEnabled
+    }
+
+    /// Presence only (never the key material): selects the configured summary or the
+    /// first-save editor, so the UI can show whether a credential exists at rest.
+    /// One write for the whole sweep (2026-10-03 perf bench): each per-key insert landed after
+    /// its own Keychain hop and re-rendered the root and the open pane during the fade-in.
+    private func refreshSavedKeyPresence() async {
+        var present: Set<APIKeyProvider> = []
+        for provider in APIKeyProvider.allCases {
+            if case .success = await credentialStore.apiKey(for: provider) {
+                present.insert(provider)
+            }
+        }
+        if savedKeyProviders != present { savedKeyProviders = present }
+    }
+
+    private func saveKey(_ key: String, for provider: APIKeyProvider) {
+        Task {
+            switch await credentialStore.saveAPIKey(key, for: provider) {
+            case .success:
+                // Clear only on success — a Keychain failure must not eat a pasted key.
+                clearField(for: provider)
+                savedKeyProviders.insert(provider)
+                replacingKeyProviders.remove(provider)
+                credentialMessages[provider] = nil
+                messageDismissals[provider]?.cancel()
+                AccessibilityNotification.Announcement("\(provider.displayName) API key saved").post()
+                store.refreshAPISpendNow()
+            case .failure(let reason):
+                showCredentialMessage(reason.message, for: provider, autoDismiss: false)
+            }
+        }
+    }
+
+    private func deleteKey(for provider: APIKeyProvider) {
+        Task {
+            switch await credentialStore.deleteAPIKey(for: provider) {
+            case .success:
+                clearField(for: provider)
+                savedKeyProviders.remove(provider)
+                replacingKeyProviders.remove(provider)
+                showCredentialMessage("\(provider.displayName) API key removed", for: provider, autoDismiss: true)
+                store.refreshAPISpendNow()
+            case .failure(let reason):
+                showCredentialMessage(reason.message, for: provider, autoDismiss: false)
+            }
+        }
+    }
+
+    private func clearField(for provider: APIKeyProvider) {
+        apiKeyDrafts[provider] = ""
+    }
+
+    /// Success feedback auto-dismisses on the popover's Connected-chip cadence (4s).
+    /// Failures stay until the next edit or retry so a Keychain problem is not hidden.
+    private func showCredentialMessage(_ message: String, for provider: APIKeyProvider, autoDismiss: Bool) {
+        credentialMessages[provider] = message
+        AccessibilityNotification.Announcement(message).post()
+        messageDismissals[provider]?.cancel()
+        guard autoDismiss else { return }
+        messageDismissals[provider] = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            credentialMessages[provider] = nil
+        }
+    }
+}
+
+/// KTD3's duplicate-login scan, in a view of its own (DL1, 2026-10-03 perf bench). Its
+/// fingerprint reads every Claude snapshot; computed in `SettingsView.body`, it made each
+/// Claude refresh re-render the whole window and its open pane once Accounts had been
+/// visited. Here a refresh re-runs only this empty view, and the root re-renders only when
+/// the badges themselves change.
+private struct ClaudeDuplicateLoginScan: View {
+    let store: UsageStore
+    let detector: ClaudeDuplicateLoginDetector
+    @Binding var labels: [AccountKey: String]
+
+    var body: some View {
+        let _ = BenchCounters.hit("ClaudeDuplicateLoginScan")
+        Color.clear
+            .accessibilityHidden(true)
+            .task(id: fingerprint) {
+                // Off-main: `.claude.json` can be large (the CLI writes project history
+                // into it), so the identity reads never block the settings surface.
+                let detector = detector
+                let accounts = store.accounts(for: .claude).map { account in
+                    var displayed = account
+                    displayed.label = store.desktopAccountName(for: account)
+                    return displayed
+                }
+                // U10: a row the one-row merge hides is not shown, so it badges nothing.
+                let mergedAway = store.displayProjection(for: .claude).mergeMap
+                let scanned = await Task.detached {
+                    detector.duplicateLabels(for: accounts, mergedAway: mergedAway)
+                }.value
+                // The detached scan outlives this .task's cancellation, so a slow stale
+                // scan can finish after a newer one — never let it overwrite the fresh
+                // badge state (code-review finding).
+                guard !Task.isCancelled else { return }
+                if labels != scanned { labels = scanned }
+            }
+    }
+
+    /// Recompute duplicate badges when the Claude account list changes, a row is
+    /// renamed (badges quote account labels), a row's signed-in identity changes, or
+    /// a fresh capture lands (a re-login to a different accountUuid under the same
+    /// email only surfaces as a new `capturedAt` — the scan is cheap off-main and
+    /// only runs while the settings window is open). A merge starting or ending rescans.
+    private var fingerprint: String {
+        let mergedAway = store.displayProjection(for: .claude).mergeMap
+        return store.accounts(for: .claude)
+            .map { account in
+                let snapshot = store.snapshot(for: account.key)
+                let captured = snapshot.capturedAt?.timeIntervalSinceReferenceDate ?? 0
+                let merged = mergedAway[account.key] == nil ? "" : ":merged"
+                return "\(account.id.raw):\(store.desktopAccountName(for: account)):\(snapshot.accountEmail ?? ""):\(captured)\(merged)"
+            }
+            .joined(separator: "|")
+    }
+}
+
+// (RenewalDateField removed — plan-renewal dates were cut from all UI in the
+// Jul 2026 density audit; `Preferences.renewalDate` remains for stored data.)
+
+extension Notification.Name {
+    static let openSettingsPane = Self("Pacemark.openSettingsPane")
+}

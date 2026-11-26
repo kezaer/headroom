@@ -1,0 +1,25 @@
+# Release Pacemark for macOS
+
+Finder, Sparkle and Homebrew use the same stapled Apple-silicon DMG. A successful Gatekeeper assessment permits installation without a security override. macOS can still ask for ordinary first-open confirmation.
+
+## Configure distribution once
+
+1. Rename the public fork to `kezaer/pacemark`. Keep the upstream history, GPL license and source available. Enable Actions. In Settings → Pages choose **GitHub Actions**. Reserve the Pages site for the appcast.
+2. Protect the default branch and release tags. Restrict the `release` and `github-pages` environments to approved release refs. Allow trusted default-branch dispatches for promotion. Configure required reviewers. Supply an ephemeral Apple-silicon runner with Xcode 27, Homebrew and jq through the repository variable `RELEASE_MACOS_RUNNER`. The default label is `xcode-27`.
+3. For local packaging, install the Developer ID Application identity for team `46DQYGR8QP`. Confirm its private key is available with `security find-identity -v -p codesigning`. Validate the saved notary profile with `xcrun notarytool history --keychain-profile pacemark-notary`. Check the Sparkle public key with `generate_keys --account pacemark -p` in the pinned tool directory under `.xcode-derived/SourcePackages/artifacts/sparkle/Sparkle/bin`. It must match the public key in project.yml. Preserve the existing signing key.
+4. For hosted packaging, provision the protected release environment from the operator's secure backups. Set secrets `DEVELOPER_ID_P12_B64`, `DEVELOPER_ID_P12_PASSWORD`, `ASC_P8_B64` and `SPARKLE_PRIVATE_KEY`. Set environment variables `ASC_KEY_ID` and `ASC_ISSUER_ID`. The package job imports the identity into a temporary keychain on that runner.
+5. Initialize the public `kezaer/homebrew-tap` repository with a default branch. Give the `homebrew-tap` environment a `TAP_TOKEN` restricted to contents write on that repository. Allow its release bot to push the cask. Users install with `brew install --cask kezaer/tap/pacemark`.
+
+## Cut a release
+
+1. Confirm the highest previously distributed Pacemark build. Start at build 2 only if build 1 is the highest. Increment the build for every update. Check that the intended tag is unused, including inherited tags.
+2. Merge the version bump, release notes and build inputs into the default branch. Require green Mac CI. The release page links to the corresponding source. Keep the source and build scripts at that exact tag. Sparkle's source and distribution licenses are available at its [2.9.4 release](https://github.com/sparkle-project/Sparkle/releases/tag/2.9.4).
+3. For a local first cut set repository variable `LOCAL_RELEASE_TAG=v1.0.0` **before** pushing the tag. For Actions packaging leave the variable unset. Tag the verified commit with `git tag -a v1.0.0 -m 'Pacemark 1.0.0'` and push that tag to the fork.
+4. For the local cut, use a clean checkout at the tag. Install XcodeGen, jq, gh and OpenSSL 3 or newer. Set `OPENSSL="$(brew --prefix openssl@3)/bin/openssl"` and export it if the system binary is LibreSSL. Run `Scripts/release.sh package v1.0.0`. Keep the three files under `dist/v1.0.0/` together. Run `Scripts/release.sh publish v1.0.0`, then `gh workflow run release.yml -f promote_tag=v1.0.0`. For an Actions cut, the tag starts all four stages.
+5. On interruption, rerun the failed job or the same local command. The package work directory under `.xcode-derived/release/<tag>/<commit>/` retains notarization IDs and results. Keep the original signed artifacts when resuming a partial draft upload. A published release is immutable. To retry promotion or the tap, dispatch the published tag again. To roll back app behavior, publish a corrected release with a higher build.
+6. Download the published DMG on a clean Apple-silicon Mac. Open it with quarantine intact, drag Pacemark to Applications and launch. Repeat offline with a fresh download. Check provider sign-in and reads with hardened runtime. Rehearse both manual updating and automatic installation on quit between two signed builds on a separate test feed. Before raising the minimum macOS version, extend the appcast generator to retain the last compatible build.
+
+To verify a clean local commit before tagging, run `Scripts/release.sh package v1.0.0 --candidate`. It signs, notarizes, staples and assesses the app and DMG and verifies the Sparkle feed. Find the artifacts under `dist/candidates/v1.0.0/<commit>/`. Package the published tag separately after the release merge.
+
+For a pre-integration rehearsal, run `Scripts/release.sh package v0.0.0-test --local-test`. For a signing-only rehearsal use `Scripts/release.sh package v1.0.0-rc1 --local-test`. It returns after verifying the signed app. The staged copy omits the old widget and signs the host without app-group or iCloud entitlements. The v0.0.0-test rehearsal submits the app and disk image to Apple. Both publishing subcommands require a numeric production tag.
+

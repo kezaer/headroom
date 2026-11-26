@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Pacemark single-ink mark, "More filled 78%" (alternative kept for later): same geometry as the app icon, no tile. -->
+  <path d="M23.15 76.50 A31 31 0 1 1 76.85 76.50" stroke="#000" stroke-opacity=".28" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <path d="M23.15 76.50 A31 31 0 1 1 78.58 48.99" stroke="#000" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <path d="M54.37 40.46 L58.73 19.92" stroke="#000" stroke-width="4" stroke-linecap="round"/>
+</svg>

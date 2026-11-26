@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Pacemark app icon, "More filled 78%" (alternative kept for later). Gauge optically centered (tick tip to arc caps). The rounded rect stands in for the macOS icon mask. -->
+  <rect x="2" y="2" width="96" height="96" rx="22" fill="#0c1a2e"/>
+  <path d="M23.15 76.50 A31 31 0 1 1 76.85 76.50" stroke="#ffffff" stroke-opacity="0.28" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <path d="M23.15 76.50 A31 31 0 1 1 78.58 48.99" stroke="#4ade80" stroke-width="9" fill="none" stroke-linecap="round"/>
+  <path d="M54.37 40.46 L58.73 19.92" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Pacemark app icon, "Bolder arc + 78%" (chosen 2026-11-26). Gauge optically centered (tick tip to arc caps). The rounded rect stands in for the macOS icon mask. -->
+  <rect x="2" y="2" width="96" height="96" rx="22" fill="#0c1a2e"/>
+  <path d="M24.02 75.75 A30 30 0 1 1 75.98 75.75" stroke="#ffffff" stroke-opacity="0.28" stroke-width="11" fill="none" stroke-linecap="round"/>
+  <path d="M24.02 75.75 A30 30 0 1 1 77.66 49.12" stroke="#4ade80" stroke-width="11" fill="none" stroke-linecap="round"/>
+  <path d="M53.95 42.17 L58.73 19.67" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+</svg>
