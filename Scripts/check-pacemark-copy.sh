@@ -28,6 +28,8 @@ allowed = {
         '"If Headroom opens at login, its login item stays until you remove it in System Settings."',
         '"Headroom is running. Both apps will read the same accounts."',),
     "Sources/PacemarkApp/UI/Settings/AboutPane.swift": ('"Based on Headroom by Kyle Zantos."',),
+    "project.yml": ('"Copyright © 2026 Nikolai Fateev. Based on Headroom by Kyle Zantos. GPL-3.0."',),
+    "Pacemark.xcodeproj/project.pbxproj": ('"Copyright © 2026 Nikolai Fateev. Based on Headroom by Kyle Zantos. GPL-3.0."',),
     "Sources/PacemarkCore/Providers/AccountStorage.swift": ('static let sharedSupportFolder = "Headroom"',),
     "Sources/PacemarkCore/Models/AccountIdentity.swift": ('"headroom.identity.v',),
     "Sources/PacemarkCore/Credentials/CredentialModels.swift": (

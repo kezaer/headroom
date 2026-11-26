@@ -46,8 +46,8 @@ targets:
         PRODUCT_NAME: Pacemark
         PRODUCT_MODULE_NAME: Pacemark
         PRODUCT_BUNDLE_IDENTIFIER: "$(PACEMARK_HOST_BUNDLE_ID)"
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: 2
+        MARKETING_VERSION: "1.0.1"
+        CURRENT_PROJECT_VERSION: 3
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Pacemark
@@ -57,7 +57,7 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         INFOPLIST_KEY_LSUIElement: YES
-        INFOPLIST_KEY_NSHumanReadableCopyright: Personal use
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026 Nikolai Fateev. Based on Headroom by Kyle Zantos. GPL-3.0."
         INFOPLIST_KEY_SUAllowsAutomaticUpdates: YES
         INFOPLIST_KEY_SUAutomaticallyUpdate: NO
         INFOPLIST_KEY_SUEnableAutomaticChecks: YES
