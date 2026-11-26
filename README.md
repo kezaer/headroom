@@ -10,6 +10,7 @@ Pacemark shows AI subscription usage in the Mac menu bar. Track Claude, ChatGPT/
 Use an Apple silicon Mac running macOS 15 or later. Download the DMG from [Pacemark releases](https://github.com/kezaer/pacemark/releases), open it and drag Pacemark into Applications. Or install with Homebrew:
 
 ```sh
+brew trust kezaer/tap
 brew install --cask kezaer/tap/pacemark
 ```
 
