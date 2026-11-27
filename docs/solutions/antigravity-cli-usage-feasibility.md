@@ -227,6 +227,16 @@ Inferred, not observed:
   Chrome tab launches (0 tabs) and disables `agy --bg-updater` (`Auto-update disabled via
   environment variable AGY_CLI_DISABLE_AUTO_UPDATE`), while `agy` still prints its stderr sign-in
   prompt so `AntigravitySignInPromptScanner` terminates the process group immediately.
+- **T3-managed launches are the exception and set `SSH_CONNECTION` (live, 2026-11-27, `agy`
+  1.5.13).** T3 keeps its Antigravity login in the file `antigravity-oauth-token` and launches the
+  client with `SSH_CONNECTION` set for the same reason. Pacemark's T3 probe overrides `HOME` with
+  a probe home that has no keychain, so without the variable each hourly token refresh tried a
+  Keychain save: macOS showed "A keychain cannot be found to store "antigravity"" (Reset To
+  Defaults / Cancel), `agy` logged `Keyring SaveToken timed out after 5s`, and when the blocked
+  refresh outlasted `keyringAuth: timed out after 10s` the print run fell through to interactive
+  sign-in and Pacemark recorded signed out. With it, `agy` logs `Using file-based token storage
+  because SSH session detected`, reads the same token file, and never touches the Keychain. The
+  warm-up launch inherits the same overrides.
 - Pacemark watches stderr for agy's sign-in lines (`Authentication required`, `Please visit the
   URL to log in`, `Waiting for authentication`, `Error: authentication required`), ends the read
   at once by terminating the process group, and records signed out. The mark is stored, so routine

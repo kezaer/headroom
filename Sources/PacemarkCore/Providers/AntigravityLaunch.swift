@@ -12,10 +12,17 @@ public enum AntigravitySignInHome: Sendable, Equatable {
         }
     }
 
+    /// T3's sign-in lives in `antigravity-oauth-token`, a file, and T3 launches the client with
+    /// `SSH_CONNECTION` set so it stays file-based. Without it, an hourly token refresh tries the
+    /// macOS Keychain under the probe `HOME`, which has no keychain: macOS shows "A keychain cannot
+    /// be found to store "antigravity"", the save blocks, and a refresh that outlasts the client's
+    /// 10 s auth timeout reads as signed out. The system home keeps its Keychain login (unset).
     public var environmentOverrides: [String: String] {
         guard case .t3Managed(_, let home) = self else { return [:] }
-        return ["HOME": home.path]
+        return ["HOME": home.path, "SSH_CONNECTION": Self.fileStorageSSHConnection]
     }
+
+    static let fileStorageSSHConnection = "127.0.0.1 0 127.0.0.1 0"
 
     var signedOutFailure: AntigravityCaptureFailure {
         self == .system ? .signedOut : .signedOutInT3
