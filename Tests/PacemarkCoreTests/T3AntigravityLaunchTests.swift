@@ -39,7 +39,10 @@ struct T3AntigravityLaunchTests {
             return
         }
         #expect(instance == "antigravity")
-        #expect(result.signInHome.environmentOverrides == ["HOME": home.path])
+        #expect(result.signInHome.environmentOverrides == [
+            "HOME": home.path, "SSH_CONNECTION": "127.0.0.1 0 127.0.0.1 0",
+        ])
+        #expect(AntigravitySignInHome.system.environmentOverrides.isEmpty)
         let link = home.appendingPathComponent(".gemini/antigravity-cli")
         #expect(try files.destinationOfSymbolicLink(atPath: link.path) == directory.path)
         #expect(resolver.resolve(preference: .systemCLI) == .init(executable: "/fixture/bin/agy", signInHome: .system))
