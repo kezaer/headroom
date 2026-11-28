@@ -43,8 +43,8 @@ Add a token when an existing role cannot express a need shared by multiple views
 4. **One meaning per colour.** The Ledger and menu bar compare displayed remaining quota
    with the pace tick for live windows with a known future reset and duration. Either
    direction uses green within 5 percentage points, yellow up to 15 points, and red beyond
-   15 points. Without pace evidence, meters use the fixed usage bands (>50% left green,
-   15–50% yellow, ≤15% red). Standard dark critical fill has an accepted contrast exception
+   15 points. Without pace evidence, green means above 50% left, yellow means above 15%
+   through 50%, and red means 15% or less. Standard dark critical fill has an accepted contrast exception
    against the track and Ledger card. The numeral has its own contrast-checked ink.
    Account and lifecycle states use neutral ink. Provider refusals, limit-reached sentences
    and spend alerts retain their separate critical status ink.
