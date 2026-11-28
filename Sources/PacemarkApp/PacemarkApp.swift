@@ -696,11 +696,13 @@ struct PacemarkApp: App {
     // ML1: `--bench-ui scene` measures `BenchSceneStandIn` (UIBenchHarness.swift), not this body.
     // Mirror a change to what this body reads or builds into the stand-in before measuring it.
     var body: some Scene {
+        let paceDate = DemoFixture.scenarioRequest() == .multiAccount(.paceStates) ? DemoFixture.paceStatesDate : nil
         MenuBarExtra {
             PopoverView(store: store, onOpenSettings: { openSettings() },
                         onOpenAPISpend: { openSettings(pane: .apiSpend) },
                         onOpenMenuBarSettings: { openSettings(pane: .menuBar) }, fitsMenuBarWindowHeight: true)
                 .defaultAppStorage(AppComposition.menuBarControlDefaults)
+                .environment(\.loadingDate, paceDate)
                 // PC1 (Kyle, 2026-09-23): on Tahoe the MenuBarExtra window draws its own
                 // Liquid Glass background behind the popover at the system's smaller corner
                 // radius, so a second corner and rim showed outside the r22 shell. The shell
@@ -761,6 +763,7 @@ struct PacemarkApp: App {
                 notificationClient: AppComposition.notificationClient
             )
             .defaultAppStorage(AppComposition.menuBarControlDefaults)
+            .environment(\.loadingDate, paceDate)
             .modifier(CapturedDemoLinks(isReplaying: store.isReplayingDemoCapture))
 
             // L9A (revising KTD2): the window opens at 800 × 700 and is resizable on
@@ -1081,6 +1084,9 @@ enum AppComposition {
             for key in [PopoverSummarySlot.firstKey, PopoverSummarySlot.secondKey] {
                 if let value = QALaunch.argument("-" + key, in: arguments) { defaults.set(value, forKey: key) }
             }
+            if DemoFixture.scenarioRequest(arguments: arguments) == .multiAccount(.paceStates) {
+                MenuBarMeterControls.seedMenuBarDemo(defaults: defaults, showNumber: true)
+            }
             return defaults
         }
         let request = DemoFixture.scenarioRequest(arguments: arguments)
@@ -1090,6 +1096,8 @@ enum AppComposition {
             let defaults = DemoMemoryDefaults()
             if request == .multiAccount(.menubar) {
                 MenuBarMeterControls.seedMenuBarDemo(defaults: defaults)
+            } else if request == .multiAccount(.paceStates) {
+                MenuBarMeterControls.seedMenuBarDemo(defaults: defaults, showNumber: true)
             }
             return defaults
         }
@@ -1221,6 +1229,8 @@ enum AppComposition {
         prefs.showMenuBarPercentage = true
         prefs.menuBarFillSource = .both            // show both Claude + Codex meters in the menu bar
         if scenario == .menubar { DemoFixture.applyMenuBarDemoPreferences(to: prefs) }
+        if scenario == .paceStates { DemoFixture.applyPaceStatesPreferences(to: prefs) }
+        let paceDate = scenario == .paceStates ? DemoFixture.paceStatesDate : nil
         // API spend surfaces are off by default, so enable exactly the ones this scenario
         // wires — derived from the providers rather than a hardcoded Claude/Codex pair, so
         // `spend-states`' xAI balance row is not silently filtered out of the card.
@@ -1272,7 +1282,7 @@ enum AppComposition {
             // `defaultLoginRecords.v1`. Fixture providers carry no identity, so no reader runs.
             defaultLoginRecords: fixture.makeDefaultLoginRecordStore(),
             bankedResetAcknowledgements: BankedResetAcknowledgements(defaults: prefsDefaults),
-            now: { [clock = controller?.clock] in clock?.now() ?? Date() },
+            now: { [clock = controller?.clock] in paceDate ?? clock?.now() ?? Date() },
             previewAccountLayout: prefs.accountLayout
         )
     }
@@ -1287,6 +1297,8 @@ enum AppComposition {
         for scenario: DemoFixture.MultiAccountScenario
     ) -> [any APISpendProvider] {
         switch scenario {
+        case .paceStates:
+            []
         case .spendStates:
             [
                 DemoSpendProvider(id: .claude, displayName: "Anthropic API", snapshot: DemoFixture.anthropicSpendKeyRejected),
@@ -1738,7 +1750,11 @@ private enum QALaunch {
             let view = MenuBarStatusLabel(store: store, appearanceOverride: dark)
                 .defaultAppStorage(AppComposition.launchDefaults)
                 .padding(.horizontal, MenuBarGaugeRenderer.meterGap / 2)
-                .background(.selection.opacity(0.3), in: Capsule())
+                .background {
+                    if DemoFixture.scenarioRequest() != .multiAccount(.paceStates) {
+                        Capsule().fill(.selection.opacity(0.3))
+                    }
+                }
                 .padding(PDS.Space.s)
             panel = CapturePanel(contentViewController: NSHostingController(rootView: view))
             panel.styleMask = [.borderless, .nonactivatingPanel]

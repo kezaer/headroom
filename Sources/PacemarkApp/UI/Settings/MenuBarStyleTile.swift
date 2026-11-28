@@ -64,9 +64,10 @@ struct MenuBarMeterGlyph: View {
     static let defaultSize: CGFloat = 21
     var size: CGFloat = Self.defaultSize
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let renderer = MenuBarGaugeRenderer(palette: MenuBarPalette(isDarkMenuBar: scheme == .dark), tuning: glyphTuning,
+        let renderer = MenuBarGaugeRenderer(palette: MenuBarPalette(isDarkMenuBar: scheme == .dark, increasedContrast: contrast == .increased), tuning: glyphTuning,
                                            heightLimit: 26)
         let ring = MenuBarRingLayout(requestedDiameter: size - PDS.Space.xs, heightLimit: size,
                                      ringWidth: tuning.ringLineWidth, showsTick: tuning.showPaceTick,
@@ -140,6 +141,7 @@ struct MenuBarMeterLegend: View {
     let date: Date
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     private let legend = [
         "Arc: how much quota is left, colored by your pace.",
         "Tick: where you’d be if you used it evenly until the reset.",
@@ -156,9 +158,9 @@ struct MenuBarMeterLegend: View {
         var style = tuning
         style.showNumber = false
         style.showPaceTick = true
-        let renderer = MenuBarGaugeRenderer(palette: .init(isDarkMenuBar: scheme == .dark), tuning: style)
-        let pace = MenuBarPace(usedFraction: 0.25, duration: 100, reset: date.addingTimeInterval(55), now: date)
-        let meter = MenuBarMeter(summary: .init(text: "75%", providerID: .claude, detail: nil, isNeutral: false),
+        let renderer = MenuBarGaugeRenderer(palette: .init(isDarkMenuBar: scheme == .dark, increasedContrast: contrast == .increased), tuning: style)
+        let pace = MenuBarPace(usedFraction: 0.45, duration: 100, reset: date.addingTimeInterval(55), now: date)
+        let meter = MenuBarMeter(summary: .init(text: "55%", providerID: .claude, detail: nil, isNeutral: false),
                                  fill: pace?.remaining, isLiveReading: true, pace: pace)
         let layout = MeterLegendLayout(renderer: renderer, meter: meter)
         return ZStack(alignment: .topLeading) {
@@ -203,12 +205,18 @@ struct MenuBarMeterLegend: View {
                     }
                 }
             }
-            HStack(alignment: .top, spacing: LedgerMetrics.rowGap) {
-                sample("On pace", "Lasts until the reset at this rate.", used: 0.25)
-                sample("Ahead of pace", "Runs out before the reset.", used: 0.59)
-                sample("Way ahead", "Runs out well before the reset.", used: 0.80)
-                sample("Last reading", "Prior reading.", used: 0.35, live: false)
-                sample("Waiting", "No reading yet.", used: nil, live: false)
+            VStack(spacing: PDS.Space.s) {
+                HStack(alignment: .top, spacing: LedgerMetrics.rowGap) {
+                    sample(MenuBarPace.Tier.onPace.label, "Within 5% of even use.", used: 0.50)
+                    sample(MenuBarPace.Tier.offPace(.fast).label, "5–15% faster than even use.", used: 0.60)
+                    sample(MenuBarPace.Tier.offPace(.slow).label, "5–15% slower than even use.", used: 0.40)
+                    sample(MenuBarPace.Tier.farOffPace(.fast).label, "Over 15% faster than even use.", used: 0.75)
+                    sample(MenuBarPace.Tier.farOffPace(.slow).label, "Over 15% slower than even use.", used: 0.25)
+                }
+                HStack(alignment: .top, spacing: LedgerMetrics.rowGap) {
+                    sample("Last reading", "Prior reading.", used: 0.35, live: false)
+                    sample("Waiting", "No reading yet.", used: nil, live: false)
+                }
             }
             .padding(.bottom, PDS.Space.xs)
         }
@@ -219,7 +227,7 @@ struct MenuBarMeterLegend: View {
             glyph(used: used, live: live, size: 36)
                 .padding(.vertical, PDS.Space.xs)
             Text(label).font(SettingsType.help.bold()).fixedSize(horizontal: false, vertical: true)
-            PDSHelpText(meaning).lineLimit(2)
+            PDSHelpText(meaning).fixedSize(horizontal: false, vertical: true)
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
