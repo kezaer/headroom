@@ -362,7 +362,7 @@ struct BrandColorValuesTests {
         #expect(PacemarkSeverityColorValues.low(dark: true) == PacemarkRGBColor(red: 1.00, green: 0.62, blue: 0.04))
         #expect(PacemarkSeverityColorValues.healthy(dark: false) == PacemarkRGBColor(red: 0.09, green: 0.52, blue: 0.22))
         #expect(PacemarkSeverityColorValues.low(dark: false) == PacemarkRGBColor(red: 0.70, green: 0.41, blue: 0.00))
-        #expect(hex(PacemarkSeverityColorValues.criticalText(dark: true)) == "#FF7B70")
+        #expect(hex(PacemarkSeverityColorValues.criticalText(dark: true)) == "#FF7F74")
         #expect(hex(PacemarkSeverityColorValues.criticalText(dark: false)) == "#8A1410")
     }
 

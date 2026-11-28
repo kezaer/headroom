@@ -51,7 +51,10 @@ struct PopoverSettingsPane: View {
         }
         .frame(width: CGFloat(LedgerMetrics.columns.columnWidth))
         .padding(PDS.Space.s)
-        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: PDS.Radius.card))
+        .overlay {
+            // An extra wash beneath the sample cards makes the dark usage numerals harder to read.
+            RoundedRectangle(cornerRadius: PDS.Radius.card).strokeBorder(PDS.Ink.cardStroke)
+        }
         .environment(\.accountTitleInk, store.accountTitleInk)
         .allowsHitTesting(false)
         .accessibilityElement(children: .contain)

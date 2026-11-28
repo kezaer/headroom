@@ -673,7 +673,7 @@ public enum PacemarkSeverityColorValues {
 
     /// Usage numerals need more contrast than the bar fill.
     public static func criticalText(dark: Bool) -> PacemarkRGBColor {
-        dark ? PacemarkRGBColor(red: 1, green: 123.0 / 255, blue: 112.0 / 255)
+        dark ? PacemarkRGBColor(red: 1, green: 127.0 / 255, blue: 116.0 / 255)
             : PacemarkRGBColor(red: 138.0 / 255, green: 20.0 / 255, blue: 16.0 / 255)
     }
 
