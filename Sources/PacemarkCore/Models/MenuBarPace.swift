@@ -26,6 +26,16 @@ public struct MenuBarPace: Sendable, Equatable {
             }
         }
 
+        public var label: String {
+            switch self {
+            case .onPace: "On pace"
+            case .offPace(.fast): "Using fast"
+            case .offPace(.slow): "Using slowly"
+            case .farOffPace(.fast): "Using very fast"
+            case .farOffPace(.slow): "Using very slowly"
+            }
+        }
+
         public var isOffPace: Bool { direction != nil }
     }
 
@@ -55,8 +65,9 @@ public struct MenuBarPace: Sendable, Equatable {
         remaining = 1 - usedFraction
         if let duration, duration.isFinite, duration > 0,
            let timeToReset = reset?.timeIntervalSince(now), timeToReset.isFinite {
-            let elapsed = min(1, max(0, (duration - timeToReset) / duration))
-            expectedRemaining = 1 - elapsed
+            // Time left is the complement of elapsed. Use the direct ratio to avoid
+            // subtracting from one twice before display rounding.
+            expectedRemaining = min(1, max(0, timeToReset / duration))
         } else {
             expectedRemaining = nil
         }

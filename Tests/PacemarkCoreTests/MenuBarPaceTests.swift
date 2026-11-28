@@ -48,6 +48,16 @@ struct MenuBarPaceTests {
         #expect(slow?.tier == .farOffPace(.slow))
     }
 
+    @Test func expectedBalanceRoundsBeforeTheDeviationIsClassified() {
+        let kind = WindowKind.billingPeriod(label: "Fixture", duration: 20_000)
+        let window = UsageWindow(kind: kind, utilization: 85,
+                                 resetsAt: now.addingTimeInterval(4_010))
+        let pace = MenuBarPace(window: window, now: now)
+        // The pace line is 20.05% left, displayed as 20.1%. Against 15.0% left this is yellow.
+        #expect(pace?.deviationTenths == -51)
+        #expect(pace?.tier == .offPace(.fast))
+    }
+
     private func makePace(used: Double, elapsed: Double) -> MenuBarPace? {
         MenuBarPace(window: UsageWindow(kind: .fiveHour, utilization: used,
                                        resetsAt: now.addingTimeInterval(duration * (1 - elapsed))), now: now)
