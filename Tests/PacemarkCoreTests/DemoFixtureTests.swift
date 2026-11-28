@@ -137,7 +137,7 @@ struct DemoFixtureTests {
         #expect(meters.map(\.summary.providerID) == [.claude, .claude, .codex, .codex, .antigravity, .antigravity])
         #expect(meters.map(\.badge) == ["PRO", "WORK", "200", "200", "G1", "G2"])
         #expect(meters.map(\.summary.text) == ["100%", "20%", "75%", "30%", "100%", "40%"])
-        #expect(meters.map { $0.pace?.tier } == [.onPace, .wayAhead, .onPace, .ahead, .onPace, .ahead])
+        #expect(meters.map { $0.pace?.tier } == [.farOffPace(.slow), .farOffPace(.fast), .farOffPace(.slow), .offPace(.fast), .farOffPace(.slow), .offPace(.fast)])
         #expect(meters.allSatisfy { $0.pace?.expectedRemaining != nil })
     }
 
